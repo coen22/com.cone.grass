@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
+using UnityEditor.Rendering;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -18,16 +20,22 @@ public static class GrassValidationBuild
     [Serializable]
     private sealed class BuildResultRecord
     {
-        public string unityVersion, target, scope = "Standalone player build; does not execute GPU acceptance";
-        public bool succeeded;
+        public int schemaVersion = 1;
+        public string attemptId = Guid.NewGuid().ToString("N"), status = "running";
+        public string startedUtc = DateTime.UtcNow.ToString("O"), completedUtc, failure = "";
+        public string unityVersion, target, managedCodeVariant, previousManagedCodeVariant;
+        public string scope = "Checked clean and incremental standalone build reports and executable snapshots; does not execute GPU acceptance";
+        public bool succeeded, managedCodeVariantRestored, renderGraphValidityChecks;
         public List<BuildRecord> builds = new List<BuildRecord>();
     }
 
     [Serializable]
     private sealed class BuildRecord
     {
-        public string kind, result, output;
-        public uint errors, warnings;
+        public string kind, result = "Running", target, output, executable, evidence, managedCodeVariant, executableSha256;
+        public bool development, cleanBuildCache;
+        public int errors, warnings;
+        public long executableBytes;
         public double seconds;
     }
 
@@ -212,24 +220,55 @@ public static class GrassValidationBuild
     {
         RequireDisposableProject();
         BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
-        string extension = target == BuildTarget.StandaloneLinux64 ? ".x86_64" :
-            target == BuildTarget.StandaloneWindows64 ? ".exe" :
-            target == BuildTarget.StandaloneOSX ? ".app" : null;
-        if (extension == null || !BuildPipeline.IsBuildTargetSupported(BuildTargetGroup.Standalone, target))
-            throw new InvalidOperationException("Select an installed standalone target before invoking BuildCurrent (use -buildTarget on the command line).");
-        PrepareScene();
-        PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.Mono2x);
-        PlayerSettings.defaultScreenWidth = 960;
-        PlayerSettings.defaultScreenHeight = 540;
-        PlayerSettings.runInBackground = true;
         string buildsDirectory = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Builds");
-        string output = Path.Combine(buildsDirectory, target.ToString(), "GrassValidation" + extension);
-        Directory.CreateDirectory(Path.GetDirectoryName(output));
         var record = new BuildResultRecord { unityVersion = Application.unityVersion, target = target.ToString() };
+        Directory.CreateDirectory(buildsDirectory);
+        // Write the new attempt before target/scene setup. A setup exception or
+        // terminated Editor must not leave an earlier successful result intact.
+        WriteBuildResults(buildsDirectory, record);
+        ManagedCodeVariant previousVariant = default;
+        bool savedVariant = false;
+        Exception failure = null;
         try
         {
+            string extension = target == BuildTarget.StandaloneLinux64 ? ".x86_64" :
+                target == BuildTarget.StandaloneWindows64 ? ".exe" :
+                target == BuildTarget.StandaloneOSX ? ".app" : null;
+            if (extension == null || !BuildPipeline.IsBuildTargetSupported(BuildTargetGroup.Standalone, target))
+                throw new InvalidOperationException("Select an installed standalone target before invoking BuildCurrent (use -buildTarget on the command line).");
+            PrepareScene();
+            if (!EditorGraphicsSettings.TryGetRenderPipelineSettingsForPipeline<RenderGraphGlobalSettings, UniversalRenderPipeline>(out var renderGraph))
+                throw new InvalidOperationException("The validation pipeline has no RenderGraph Graphics settings.");
+            renderGraph.enableValidityChecks = true;
+            record.renderGraphValidityChecks = renderGraph.enableValidityChecks;
+            if (!record.renderGraphValidityChecks)
+                throw new InvalidOperationException("RenderGraph validity checks could not be enabled.");
+            AssetDatabase.SaveAssets();
+
+            // Since Unity 6.6, Development alone does not compile validation or
+            // instrumentation. Select Checked for both builds and restore it.
+            previousVariant = PlayerSettings.GetManagedCodeVariant(NamedBuildTarget.Standalone);
+            savedVariant = true;
+            record.previousManagedCodeVariant = previousVariant.ToString();
+            PlayerSettings.SetManagedCodeVariant(NamedBuildTarget.Standalone, ManagedCodeVariant.Checked);
+            record.managedCodeVariant = PlayerSettings.GetManagedCodeVariant(NamedBuildTarget.Standalone).ToString();
+            if (record.managedCodeVariant != ManagedCodeVariant.Checked.ToString())
+                throw new InvalidOperationException("The validation build could not select the Checked managed code variant.");
+            PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.Mono2x);
+            PlayerSettings.productName = "GrassValidation";
+            PlayerSettings.defaultScreenWidth = 960;
+            PlayerSettings.defaultScreenHeight = 540;
+            PlayerSettings.runInBackground = true;
+            string output = Path.Combine(buildsDirectory, target.ToString(), "GrassValidation" + extension);
+            Directory.CreateDirectory(Path.GetDirectoryName(output));
             for (int iteration = 0; iteration < 2; iteration++)
             {
+                var build = new BuildRecord { kind = iteration == 0 ? "clean" : "incremental",
+                    managedCodeVariant = PlayerSettings.GetManagedCodeVariant(NamedBuildTarget.Standalone).ToString() };
+                record.builds.Add(build);
+                WriteBuildResults(buildsDirectory, record);
+                if (build.managedCodeVariant != ManagedCodeVariant.Checked.ToString())
+                    throw new InvalidOperationException("The managed code variant changed between validation builds.");
                 var options = new BuildPlayerOptions
                 {
                     scenes = new[] { ScenePath }, locationPathName = output, target = target,
@@ -240,21 +279,79 @@ public static class GrassValidationBuild
                 BuildReport report = BuildPipeline.BuildPlayer(options);
                 if (!report)
                     throw new InvalidOperationException("Unity returned no build report.");
-                record.builds.Add(new BuildRecord { kind = iteration == 0 ? "clean" : "incremental",
-                    result = report.summary.result.ToString(), errors = report.summary.totalErrors,
-                    warnings = report.summary.totalWarnings, seconds = report.summary.totalTime.TotalSeconds,
-                    output = report.summary.outputPath });
-                if (report.summary.result != BuildResult.Succeeded)
-                    throw new InvalidOperationException("Grass " + record.builds[iteration].kind + " build failed.");
+                build.result = report.summary.result.ToString();
+                build.target = report.summary.platform.ToString();
+                build.errors = report.summary.totalErrors;
+                build.warnings = report.summary.totalWarnings;
+                build.seconds = report.summary.totalTime.TotalSeconds;
+                build.development = (report.summary.options & BuildOptions.Development) != 0;
+                build.cleanBuildCache = (report.summary.options & BuildOptions.CleanBuildCache) != 0;
+                build.output = Path.GetRelativePath(buildsDirectory, report.summary.outputPath).Replace('\\', '/');
+                if (report.summary.result != BuildResult.Succeeded || build.errors != 0)
+                    throw new InvalidOperationException("Grass " + build.kind + " build failed.");
+                if (report.summary.platform != target || !build.development || build.cleanBuildCache != (iteration == 0) ||
+                    Path.GetFullPath(report.summary.outputPath) != Path.GetFullPath(output) ||
+                    PlayerSettings.GetManagedCodeVariant(NamedBuildTarget.Standalone) != ManagedCodeVariant.Checked)
+                    throw new InvalidOperationException("The completed build does not match the required target, output or diagnostic settings.");
+                CaptureBuildExecutable(buildsDirectory, output, target, record.attemptId, build);
+                WriteBuildResults(buildsDirectory, record);
             }
-            record.succeeded = true;
+        }
+        catch (Exception error)
+        {
+            failure = error;
         }
         finally
         {
-            Directory.CreateDirectory(buildsDirectory);
-            File.WriteAllText(Path.Combine(buildsDirectory, "build-results.json"), JsonUtility.ToJson(record, true));
+            try
+            {
+                if (savedVariant)
+                {
+                    PlayerSettings.SetManagedCodeVariant(NamedBuildTarget.Standalone, previousVariant);
+                    record.managedCodeVariantRestored =
+                        PlayerSettings.GetManagedCodeVariant(NamedBuildTarget.Standalone) == previousVariant;
+                    if (!record.managedCodeVariantRestored)
+                        throw new InvalidOperationException("The previous managed code variant could not be restored.");
+                }
+            }
+            catch (Exception error)
+            {
+                failure = failure == null ? error : new AggregateException(failure, error);
+            }
+            record.succeeded = failure == null;
+            record.status = record.succeeded ? "passed" : "failed";
+            record.failure = failure == null ? "" : failure.ToString();
+            record.completedUtc = DateTime.UtcNow.ToString("O");
+            WriteBuildResults(buildsDirectory, record);
         }
+        if (failure != null)
+            throw new InvalidOperationException("Grass validation build failed; see Builds/build-results.json.", failure);
         Debug.Log("Grass clean and incremental builds succeeded. Execute the player with -grassSmoke to run rendering checks.");
+    }
+
+    private static void WriteBuildResults(string directory, BuildResultRecord record)
+    {
+        File.WriteAllText(Path.Combine(directory, "build-results.json"), JsonUtility.ToJson(record, true));
+    }
+
+    private static void CaptureBuildExecutable(string buildsDirectory, string output, BuildTarget target,
+        string attemptId, BuildRecord record)
+    {
+        string executable = target == BuildTarget.StandaloneOSX ?
+            Path.Combine(output, "Contents", "MacOS", "GrassValidation") : output;
+        if (!File.Exists(executable) || new FileInfo(executable).Length == 0)
+            throw new InvalidOperationException("The successful build did not produce its player executable.");
+        string evidence = Path.Combine(buildsDirectory, "Evidence", attemptId, record.kind, Path.GetFileName(executable));
+        Directory.CreateDirectory(Path.GetDirectoryName(evidence));
+        // Preserve the clean executable before the incremental build replaces
+        // the shared output. Full player data remains in the normal output.
+        File.Copy(executable, evidence, true);
+        record.executable = Path.GetRelativePath(buildsDirectory, executable).Replace('\\', '/');
+        record.evidence = Path.GetRelativePath(buildsDirectory, evidence).Replace('\\', '/');
+        record.executableBytes = new FileInfo(evidence).Length;
+        using (var stream = File.OpenRead(evidence))
+        using (var hash = SHA256.Create())
+            record.executableSha256 = BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
     }
 
     private static void RequireDisposableProject()

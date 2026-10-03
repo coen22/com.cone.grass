@@ -63,6 +63,8 @@ public static class GrassMicroVerseBridgeUtility
         new Dictionary<GrassMicroVerseBridge, ObservedInputs>();
     private static readonly Dictionary<GrassMicroVerseBridge, GroundBakeState> groundBakes =
         new Dictionary<GrassMicroVerseBridge, GroundBakeState>();
+    private static readonly HashSet<GrassMicroVerseBridge> activeRefreshes =
+        new HashSet<GrassMicroVerseBridge>();
     private static readonly List<string> unusedMaskPaths = new List<string>();
     private static readonly HashSet<ScriptableObject> liveMaskTargets = new HashSet<ScriptableObject>();
     private static readonly List<GrassMicroVerseBridge> unusedBridges = new List<GrassMicroVerseBridge>();
@@ -267,6 +269,36 @@ public static class GrassMicroVerseBridgeUtility
         if (!bridge || !bridge.PlacementArea)
             return false;
 
+        if (!activeRefreshes.Add(bridge))
+        {
+            bridge.SetRefreshResult(false,
+                "This bridge is already refreshing. Queue another refresh after the current callback finishes.");
+            return false;
+        }
+        try
+        {
+            string outputPath = bridge.BakedGroundColor
+                ? AssetDatabase.GetAssetPath(bridge.BakedGroundColor) : bridge.GroundBakeAssetPath;
+            if (bridge.BakeTerrainGroundColor && TerrainGrassAlbedoBaker.IsBakingOutput(outputPath))
+            {
+                // Another bridge can legitimately share this terrain's output.
+                // A temporary ownership conflict is not missing producer data:
+                // retain its committed density and color until a later refresh.
+                bridge.SetRefreshResult(false,
+                    "This ground-albedo output is still being baked. Queue a refresh after the current callback finishes.");
+                return false;
+            }
+            return RefreshBindings(bridge, recordUndo, markSceneDirty, forceInvalidate, forceGroundBake);
+        }
+        finally
+        {
+            activeRefreshes.Remove(bridge);
+        }
+    }
+
+    private static bool RefreshBindings(GrassMicroVerseBridge bridge, bool recordUndo,
+        bool markSceneDirty, bool forceInvalidate, bool forceGroundBake)
+    {
         bool valid = TryResolve(bridge, out Texture2D density, out string message, forceInvalidate);
         Texture2D color = valid ? bridge.GroundColorOverride : null;
         if (valid && bridge.BakeTerrainGroundColor)
@@ -343,6 +375,9 @@ public static class GrassMicroVerseBridgeUtility
             }
         }
         else if (groundColor && !IsSaved(groundColor, out message))
+            return false;
+        else if (!groundColor && bridge.GroundLayer && bridge.GroundLayer.diffuseTexture &&
+            !IsSaved(bridge.GroundLayer.diffuseTexture, out message))
             return false;
 
         float strength = GroundStrength(bridge, bridge.GroundLayer, groundColor);

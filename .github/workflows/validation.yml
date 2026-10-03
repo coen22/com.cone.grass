@@ -155,6 +155,9 @@ jobs:
           buildMethod: GrassValidationBuild.BuildCurrent
           versioning: None
           unityLicensingServer: ${{ secrets.UNITY_LICENSE_SERVER }}
+      - name: Verify clean and incremental build evidence
+        if: always()
+        run: python3 Tools~/report_build_results.py Validation~/Project/Builds
       - name: Upload standalone player and both build reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

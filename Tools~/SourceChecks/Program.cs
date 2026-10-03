@@ -22,13 +22,19 @@ if (files.Length == 0)
     return 2;
 }
 
-string[] baseline = { "UNITY_6000", "UNITY_6000_0_OR_NEWER", "UNITY_6000_6_OR_NEWER", "UNITY_64" };
+string[] baseline = { "UNITY_6000", "UNITY_6000_0_OR_NEWER", "UNITY_6000_6_OR_NEWER" };
+// Unity 6.6 diagnostics follow Managed Code Variant independently of the
+// Development Build option. Editor and Checked player code must both be parsed,
+// as well as Release branches with the diagnostic symbols absent.
+string[] diagnostics = { "UNITY_ENABLE_CHECKS", "UNITY_INCLUDE_INSTRUMENTATION", "UNITY_ASSERTIONS", "ENABLE_PROFILER" };
 var configurations = new[]
 {
-    (Name: "6.6 editor", Defines: baseline.Concat(new[] { "UNITY_EDITOR", "UNITY_EDITOR_LINUX", "UNITY_INCLUDE_TESTS", "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray()),
-    (Name: "6.6 player", Defines: baseline.Concat(new[] { "UNITY_STANDALONE", "UNITY_STANDALONE_WIN" }).ToArray()),
-    (Name: "6.7 editor syntax", Defines: baseline.Concat(new[] { "UNITY_6000_7_OR_NEWER", "UNITY_EDITOR", "UNITY_EDITOR_LINUX", "UNITY_INCLUDE_TESTS", "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray()),
-    (Name: "6.7 player syntax", Defines: baseline.Concat(new[] { "UNITY_6000_7_OR_NEWER", "UNITY_STANDALONE", "UNITY_STANDALONE_WIN" }).ToArray())
+    (Name: "6.6 editor", Defines: baseline.Concat(diagnostics).Concat(new[] { "UNITY_EDITOR", "UNITY_EDITOR_LINUX", "UNITY_INCLUDE_TESTS", "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray()),
+    (Name: "6.6 Release player", Defines: baseline.Concat(new[] { "UNITY_STANDALONE", "UNITY_STANDALONE_WIN" }).ToArray()),
+    (Name: "6.6 Checked player", Defines: baseline.Concat(diagnostics).Concat(new[] { "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray()),
+    (Name: "6.7 editor syntax", Defines: baseline.Concat(diagnostics).Concat(new[] { "UNITY_6000_7_OR_NEWER", "UNITY_EDITOR", "UNITY_EDITOR_LINUX", "UNITY_INCLUDE_TESTS", "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray()),
+    (Name: "6.7 Release player syntax", Defines: baseline.Concat(new[] { "UNITY_6000_7_OR_NEWER", "UNITY_STANDALONE", "UNITY_STANDALONE_WIN" }).ToArray()),
+    (Name: "6.7 Checked player syntax", Defines: baseline.Concat(diagnostics).Concat(new[] { "UNITY_6000_7_OR_NEWER", "UNITY_STANDALONE", "UNITY_STANDALONE_LINUX" }).ToArray())
 };
 
 int errors = 0;

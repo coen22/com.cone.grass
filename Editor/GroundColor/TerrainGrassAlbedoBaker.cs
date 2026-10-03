@@ -39,6 +39,8 @@ public static class TerrainGrassAlbedoBaker
     private static readonly Dictionary<EntityId, TerrainSourceState> terrainSources = new Dictionary<EntityId, TerrainSourceState>();
     private static readonly Dictionary<string, SourceImportState> importRevisions =
         new Dictionary<string, SourceImportState>(StringComparer.Ordinal);
+    private static readonly Dictionary<string, Texture2D> activeBakes =
+        new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
     private static readonly List<EntityId> expiredSources = new List<EntityId>();
     private static uint sourceGeneration;
     private static double nextSourceCleanup;
@@ -148,6 +150,53 @@ public static class TerrainGrassAlbedoBaker
             return false;
         }
 
+        if (activeBakes.ContainsKey(assetPath) || IsActiveBakeOutput(existing))
+        {
+            error = "A ground-albedo bake already owns this output. Queue another bake after the current callback finishes.";
+            return false;
+        }
+        activeBakes.Add(assetPath, existing);
+        try
+        {
+            return TryBakeOutput(terrain, resolution, assetPath, source, layers, existing, shader, out texture, out error);
+        }
+        finally
+        {
+            // Hold ownership through saves and notifications: both can invoke
+            // authoring callbacks before the caller receives the completed bake.
+            activeBakes.Remove(assetPath);
+        }
+    }
+
+    /// <summary>
+    /// Reports output ownership through saving and observer notification. Editor
+    /// integrations can defer a refresh without treating this temporary state as
+    /// missing source data. Aliases and a moved output keep the same ownership.
+    /// </summary>
+    public static bool IsBakingOutput(string assetPath)
+    {
+        if (activeBakes.Count == 0 || string.IsNullOrEmpty(assetPath))
+            return false;
+        string normalized = assetPath.Replace('\\', '/');
+        return activeBakes.ContainsKey(normalized) ||
+            IsActiveBakeOutput(AssetDatabase.LoadAssetAtPath<Texture2D>(normalized));
+    }
+
+    private static bool IsActiveBakeOutput(Texture2D texture)
+    {
+        if (!texture)
+            return false;
+        // An observer can move an asset before requesting its new path. Its
+        // identity still belongs to the operation that is notifying observers.
+        foreach (Texture2D active in activeBakes.Values)
+            if (active == texture) return true;
+        return false;
+    }
+
+    private static bool TryBakeOutput(Terrain terrain, int resolution, string assetPath, Material source,
+        TerrainLayer[] layers, Texture2D existing, Shader shader, out Texture2D texture, out string error)
+    {
+        texture = null;
         Material material = null;
         RenderTexture capture = null;
         Texture2D staging = null;
@@ -209,6 +258,9 @@ public static class TerrainGrassAlbedoBaker
             }
             else
             {
+                // CreateAsset can run import callbacks. Track identity before
+                // handing it to Unity so moving it cannot bypass the path guard.
+                activeBakes[assetPath] = staging;
                 AssetDatabase.CreateAsset(staging, assetPath);
                 texture = staging;
                 staging = null;

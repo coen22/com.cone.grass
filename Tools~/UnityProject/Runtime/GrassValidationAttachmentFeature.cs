@@ -27,6 +27,8 @@ public sealed class GrassValidationAttachmentFeature : ScriptableRendererFeature
         {
             public GrassValidationPlayerProbe Probe;
             public int Stage, Frame, RequestedSamples, SupportedSamples, CameraDescriptorSamples;
+            public int CameraWidth, CameraHeight, ScaledWidth, ScaledHeight, DescriptorWidth, DescriptorHeight;
+            public float RenderScale;
             public string Antialiasing;
             public bool Backbuffer;
             public TextureHandle Color, Depth;
@@ -59,6 +61,13 @@ public sealed class GrassValidationAttachmentFeature : ScriptableRendererFeature
                 data.RequestedSamples = probe.RequestedMsaa;
                 data.SupportedSamples = supported;
                 data.CameraDescriptorSamples = cameraData.cameraTargetDescriptor.msaaSamples;
+                data.CameraWidth = cameraData.camera.pixelWidth;
+                data.CameraHeight = cameraData.camera.pixelHeight;
+                data.ScaledWidth = cameraData.scaledWidth;
+                data.ScaledHeight = cameraData.scaledHeight;
+                data.DescriptorWidth = cameraData.cameraTargetDescriptor.width;
+                data.DescriptorHeight = cameraData.cameraTargetDescriptor.height;
+                data.RenderScale = cameraData.renderScale;
                 data.Antialiasing = cameraData.antialiasing.ToString();
                 data.Backbuffer = resources.isActiveTargetBackBuffer;
                 data.Color = resources.activeColorTexture;
@@ -79,16 +88,31 @@ public sealed class GrassValidationAttachmentFeature : ScriptableRendererFeature
                     RTHandle depthHandle = sample.Depth;
                     RenderTexture colorTexture = colorHandle.rt;
                     RenderTexture depthTexture = depthHandle.rt;
-                    sample.Probe.RecordAttachments(sample.Stage, sample.Frame,
-                        sample.RequestedSamples, sample.SupportedSamples, sample.CameraDescriptorSamples,
-                        colorTexture ? colorTexture.antiAliasing : sample.ColorInfo.msaaSamples,
-                        depthTexture ? depthTexture.antiAliasing : sample.DepthInfo.msaaSamples,
-                        sample.ColorInfo.width, sample.ColorInfo.height,
-                        sample.DepthInfo.width, sample.DepthInfo.height,
-                        sample.ColorInfo.format.ToString(), sample.DepthInfo.format.ToString(),
-                        colorTexture ? "allocated RenderTexture" : "imported target metadata",
-                        depthTexture ? "allocated RenderTexture" : "imported target metadata",
-                        sample.Backbuffer, sample.Antialiasing);
+                    Vector2Int colorViewport = colorHandle.useScaling
+                        ? colorHandle.GetScaledSize(colorHandle.rtHandleProperties.currentViewportSize)
+                        : new Vector2Int(sample.ColorInfo.width, sample.ColorInfo.height);
+                    Vector2Int depthViewport = depthHandle.useScaling
+                        ? depthHandle.GetScaledSize(depthHandle.rtHandleProperties.currentViewportSize)
+                        : new Vector2Int(sample.DepthInfo.width, sample.DepthInfo.height);
+                    sample.Probe.RecordAttachments(sample.Stage, new GrassValidationPlayerProbe.AttachmentObservation
+                    {
+                        frame = sample.Frame, requestedMsaa = sample.RequestedSamples,
+                        hardwareSupportedMsaa = sample.SupportedSamples, cameraDescriptorSamples = sample.CameraDescriptorSamples,
+                        colorSamples = colorTexture ? colorTexture.antiAliasing : sample.ColorInfo.msaaSamples,
+                        depthSamples = depthTexture ? depthTexture.antiAliasing : sample.DepthInfo.msaaSamples,
+                        colorWidth = sample.ColorInfo.width, colorHeight = sample.ColorInfo.height,
+                        depthWidth = sample.DepthInfo.width, depthHeight = sample.DepthInfo.height,
+                        colorViewportWidth = colorViewport.x, colorViewportHeight = colorViewport.y,
+                        depthViewportWidth = depthViewport.x, depthViewportHeight = depthViewport.y,
+                        cameraWidth = sample.CameraWidth, cameraHeight = sample.CameraHeight,
+                        cameraScaledWidth = sample.ScaledWidth, cameraScaledHeight = sample.ScaledHeight,
+                        cameraDescriptorWidth = sample.DescriptorWidth, cameraDescriptorHeight = sample.DescriptorHeight,
+                        cameraRenderScale = sample.RenderScale,
+                        colorFormat = sample.ColorInfo.format.ToString(), depthFormat = sample.DepthInfo.format.ToString(),
+                        colorEvidence = colorTexture ? "allocated RenderTexture" : "imported target metadata",
+                        depthEvidence = depthTexture ? "allocated RenderTexture" : "imported target metadata",
+                        backbuffer = sample.Backbuffer, antialiasing = sample.Antialiasing
+                    });
                 });
             }
         }

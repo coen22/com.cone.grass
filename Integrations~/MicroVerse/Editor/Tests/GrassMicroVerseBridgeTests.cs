@@ -54,7 +54,7 @@ public sealed class GrassMicroVerseBridgeTests
             Object.DestroyImmediate(terrainObject);
         if (terrainData && !AssetDatabase.Contains(terrainData))
             Object.DestroyImmediate(terrainData);
-        if (layer)
+        if (layer && !AssetDatabase.Contains(layer))
             Object.DestroyImmediate(layer);
         if (!string.IsNullOrEmpty(folderPath))
             AssetDatabase.DeleteAsset(folderPath);
@@ -296,6 +296,48 @@ public sealed class GrassMicroVerseBridgeTests
         GrassMicroVerseBridgeUtility.Refresh(bridge, false, false);
         Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
         Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(replacement));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void BuildValidationChecksTheGroundTextureThatActuallySuppliesColor(bool useOverride)
+    {
+        Texture2D density = AddTexture("Tile 1 Grass", 8);
+        SelectTexture(density.name);
+        var diffuse = new Texture2D(8, 8, TextureFormat.RGBA32, false, true) { name = "Ground layer diffuse" };
+        AssetDatabase.CreateAsset(diffuse, folderPath + "/LayerDiffuse.asset");
+        layer = new TerrainLayer { diffuseTexture = diffuse };
+        AssetDatabase.CreateAsset(layer, folderPath + "/Ground.terrainlayer");
+        terrainData.terrainLayers = new[] { layer };
+        var serialized = new SerializedObject(bridge);
+        serialized.FindProperty("groundLayer").objectReferenceValue = layer;
+        Texture2D colorOverride = null;
+        if (useOverride)
+        {
+            colorOverride = new Texture2D(8, 8, TextureFormat.RGBA32, false, true);
+            AssetDatabase.CreateAsset(colorOverride, folderPath + "/GroundOverride.asset");
+            serialized.FindProperty("groundColorOverride").objectReferenceValue = colorOverride;
+        }
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        AssetDatabase.SaveAssets();
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false), Is.True);
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+
+        diffuse.SetPixel(2, 3, Color.green);
+        diffuse.Apply(false, false);
+        EditorUtility.SetDirty(diffuse);
+        Assert.That(EditorUtility.IsDirty(layer), Is.False, "Editing texture pixels does not save or dirty its TerrainLayer asset.");
+        uint revision = bridge.PlacementArea.SourceRevision;
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.EqualTo(useOverride), message);
+        if (!useOverride)
+            StringAssert.Contains(diffuse.name, message);
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(density));
+        Assert.That(bridge.PlacementArea.GroundLayer, Is.SameAs(layer));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(colorOverride));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Build validation must remain read-only.");
+
+        AssetDatabase.SaveAssetIfDirty(diffuse);
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
     }
 
     [Test]

@@ -34,6 +34,8 @@ public struct GrassPlacementDrawData
     /// <summary>CPU occupancy for painted maps; querying it never requests a texture upload.</summary>
     public GrassDensityAsset DensityAsset;
     public Texture DensityTexture;
+    /// <summary>Captured draw extent in original mask UVs. Default preserves a full mask for manually created snapshots.</summary>
+    public Rect CoverageUV;
     public GrassPlacementShape Shape;
     public float Density;
     public float EdgeFalloff;
@@ -54,11 +56,12 @@ public struct GrassPlacementDrawData
     public readonly bool IntersectsCoverage(Bounds worldBounds)
     {
         return Density > 0f && IntersectsCoverage(worldBounds, WorldBounds, WorldToMask,
-            Shape, DensityAsset, DensityTexture);
+            Shape, DensityAsset, DensityTexture, CoverageUV);
     }
 
     internal static bool IntersectsCoverage(Bounds worldBounds, Bounds sourceBounds,
-        Matrix4x4 worldToMask, GrassPlacementShape shape, GrassDensityAsset densityAsset, Texture densityTexture)
+        Matrix4x4 worldToMask, GrassPlacementShape shape, GrassDensityAsset densityAsset, Texture densityTexture,
+        Rect coverageUV = default)
     {
         Vector3 queryMin = worldBounds.min, queryMax = worldBounds.max;
         Vector3 sourceMin = sourceBounds.min, sourceMax = sourceBounds.max;
@@ -88,9 +91,12 @@ public struct GrassPlacementDrawData
             float nearestY = Mathf.Clamp(0.5f, yMin, yMax) - 0.5f;
             return nearestX * nearestX + nearestY * nearestY <= 0.25f;
         }
-        // World X/Z overlap was checked above. These local axes complete the
-        // conservative rectangle overlap check for a rotated or narrow box/texture.
-        return xMax >= 0f && xMin <= 1f && yMax >= 0f && yMin <= 1f;
+        // The world AABB of a rotated crop still includes empty corners. Test its
+        // actual local UV extent while retaining the original sampling coordinates.
+        Rect rectangle = shape == GrassPlacementShape.Texture && coverageUV != default
+            ? coverageUV : new Rect(0f, 0f, 1f, 1f);
+        return xMax >= rectangle.xMin && xMin <= rectangle.xMax &&
+            yMax >= rectangle.yMin && yMin <= rectangle.yMax;
     }
 }
 
@@ -298,6 +304,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
             TerrainRect = terrainRect,
             DensityAsset = densityAsset,
             DensityTexture = coverage,
+            CoverageUV = coverageUV,
             Shape = shape,
             Density = density,
             EdgeFalloff = edgeFalloff,
@@ -326,10 +333,10 @@ public sealed class GrassPlacementArea : MonoBehaviour
             !TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out Bounds frameBounds) ||
             frameBounds.max.x < worldBounds.min.x || frameBounds.min.x > worldBounds.max.x ||
             frameBounds.max.z < worldBounds.min.z || frameBounds.min.z > worldBounds.max.z ||
-            !TryGetCoverageExtent(localToWorld, frameBounds, out _, out Bounds ownBounds))
+            !TryGetCoverageExtent(localToWorld, frameBounds, out Rect coverageUV, out Bounds ownBounds))
             return false;
         return GrassPlacementDrawData.IntersectsCoverage(worldBounds, ownBounds, worldToMask,
-            shape, densityAsset, densityTexture);
+            shape, densityAsset, densityTexture, coverageUV);
     }
 
     public bool Paint(Vector3 worldPosition, float radius, float strength, float hardness, bool erase)

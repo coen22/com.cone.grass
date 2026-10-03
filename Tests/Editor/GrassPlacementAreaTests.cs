@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -410,6 +411,43 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void RotatedCroppedTextureRejectsEmptyCropCornersAndKeepsItsCapturedExtent()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(80f, 80f));
+        Texture2D texture = NewTexture();
+        texture.Apply(false, true);
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Texture;
+        serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        area.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
+        Rect originalCrop = new Rect(0.48f, 0.05f, 0.04f, 0.9f);
+        area.SetTextureCoverageBounds(originalCrop);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+        Assert.That(snapshot.CoverageUV, Is.EqualTo(originalCrop));
+
+        var emptyCorner = new Bounds(new Vector3(20f, 0f, -20f), Vector3.one * 0.1f);
+        var covered = new Bounds(new Vector3(20f, 0f, 20f), Vector3.one * 0.1f);
+        Assert.That(snapshot.WorldBounds.Contains(emptyCorner.center), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(emptyCorner), Is.False,
+            "The crop's loose world bounds must not dispatch empty tiles inside the uncropped mask.");
+        Assert.That(area.IntersectsCoverage(emptyCorner), Is.False);
+        Assert.That(snapshot.IntersectsCoverage(covered), Is.True);
+        Assert.That(area.IntersectsCoverage(covered), Is.True);
+
+        Vector3 edge = snapshot.WorldToMask.inverse.MultiplyPoint3x4(new Vector3(0.52005f, 0f, 0.5f));
+        var crossingEdge = new Bounds(edge, Vector3.one * 0.02f);
+        Assert.That(snapshot.IntersectsCoverage(crossingEdge), Is.True,
+            "A tile footprint reaching the cropped edge remains eligible.");
+
+        area.SetTextureCoverageBounds(new Rect(0.1f, 0.05f, 0.04f, 0.9f));
+        Assert.That(area.IntersectsCoverage(covered), Is.False);
+        Assert.That(snapshot.IntersectsCoverage(covered), Is.True,
+            "A pending capture keeps the crop it recorded when the live source changes.");
+    }
+
+    [Test]
     public void AFullTerrainAlbedoUsesIndependentUvCoordinatesAndKeepsItsAuthoredStrengthForSparseGrass()
     {
         Terrain terrain = NewTerrain(new Vector3(-50f, 5f, 120f), new Vector3(200f, 30f, 100f));
@@ -613,6 +651,82 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void SceneBrushDoesNotConnectDabsAcrossAMissedSurfaceHit()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(40f, 10f));
+        NewMeshSurface(area);
+        GrassDensityAsset density = NewDensity();
+        area.SetDensityAsset(density, false);
+        Editor editor = NewPlacementEditor(area);
+        SetEditorField(editor, "strokeAsset", density);
+        SetEditorField(editor, "brushRadius", 1f);
+        SetEditorField(editor, "brushStrength", 1f);
+        SetEditorField(editor, "brushHardness", 1f);
+        Physics.SyncTransforms();
+
+        Assert.That(BrushPoint(editor, area, new Ray(new Vector3(-8f, 5f, 0f), Vector3.down), out Vector3 first), Is.True);
+        InvokeEditor(editor, "PaintAlongStroke", area, first, false);
+        Assert.That(BrushPoint(editor, area, new Ray(new Vector3(30f, 5f, 0f), Vector3.down), out _), Is.False);
+        Assert.That(BrushPoint(editor, area, new Ray(new Vector3(8f, 5f, 0f), Vector3.down), out Vector3 second), Is.True);
+        InvokeEditor(editor, "PaintAlongStroke", area, second, false);
+
+        Assert.That(density.Sample(new Vector2(0.3f, 0.5f)), Is.GreaterThan(0.9f));
+        Assert.That(density.Sample(new Vector2(0.7f, 0.5f)), Is.GreaterThan(0.9f));
+        Assert.That(density.Sample(new Vector2(0.5f, 0.5f)), Is.Zero,
+            "Returning to the surface must not join separated hits with an unrequested painted stripe.");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void InvalidatingSceneBrushInputFinishesItsPendingStroke(bool clearAsset)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        area.SetDensityAsset(density, false);
+        Editor editor = NewPlacementEditor(area);
+        SetEditorField(editor, "paintEnabled", true);
+        SetEditorField(editor, "strokeAsset", density);
+        SetEditorField(editor, "hasLastDab", true);
+
+        if (clearAsset)
+            area.SetDensityAsset(null, false);
+        else
+            ConfigureLocal(area, new Vector2(10f, 10f));
+        InvokeEditor(editor, "OnSceneGUI");
+
+        Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
+        Assert.That(GetEditorField(editor, "hasLastDab"), Is.False);
+        Assert.That(GetEditorField(editor, "strokeUndoGroup"), Is.EqualTo(-1));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SceneBrushDoesNotFallBackAfterItsExplicitSupportIsDestroyed(bool terrainSupport)
+    {
+        Terrain terrain = terrainSupport
+            ? NewTerrain(new Vector3(-50f, 0f, -50f), new Vector3(100f, 10f, 100f)) : null;
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f), terrain);
+        Collider surface = NewMeshSurface(area);
+        Editor editor = NewPlacementEditor(area);
+        Physics.SyncTransforms();
+        var ray = new Ray(Vector3.up * 5f, Vector3.down);
+        Assert.That(BrushPoint(editor, area, ray, out _), Is.True);
+
+        Object.DestroyImmediate(terrainSupport ? (Object)terrain.gameObject : surface);
+        Assert.That(BrushPoint(editor, area, ray, out _), Is.False);
+
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("terrain").objectReferenceValue = null;
+        serialized.FindProperty("paintSurface").objectReferenceValue = null;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(BrushPoint(editor, area, ray, out Vector3 planePoint), Is.True);
+        Assert.That(planePoint.y, Is.EqualTo(area.transform.position.y).Within(0.00001f));
+    }
+
+    [Test]
     public void AnAreaRegistersWhenASavedSceneIsOpenedAdditively()
     {
         Scene originalActive = SceneManager.GetActiveScene();
@@ -779,6 +893,31 @@ public sealed class GrassPlacementAreaTests
         serialized.FindProperty("terrain").objectReferenceValue = terrain;
         serialized.FindProperty("useTerrainBounds").boolValue = false;
         serialized.ApplyModifiedPropertiesWithoutUndo();
+    }
+
+    private Editor NewPlacementEditor(GrassPlacementArea area)
+    {
+        Editor editor = Editor.CreateEditor(area);
+        assets.Add(editor);
+        Assert.That(editor.GetType().Name, Is.EqualTo("GrassPlacementAreaEditor"));
+        return editor;
+    }
+
+    private static object InvokeEditor(Editor editor, string method, params object[] arguments) =>
+        editor.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(editor, arguments);
+
+    private static void SetEditorField(Editor editor, string field, object value) =>
+        editor.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(editor, value);
+
+    private static object GetEditorField(Editor editor, string field) =>
+        editor.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(editor);
+
+    private static bool BrushPoint(Editor editor, GrassPlacementArea area, Ray ray, out Vector3 point)
+    {
+        object[] arguments = { area, ray, Vector3.zero, Vector3.zero };
+        bool hit = (bool)InvokeEditor(editor, "TryGetBrushPoint", arguments);
+        point = (Vector3)arguments[2];
+        return hit;
     }
 
     private static void AssertUv(Matrix4x4 worldToMask, Vector3 world, float expectedU, float expectedV)

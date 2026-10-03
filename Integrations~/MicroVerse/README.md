@@ -56,6 +56,8 @@ Mask discovery is cached per asset. Ordinary polling checks object identity, dim
 
 The optional ground bake also uses a source signature, including terrain texture notifications, layer/material properties and asset changes. It reuses a current saved output across editor reloads and rebakes when its inputs change. GPU capture and readback occur during a required bake, not on each poll. Source edits made by save callbacks or bake observers remain changes to process on the next refresh; they cannot certify pixels produced before those edits.
 
+A synchronous refresh requested from that bridge's own bake or placement-change callback returns `false` without clearing or rebinding the committed placement. The same protection applies to another bridge sharing the output currently being baked. Queue the refresh after the current callback returns. The baker also prevents a nested operation from overwriting an output that is still being saved or reported to its observers.
+
 A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
 
 The bridge treats path casing and Windows-style separators as aliases of the same output asset. Before writing a bake, it also checks loaded scenes for inactive bridge objects and disabled bridges retaining a saved bake, so those outputs cannot be overwritten at another Terrain or resolution. Use separate output assets for separate tiles or resolutions. Unchanged polls do not scan scene hierarchies.
@@ -73,6 +75,8 @@ Editor cache housekeeping also releases manually refreshed bindings after their 
 Finish MicroVerse generation and save its source assets. Refresh the bridge, bake if required, and save the scene before building. The runtime `GrassPlacementArea` serializes the resolved texture and Terrain references. Enabled bridges refresh before scene serialization so those runtime fields are part of the saved scene. An asset replacement performed later by another producer callback can still require a final refresh and save.
 
 The player build preflight runs for **every build**, including incremental builds. It inspects the requested saved scenes in preview scenes and checks explicit mask resolution, saved assets, current core bindings, and the persisted source/output hashes of an enabled ground bake. It fails with the scene, object and corrective action if the saved bindings or bake are stale. This check neither saves open scenes nor repairs only a temporary build copy; an unsaved correction cannot silently pass the cached build path.
+
+When using a single Grass Terrain Layer without a baked or overridden color map, save that layer's diffuse texture as well as the TerrainLayer asset. They are separate assets, and unsaved diffuse pixels now fail preflight. A saved Ground Color Override takes precedence, so edits to an unused layer diffuse do not block that configuration.
 
 The versioned scene processor validates those same inputs and removes the authoring bridge component from the built scene copy. It never generates terrain or bakes textures during a build. Disabled bridges retain their last serialized placement data.
 

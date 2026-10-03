@@ -102,7 +102,10 @@ public sealed class GrassPlacementAreaEditor : Editor
     {
         GrassPlacementArea area = Area;
         if (!paintEnabled || !area || !area.DensityAsset || area.Shape != GrassPlacementShape.Texture)
+        {
+            FinishStroke();
             return;
+        }
 
         Event current = Event.current;
         brushControl = GUIUtility.GetControlID("ConeGrassDensityBrush".GetHashCode(), FocusType.Passive);
@@ -125,6 +128,12 @@ public sealed class GrassPlacementAreaEditor : Editor
             return;
         }
 
+        if (current.alt)
+        {
+            FinishStroke();
+            return;
+        }
+
         if (!TryGetBrushPoint(area, HandleUtility.GUIPointToWorldRay(current.mousePosition),
             out Vector3 point, out Vector3 normal))
             return;
@@ -139,7 +148,7 @@ public sealed class GrassPlacementAreaEditor : Editor
             Handles.DrawWireDisc(point + normal * 0.025f, normal, brushRadius * brushHardness);
         }
 
-        if (current.alt || current.button != 0)
+        if (current.button != 0)
             return;
 
         if (current.type == EventType.MouseDown)
@@ -220,11 +229,11 @@ public sealed class GrassPlacementAreaEditor : Editor
             GUIUtility.hotControl = 0;
     }
 
-    private static bool TryGetBrushPoint(GrassPlacementArea area, Ray ray, out Vector3 point, out Vector3 normal)
+    private bool TryGetBrushPoint(GrassPlacementArea area, Ray ray, out Vector3 point, out Vector3 normal)
     {
         Collider collider = area.PaintSurface;
-        if (area.Terrain)
-            collider = area.Terrain.GetComponent<TerrainCollider>();
+        if (!ReferenceEquals(area.Terrain, null))
+            collider = area.Terrain ? area.Terrain.GetComponent<TerrainCollider>() : null;
 
         if (collider)
         {
@@ -234,24 +243,22 @@ public sealed class GrassPlacementAreaEditor : Editor
                 normal = hit.normal;
                 return true;
             }
-            point = normal = Vector3.zero;
-            return false;
+        }
+        else if (ReferenceEquals(area.Terrain, null) && ReferenceEquals(area.PaintSurface, null))
+        {
+            // Only an intentionally unbound area uses a horizontal brush plane.
+            Plane plane = new Plane(Vector3.up, area.transform.position);
+            if (plane.Raycast(ray, out float enter))
+            {
+                point = ray.GetPoint(enter);
+                normal = Vector3.up;
+                return true;
+            }
         }
 
-        if (area.Terrain)
-        {
-            // Do not silently paint a horizontal plane when an assigned terrain has no collider.
-            point = normal = Vector3.zero;
-            return false;
-        }
-
-        Plane plane = new Plane(Vector3.up, area.transform.position);
-        if (plane.Raycast(ray, out float enter))
-        {
-            point = ray.GetPoint(enter);
-            normal = Vector3.up;
-            return true;
-        }
+        // Re-entering a surface starts a new dab. Interpolating from the last hit
+        // would paint a stripe through the region the cursor crossed without a hit.
+        hasLastDab = false;
         point = normal = Vector3.zero;
         return false;
     }
