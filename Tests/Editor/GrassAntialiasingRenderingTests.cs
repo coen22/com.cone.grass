@@ -98,6 +98,38 @@ public sealed class GrassAntialiasingRenderingTests
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
     }
 
+    [TestCase(1, 4f, 0f)]
+    [TestCase(4, 4f, 0f)]
+    [TestCase(1, 2f, 4f)]
+    [TestCase(4, 2f, 4f)]
+    public void ProjectedCoverageIsInvariantToOrthographicWorldScale(
+        int samples, float originalPixelWidth, float minimumPixelWidth)
+    {
+        Color[] reference = Render(0, samples, 1f, originalPixelWidth, minimumPixelWidth);
+        // Scale blade dimensions and the orthographic viewport together, keeping
+        // root XZ (and therefore its seed), depth and all projected vertices fixed.
+        // A power of two avoids introducing different floating-point rounding.
+        Color[] scaled = Render(0, samples, 1f, originalPixelWidth, minimumPixelWidth,
+            orthographicScale: 1f / 16384f);
+        Assert.That(CoveredArea(reference), Is.GreaterThan(0f),
+            "The unscaled blade is a positive control for coverage and shader execution.");
+        AssertSamePixels(reference, scaled,
+            "Equivalent projected blades must keep the same density and width compensation at small world scales.");
+    }
+
+    [TestCase(0f)]
+    [TestCase(4f)]
+    public void ZeroWidthBladesStayInvisibleAtSmallWorldScale(float minimumPixelWidth)
+    {
+        Color[] positive = Render(0, 1, 1f, BladePixelWidth, minimumPixelWidth,
+            orthographicScale: 1f / 16384f);
+        Color[] zeroWidth = Render(0, 1, 1f, 0f, minimumPixelWidth,
+            orthographicScale: 1f / 16384f);
+        Assert.That(CoveredArea(positive), Is.GreaterThan(0f));
+        Assert.That(CoveredArea(zeroWidth), Is.Zero,
+            "The zero-width fallback must not create grass, including when a pixel minimum expands its mesh.");
+    }
+
     [TestCase(0)]
     [TestCase(2)]
     [TestCase(5)]
@@ -165,7 +197,8 @@ public sealed class GrassAntialiasingRenderingTests
 
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
         float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
-        Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null)
+        Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null,
+        float orthographicScale = 1f)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -193,11 +226,12 @@ public sealed class GrassAntialiasingRenderingTests
             Assert.That(resolved.Create(), Is.True);
             readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
 
-            Vector3 root = rootPosition ?? new Vector3(0f, -0.5f, 2f);
+            Vector3 root = rootPosition ?? new Vector3(0f, -0.5f * orthographicScale, 2f);
             positions.SetData(new[] { new Vector4(root.x, root.y, root.z, coverage) });
             // The shipped mesh's full base width is half of _GrassWidth. An
             // orthographic two-unit viewport gives Size/2 pixels per world unit.
-            material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size);
+            material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size * orthographicScale);
+            material.SetFloat("_GrassHeight", orthographicScale);
             material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
             material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
 
@@ -226,7 +260,8 @@ public sealed class GrassAntialiasingRenderingTests
             Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) * cameraWorld.inverse;
             Matrix4x4 projection = GL.GetGPUProjectionMatrix(perspective
                 ? Matrix4x4.Perspective(60f, 1f, 0.1f, 10f)
-                : Matrix4x4.Ortho(-1f, 1f, -1f, 1f, 0.1f, 10f), true);
+                : Matrix4x4.Ortho(-orthographicScale, orthographicScale,
+                    -orthographicScale, orthographicScale, 0.1f, 10f), true);
             string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
             var previousMatrices = new Matrix4x4[matrixNames.Length];
             for (int index = 0; index < matrixNames.Length; index++)
@@ -239,7 +274,8 @@ public sealed class GrassAntialiasingRenderingTests
             Vector4[] vectors =
             {
                 cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
-                new Vector4(2f, 2f, 0f, perspective ? 0f : 1f), new Vector4(1f, 0.1f, 10f, 0.1f),
+                new Vector4(2f * orthographicScale, 2f * orthographicScale, 0f, perspective ? 0f : 1f),
+                new Vector4(1f, 0.1f, 10f, 0.1f),
                 Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
                 new Vector4(time / 20f, time, time * 2f, time * 3f),
                 new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
