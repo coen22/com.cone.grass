@@ -289,9 +289,8 @@ public static class GrassMicroVerseBridgeUtility
         }
         try
         {
-            string outputPath = bridge.BakedGroundColor
-                ? AssetDatabase.GetAssetPath(bridge.BakedGroundColor) : bridge.GroundBakeAssetPath;
-            if (bridge.BakeTerrainGroundColor && TerrainGrassAlbedoBaker.IsBakingOutput(outputPath))
+            if (bridge.BakeTerrainGroundColor &&
+                TerrainGrassAlbedoBaker.IsBakingOutput(ResolveGroundBakeOutput(bridge, out _)))
             {
                 // Another bridge can legitimately share this terrain's output.
                 // A temporary ownership conflict is not missing producer data:
@@ -417,10 +416,7 @@ public static class GrassMicroVerseBridgeUtility
     private static bool TryRefreshGroundBake(GrassMicroVerseBridge bridge, bool forceBake,
         bool recordUndo, bool markSceneDirty, out Texture2D texture, out string message)
     {
-        texture = bridge.BakedGroundColor;
-        // Preserve an output's GUID when its asset is moved. The inspector clears
-        // the old output reference when the author explicitly chooses a new path.
-        string path = texture ? AssetDatabase.GetAssetPath(texture) : CanonicalAssetPath(bridge.GroundBakeAssetPath);
+        string path = ResolveGroundBakeOutput(bridge, out texture);
         if (string.IsNullOrEmpty(path))
         {
             message = "Choose a ground-albedo output .asset under Assets before enabling automatic baking.";
@@ -622,6 +618,18 @@ public static class GrassMicroVerseBridgeUtility
 
     private static Material GetTerrainMaterial(Terrain terrain) =>
         terrain.materialTemplate ? terrain.materialTemplate : GraphicsSettings.currentRenderPipeline.defaultTerrainMaterial;
+
+    private static string ResolveGroundBakeOutput(GrassMicroVerseBridge bridge, out Texture2D texture)
+    {
+        texture = bridge.BakedGroundColor;
+        // Follow a moved output only while the reference still owns its main
+        // asset. A detached/replaced reference must not hide the configured
+        // recovery path or be reused as a completed saved bake.
+        if (TerrainGrassAlbedoBaker.TryGetOutputAssetPath(texture, out string path))
+            return path;
+        texture = null;
+        return CanonicalAssetPath(bridge.GroundBakeAssetPath);
+    }
 
     private static string CanonicalAssetPath(string path)
     {
