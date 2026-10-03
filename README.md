@@ -147,6 +147,8 @@ Keep motion history Off for the baseline. Enable it only for a consumer that nee
 
 Position buffers, per-LOD indirect arguments, counters, and capture targets belong to individual camera resources and persist between frames. Buffer capacity changes rebuild resources deliberately; optional count previews use asynchronous readback.
 
+A position-buffer request above the device's reported individual-buffer limit releases that camera's existing core and motion resources. Repeated rejection does not recreate its cache or repeat the warning. Returning to a supported capacity allows allocation again.
+
 At the default five subdivisions, the new meshes use:
 
 | LOD | Vertices per blade | Triangles per blade |
