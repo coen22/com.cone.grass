@@ -134,6 +134,51 @@ public sealed class GrassMicroVerseBridgeTests
     }
 
     [Test]
+    public void AlphaOnlyDensityFailsReadOnlyBuildValidationAndClearsCoverageOnRefresh()
+    {
+        Texture2D original = AddTexture("Red density", 8);
+        SelectTexture(original.name);
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false), Is.True);
+        var alpha = new Texture2D(8, 8, TextureFormat.Alpha8, false, true) { name = "Alpha-only density" };
+        alpha.LoadRawTextureData(new byte[64]);
+        alpha.Apply(false, false);
+        AssetDatabase.AddObjectToAsset(alpha, maskTarget);
+        AssetDatabase.SaveAssets();
+        SelectTexture(alpha.name);
+        uint revision = bridge.PlacementArea.SourceRevision;
+
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.False);
+        StringAssert.Contains("red channel", message);
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(original));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Preflight must not repair a rejected mask binding.");
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false), Is.False);
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+        StringAssert.Contains("red channel", bridge.LastRefreshMessage);
+        Assert.That(AssetDatabase.LoadAllAssetsAtPath(AssetDatabase.GetAssetPath(maskTarget)), Does.Contain(alpha));
+    }
+
+    [TestCase(TextureFormat.R8)]
+    [TestCase(TextureFormat.RGBA32)]
+    [TestCase(TextureFormat.RHalf)]
+    [TestCase(TextureFormat.RFloat)]
+    [TestCase(TextureFormat.DXT5)]
+    public void LinearColorFormatsRetainTheirRedDensityChannel(TextureFormat format)
+    {
+        if (!SystemInfo.SupportsTextureFormat(format))
+            Assert.Ignore("This Editor cannot construct the requested source texture format: " + format);
+        var texture = new Texture2D(8, 8, format, false, true) { name = "Linear red density" };
+        AssetDatabase.AddObjectToAsset(texture, maskTarget);
+        AssetDatabase.SaveAssets();
+        SelectTexture(texture.name);
+
+        Assert.That(GrassMicroVerseBridgeUtility.TryResolve(bridge, out Texture2D resolved, out string message), Is.True, message);
+        Assert.That(resolved, Is.SameAs(texture));
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false), Is.True);
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(texture));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
+    }
+
+    [Test]
     public void MatchingGroundLayerMustBelongToSupportingTerrain()
     {
         AddTexture("Tile 1 Grass", 8);
@@ -338,6 +383,74 @@ public sealed class GrassMicroVerseBridgeTests
 
         AssetDatabase.SaveAssetIfDirty(diffuse);
         Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
+    }
+
+    [TestCase(1, false)]
+    [TestCase(1, true)]
+    [TestCase(5, false)]
+    [TestCase(5, true)]
+    public void BuildValidationChecksOnlyTheConsumedNativeGroupSampler(int selectedIndex, bool useOverride)
+    {
+        Texture2D density = AddTexture("Tile grass density", 8);
+        SelectTexture(density.name);
+        var layers = new TerrainLayer[selectedIndex + 1];
+        for (int index = 0; index < layers.Length; index++)
+        {
+            var diffuse = new Texture2D(8, 8, TextureFormat.RGBA32, false, true) { name = "Diffuse " + index };
+            AssetDatabase.CreateAsset(diffuse, folderPath + "/Diffuse" + index + ".asset");
+            layers[index] = new TerrainLayer { name = "Layer " + index, diffuseTexture = diffuse };
+            AssetDatabase.CreateAsset(layers[index], folderPath + "/Layer" + index + ".terrainlayer");
+        }
+        terrainData.terrainLayers = layers;
+        layer = layers[selectedIndex];
+        TerrainLayer samplerLayer = layers[selectedIndex / 4 * 4];
+        Texture2D samplerTexture = samplerLayer.diffuseTexture;
+        var replacement = new Texture2D(8, 8, TextureFormat.RGBA32, false, true) { name = "Replacement sampler" };
+        AssetDatabase.CreateAsset(replacement, folderPath + "/ReplacementSampler.asset");
+        var serialized = new SerializedObject(bridge);
+        serialized.FindProperty("groundLayer").objectReferenceValue = layer;
+        Texture2D colorOverride = null;
+        if (useOverride)
+        {
+            colorOverride = new Texture2D(8, 8, TextureFormat.RGBA32, false, true);
+            AssetDatabase.CreateAsset(colorOverride, folderPath + "/ColorOverride.asset");
+            serialized.FindProperty("groundColorOverride").objectReferenceValue = colorOverride;
+        }
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        AssetDatabase.SaveAssets();
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false), Is.True);
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+
+        for (int edit = 0; edit < 2; edit++)
+        {
+            Object unsaved;
+            if (edit == 0)
+            {
+                samplerTexture.wrapModeV = TextureWrapMode.Clamp;
+                unsaved = samplerTexture;
+            }
+            else
+            {
+                samplerLayer.diffuseTexture = replacement;
+                unsaved = samplerLayer;
+            }
+            EditorUtility.SetDirty(unsaved);
+            Assert.That(EditorUtility.IsDirty(layer), Is.False, "The selected layer is separate from its group's sampler dependency.");
+            Assert.That(EditorUtility.IsDirty(layer.diffuseTexture), Is.False);
+            uint revision = bridge.PlacementArea.SourceRevision;
+
+            Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.EqualTo(useOverride), message);
+            if (!useOverride)
+                StringAssert.Contains(unsaved.name, message);
+            Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(density));
+            Assert.That(bridge.PlacementArea.GroundLayer, Is.SameAs(layer));
+            Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(colorOverride));
+            Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Validation must not mutate placement observations.");
+            Assert.That(EditorUtility.IsDirty(unsaved), Is.True, "Preflight must leave unsaved source assets untouched.");
+
+            AssetDatabase.SaveAssetIfDirty(unsaved);
+            Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
+        }
     }
 
     [Test]

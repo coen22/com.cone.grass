@@ -17,11 +17,15 @@ Procedural, GPU-generated grass with explicit placement, editable density maps, 
 
 Authored terrain areas sample their assigned TerrainData directly, including holes. They do not need a grass layer on the Terrain. Areas remain constrained to their own footprint, even when a supporting Terrain is assigned. Enable **Use Terrain Bounds** only for a map intended to cover the entire terrain.
 
+Adjacent terrains assign roots through world-space bounds that include the lower edge and exclude the upper edge. This keeps fractional-origin seams from generating duplicate roots or dropping a valid root when normalized texture coordinates round to one.
+
 A positive area mask means **black = no grass, white = full grass**. Missing masks and empty painted assets produce no grass. Overlapping area density uses the maximum coverage, so overlap does not double the population.
 
 ### Painting individual spots
 
 Select a Placement Area and create a persistent density asset in its inspector. Use the Scene brush to paint, hold **Shift** to erase temporarily, or select erase mode. Radius, strength, and hardness control the brush. Each stroke supports Undo/Redo; changes are saved with the asset.
+
+Long cursor segments are clipped to the map plus brush overlap before applying the per-event dab limit. Travel outside a small patch therefore does not spread its painted dabs apart. Undo or Redo ends an active stroke; start a new stroke to continue painting after a history change.
 
 Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. Small strokes update occupancy counts and upload a bounded pixel rectangle through a reusable staging texture where regional copies are supported. Unsupported copies and full edits use the authoritative whole-map data.
 
@@ -37,7 +41,9 @@ For an authored mesh patch, assign its **Paint Surface** collider with an associ
 
 An explicit mesh binding stops coverage if its collider is destroyed, its object becomes inactive, its scene is unloaded or opened in a preview, or its associated Renderer is removed, disabled or forced off. Mesh support also needs indexed geometry in a submesh with a material slot; the height pass supplies its own material, so a null slot is allowed. Clear the binding deliberately to return to the height-layer fallback. A disabled physics collider can still identify an active visible Renderer on the same object or a parent.
 
-Assigned mesh transforms, bounds, mesh replacement and enable/disable changes invalidate their surface capture. Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after other cached mesh edits, or disable **Cache Surface Data** for continuously deformed surfaces whose bounds remain unchanged. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new runtime modifier renderers or changing their materials so the shared capture inventory includes them; editor hierarchy and scene changes refresh discovery automatically.
+Assigned mesh transforms, bounds, mesh replacement, material-slot count and enable/disable changes invalidate their surface capture. Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after other cached mesh edits, or disable **Cache Surface Data** for continuously deformed surfaces whose bounds remain unchanged. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new runtime modifier renderers or changing their materials so the shared capture inventory includes them; editor hierarchy and scene changes refresh discovery automatically.
+
+The shared inventory retains existing inactive modifiers and terrains for later activation. With **Update Modifiers Every Frame** enabled, an activated modifier becomes eligible without another scene search. Terrain activation updates the surface set, and active generated terrains retain their existing support. Legacy cached mesh changes still follow the refresh policy above.
 
 ## MicroVerse spline workflow
 
@@ -51,7 +57,7 @@ Install the **MicroVerse Mask Bridge** sample from Package Manager. The sample a
 6. For mixed grass/dirt edges, enable **Bake Terrain Ground Albedo** and choose an output asset for each Terrain. Bake, refresh the saved mask, and save the scene.
 7. Spline edits update through asset changes and optional editor polling. The build preflight checks saved bindings before both clean and incremental player builds and reports stale inputs with the corrective action.
 
-The bridge rebinds uniquely named texture subassets after replacement, rejects ambiguous/missing/sRGB outputs, and clears stale coverage on failure. It never guesses which tile belongs to a terrain.
+The bridge rebinds uniquely named texture subassets after replacement, requires a linear normalized or floating-point red channel, and clears stale coverage on missing, ambiguous or unsupported outputs. Alpha-only, integer and depth formats are rejected. It never guesses which tile belongs to a terrain.
 
 This first integration consumes **saved mask outputs**. Native MicroVerse generation-complete/cancellation hooks require verification against the installed MicroVerse version and are not implemented. The editor poll is eventually consistent; it cannot identify a native generation transaction. See the [sample guide](Integrations~/MicroVerse/README.md) for refresh, build, and test details.
 
@@ -148,6 +154,8 @@ Removing a required material or compute shader, or assigning a material without 
 Deactivating the renderer feature releases its camera resources at the next render-context boundary, even though URP no longer calls its pass-enqueue method. An active feature in an unused renderer asset continues to evict idle camera caches. Re-enabling the feature creates camera resources as needed; disabling or destroying the feature object tears down its owned helpers and callback.
 
 Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
+
+The configured height range is normalized before both matrix construction and cache comparison. Reversed endpoints and nonfinite values that resolve to the same finite defaults share one cache identity.
 
 These are structural reductions, **not measured frame-rate claims**. The richer fragment lighting, extra ground samples, and enabled contact shadows also cost GPU time. Rendering both blade sides keeps the same geometry and draw count but can shade bent portions that backface culling previously discarded. Profile the target scene at equal visual coverage. GPU Resident Drawer does not automatically optimize these custom indirect draws.
 

@@ -991,6 +991,100 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void SceneBrushClipsLongOutsideTravelBeforeBudgetingDabsInARotatedScaledMap()
+    {
+        GrassPlacementArea area = NewStrokeArea(out GrassDensityAsset density, out Editor editor);
+        GrassPlacementArea reference = NewStrokeArea(out GrassDensityAsset expected, out Editor referenceEditor);
+        Matrix4x4 maskToWorld = area.WorldToMask.inverse;
+        Vector3 first = maskToWorld.MultiplyPoint3x4(new Vector3(-50f, 0f, 0.5f));
+        Vector3 last = maskToWorld.MultiplyPoint3x4(new Vector3(51f, 0f, 0.5f));
+        InvokeEditor(editor, "PaintAlongStroke", area, first, false);
+        InvokeEditor(editor, "PaintAlongStroke", area, last, false);
+
+        // The reference contains the same relevant path, with only the half-metre
+        // brush overlap beyond each map edge. It needs fewer than 512 normal dabs.
+        float radiusU = 0.5f / maskToWorld.MultiplyVector(Vector3.right).magnitude;
+        InvokeEditor(referenceEditor, "PaintAlongStroke", reference,
+            maskToWorld.MultiplyPoint3x4(new Vector3(-radiusU, 0f, 0.5f)), false);
+        InvokeEditor(referenceEditor, "PaintAlongStroke", reference,
+            maskToWorld.MultiplyPoint3x4(new Vector3(1f + radiusU, 0f, 0.5f)), false);
+
+        Assert.That(ReadDensitySamples(density), Is.EqualTo(ReadDensitySamples(expected)),
+            "Dabs outside the map must not turn a continuous crossing into widely separated painted islands.");
+        for (int x = 0; x < density.Width; x++)
+            Assert.That(density.Sample(new Vector2((x + 0.5f) / density.Width, 32.5f / density.Height)),
+                Is.EqualTo(1f), "The complete crossing must retain its painted center strip.");
+        Assert.That(GetEditorField(editor, "lastDab"), Is.EqualTo(last),
+            "Continuation must start at the actual cursor endpoint outside the map.");
+    }
+
+    [Test]
+    public void SceneBrushOutsideOnlyTravelDoesNotPaintOrReconnectFromAnOlderCursorPoint()
+    {
+        GrassPlacementArea area = NewStrokeArea(out GrassDensityAsset density, out Editor editor);
+        GrassPlacementArea reference = NewStrokeArea(out GrassDensityAsset expected, out Editor referenceEditor);
+        Matrix4x4 maskToWorld = area.WorldToMask.inverse;
+        uint revision = density.Revision;
+        InvokeEditor(editor, "PaintAlongStroke", area,
+            maskToWorld.MultiplyPoint3x4(new Vector3(-50f, 0f, 0.5f)), false);
+        InvokeEditor(editor, "PaintAlongStroke", area,
+            maskToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, 50f)), false);
+        Assert.That(density.HasCoverage, Is.False);
+        Assert.That(density.Revision, Is.EqualTo(revision));
+
+        Vector3 center = maskToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, 0.5f));
+        InvokeEditor(editor, "PaintAlongStroke", area, center, false);
+        float radiusV = 0.5f / maskToWorld.MultiplyVector(Vector3.forward).magnitude;
+        InvokeEditor(referenceEditor, "PaintAlongStroke", reference,
+            maskToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, 1f + radiusV)), false);
+        InvokeEditor(referenceEditor, "PaintAlongStroke", reference, center, false);
+
+        Assert.That(density.HasCoverage, Is.True);
+        Assert.That(ReadDensitySamples(density), Is.EqualTo(ReadDensitySamples(expected)),
+            "Re-entry must follow the cursor's latest outside point, preserving the vertical path into the map.");
+        Assert.That(density.Sample(new Vector2(0.25f, 0.5f)), Is.Zero,
+            "The earlier left-side cursor point must not create a horizontal stripe on re-entry.");
+    }
+
+    [Test]
+    public void UndoDuringASceneStrokeReleasesItsContinuationAndPreservesRedo()
+    {
+        GrassPlacementArea area = NewStrokeArea(out GrassDensityAsset density, out Editor editor);
+        Undo.IncrementCurrentGroup();
+        SetEditorField(editor, "strokeUndoGroup", Undo.GetCurrentGroup());
+        Undo.RegisterCompleteObjectUndo(density, "Paint active grass stroke");
+        Vector3 center = area.transform.position;
+        InvokeEditor(editor, "PaintAlongStroke", area, center, false);
+        Assert.That(density.HasCoverage, Is.True);
+        byte[] painted = ReadDensitySamples(density);
+        Undo.FlushUndoRecordObjects();
+        Undo.IncrementCurrentGroup();
+        try
+        {
+            Undo.PerformUndo();
+            Assert.That(density.HasCoverage, Is.False);
+            Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
+            Assert.That(GetEditorField(editor, "hasLastDab"), Is.False);
+            Assert.That(GetEditorField(editor, "strokeUndoGroup"), Is.EqualTo(-1));
+            uint revision = density.Revision;
+
+            InvokeEditor(editor, "PaintAlongStroke", area, center + Vector3.right, false);
+            Assert.That(density.HasCoverage, Is.False,
+                "A stale drag after Undo must wait for a new MouseDown and its complete-object Undo record.");
+            Assert.That(density.Revision, Is.EqualTo(revision));
+
+            Undo.PerformRedo();
+            Assert.That(ReadDensitySamples(density), Is.EqualTo(painted),
+                "Stroke teardown during Undo must not collapse or replace the already-replayed history.");
+            Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
+        }
+        finally
+        {
+            Undo.ClearUndo(density);
+        }
+    }
+
+    [Test]
     public void SceneBrushDoesNotConnectDabsAcrossAMissedSurfaceHit()
     {
         GrassPlacementArea area = NewArea();
@@ -1284,6 +1378,33 @@ public sealed class GrassPlacementAreaTests
         assets.Add(editor);
         Assert.That(editor.GetType().Name, Is.EqualTo("GrassPlacementAreaEditor"));
         return editor;
+    }
+
+    private GrassPlacementArea NewStrokeArea(out GrassDensityAsset density, out Editor editor)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(15f, 20f));
+        area.transform.position = new Vector3(100f, 4f, -80f);
+        area.transform.rotation = Quaternion.Euler(0f, 37f, 0f);
+        area.transform.localScale = new Vector3(2f, 1f, 0.5f);
+        density = NewDensity();
+        area.SetDensityAsset(density, false);
+        editor = NewPlacementEditor(area);
+        SetEditorField(editor, "strokeAsset", density);
+        SetEditorField(editor, "brushRadius", 0.5f);
+        SetEditorField(editor, "brushStrength", 1f);
+        SetEditorField(editor, "brushHardness", 1f);
+        return area;
+    }
+
+    private static byte[] ReadDensitySamples(GrassDensityAsset density)
+    {
+        var samples = new byte[density.Width * density.Height];
+        for (int y = 0; y < density.Height; y++)
+            for (int x = 0; x < density.Width; x++)
+                samples[y * density.Width + x] = (byte)Mathf.RoundToInt(density.Sample(
+                    new Vector2((x + 0.5f) / density.Width, (y + 0.5f) / density.Height)) * 255f);
+        return samples;
     }
 
     private static object InvokeEditor(Editor editor, string method, params object[] arguments) =>
