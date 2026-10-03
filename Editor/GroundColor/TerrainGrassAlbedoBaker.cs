@@ -194,6 +194,25 @@ public static class TerrainGrassAlbedoBaker
             IsActiveBakeOutput(AssetDatabase.LoadAssetAtPath<Texture2D>(normalized));
     }
 
+    /// <summary>
+    /// Resolves the same live main asset after saving or callback-driven moves.
+    /// A detached, destroyed or displaced object is no longer a saved output.
+    /// </summary>
+    public static bool TryGetOutputAssetPath(Texture2D texture, out string assetPath)
+    {
+        assetPath = null;
+        if (!texture)
+            return false;
+        string path = AssetDatabase.GetAssetPath(texture);
+        if (string.IsNullOrEmpty(path))
+            return false;
+        Object current = AssetDatabase.LoadMainAssetAtPath(path);
+        if (!texture || current != texture)
+            return false;
+        assetPath = path;
+        return true;
+    }
+
     private static bool IsActiveBakeOutput(Texture2D texture)
     {
         if (!texture)
@@ -298,9 +317,23 @@ public static class TerrainGrassAlbedoBaker
                 Object.DestroyImmediate(staging);
         }
 
-        error = null;
+        if (!TryGetOutputAssetPath(texture, out _))
+        {
+            texture = null;
+            error = "The ground-albedo output was removed or replaced while being saved. Refresh to bake again.";
+            return false;
+        }
         NotifyBoundAreas(texture);
         NotifyBaked(terrain, texture);
+        // Observers can move an output, but deleting, detaching or replacing it
+        // cannot turn a lost image into a successfully persisted bake result.
+        if (!TryGetOutputAssetPath(texture, out _))
+        {
+            texture = null;
+            error = "The ground-albedo output was removed or replaced by a completion callback. Refresh to bake again.";
+            return false;
+        }
+        error = null;
         return true;
     }
 
