@@ -137,6 +137,181 @@ public class GrassDispatchMathTests
             "The occupancy query needs the same filter support as dispatch enumeration.");
     }
 
+    [TestCase(-1, 37076, false, -0.050000209361314774f)]
+    [TestCase(1, 446604, false, 0.05000074580311775f)]
+    [TestCase(226327, -1, true, -0.05000084266066551f)]
+    [TestCase(66162, 1, true, 0.050000738352537155f)]
+    public void FilterExpansionRetainsSeededRootsAcrossEitherSignedAxis(
+        int cellX, int cellZ, bool transpose, float expectedRoot)
+    {
+        const float spacing = 0.1f;
+        const float margin = 0.050001f;
+        Vector2 root = SeededRoot(cellX, cellZ, spacing);
+        int boundaryCell = transpose ? cellZ : cellX;
+        float boundaryRoot = transpose ? root.y : root.x;
+        Assert.That(boundaryRoot, Is.EqualTo(expectedRoot));
+        Bounds source = new Bounds(transpose
+            ? new Vector3(root.x, 7f, -boundaryCell * 512f)
+            : new Vector3(-boundaryCell * 512f, 7f, root.y),
+            transpose ? new Vector3(2f, 6f, 1024f) : new Vector3(1024f, 6f, 2f));
+        float sourceEdge = boundaryCell < 0
+            ? (transpose ? source.min.z : source.min.x)
+            : (transpose ? source.max.z : source.max.x);
+        Assert.That(sourceEdge, Is.Zero);
+        Assert.That(Math.Abs((double)boundaryRoot - sourceEdge), Is.LessThan(margin),
+            "This actual shader root lies inside the source's requested filter support.");
+
+        Bounds former = source;
+        former.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
+        Assert.That(GrassDispatchMath.TryGetGridRange(former, spacing, out GrassGridRange omitted), Is.True);
+        Assert.That(boundaryCell < (transpose ? omitted.MinZ : omitted.MinX) ||
+            boundaryCell >= (transpose ? omitted.MaxZ : omitted.MaxX), Is.True,
+            "The former extent addition must reproduce the missing cell.");
+        if (boundaryCell < 0)
+            Assert.That(GrassDispatchMath.FloorDivide(transpose ? omitted.MinZ : omitted.MinX, 256), Is.Zero,
+                "Rounding the minimum inward formerly skipped the complete negative tile.");
+
+        Bounds expanded = GrassDispatchMath.ExpandXZ(source, margin);
+        AssertExpandedSupport(source, expanded, margin);
+        Assert.That(GrassDispatchMath.TryGetGridRange(expanded, spacing, out GrassGridRange range), Is.True);
+        Assert.That(cellX, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
+        Assert.That(cellZ, Is.GreaterThanOrEqualTo(range.MinZ).And.LessThan(range.MaxZ));
+    }
+
+    [TestCase(6, 214015, false, 0.5500008463859558f)]
+    [TestCase(167631, 6, true, 0.5500006079673767f)]
+    public void CameraClippingRetainsSeededRootsInsideTheExpandedFilterEnvelope(
+        int cellX, int cellZ, bool transpose, float expectedRoot)
+    {
+        const float spacing = 0.1f;
+        const float captureExtent = 563.20105f;
+        const int captureResolution = 2048;
+        const float cameraExtent = 512.4873657226562f;
+        float margin = (2f * captureExtent) / captureResolution;
+        Vector2 root = SeededRoot(cellX, cellZ, spacing);
+        float boundaryRoot = transpose ? root.y : root.x;
+        Assert.That(boundaryRoot, Is.EqualTo(expectedRoot));
+        Bounds source = new Bounds(transpose
+            ? new Vector3(root.x, 7f, -500f) : new Vector3(-500f, 7f, root.y),
+            transpose ? new Vector3(2f, 6f, 1000f) : new Vector3(1000f, 6f, 2f));
+        Bounds camera = new Bounds(transpose
+            ? new Vector3(root.x, 99f, 0f) : new Vector3(0f, 99f, root.y),
+            new Vector3(cameraExtent * 2f, 8f, cameraExtent * 2f));
+        Assert.That(boundaryRoot, Is.LessThan(margin),
+            "The root is inside the source's one-capture-texel envelope, independent of rendered density acceptance.");
+        Assert.That(root.x, Is.InRange(camera.min.x, camera.max.x));
+        Assert.That(root.y, Is.InRange(camera.min.z, camera.max.z));
+
+        Bounds expanded = GrassDispatchMath.ExpandXZ(source, margin);
+        Assert.That(GrassDispatchMath.TryGetGridRange(expanded, spacing, out GrassGridRange beforeClipping), Is.True);
+        Assert.That(cellX, Is.GreaterThanOrEqualTo(beforeClipping.MinX).And.LessThan(beforeClipping.MaxX));
+        Assert.That(cellZ, Is.GreaterThanOrEqualTo(beforeClipping.MinZ).And.LessThan(beforeClipping.MaxZ));
+        Vector3 minimum = new Vector3(Mathf.Max(expanded.min.x, camera.min.x), 0f,
+            Mathf.Max(expanded.min.z, camera.min.z));
+        Vector3 maximum = new Vector3(Mathf.Min(expanded.max.x, camera.max.x), 0f,
+            Mathf.Min(expanded.max.z, camera.max.z));
+        Bounds former = default;
+        former.SetMinMax(minimum, maximum);
+        Assert.That(GrassDispatchMath.TryGetGridRange(former, spacing, out GrassGridRange omitted), Is.True);
+        Assert.That(transpose ? omitted.MaxZ : omitted.MaxX, Is.EqualTo(6),
+            "The later native Bounds conversion must reproduce losing the cell even after outward expansion.");
+
+        Assert.That(GrassDispatchMath.TryIntersectXZ(expanded, camera, out Bounds intersection), Is.True);
+        Assert.That(intersection.min.x, Is.LessThanOrEqualTo(minimum.x));
+        Assert.That(intersection.min.z, Is.LessThanOrEqualTo(minimum.z));
+        Assert.That(intersection.max.x, Is.GreaterThanOrEqualTo(maximum.x));
+        Assert.That(intersection.max.z, Is.GreaterThanOrEqualTo(maximum.z));
+        Assert.That(intersection.center.y, Is.Zero);
+        Assert.That(intersection.extents.y, Is.Zero);
+        Assert.That(GrassDispatchMath.TryGetGridRange(intersection, spacing, out GrassGridRange retained), Is.True);
+        Assert.That(cellX, Is.GreaterThanOrEqualTo(retained.MinX).And.LessThan(retained.MaxX));
+        Assert.That(cellZ, Is.GreaterThanOrEqualTo(retained.MinZ).And.LessThan(retained.MaxZ));
+    }
+
+    [Test]
+    public void SourceCameraIntersectionRetainsEmptyAndInvalidOverlapBehavior()
+    {
+        Bounds source = new Bounds(Vector3.zero, new Vector3(2f, 4f, 2f));
+        Bounds[] emptyOverlaps =
+        {
+            new Bounds(Vector3.right * 3f, Vector3.one * 2f),
+            new Bounds(Vector3.right * 2f, Vector3.one * 2f),
+            new Bounds(Vector3.forward * 3f, Vector3.one * 2f),
+            new Bounds(Vector3.forward * 2f, Vector3.one * 2f),
+            new Bounds(Vector3.zero, new Vector3(0f, 2f, 1f)),
+            new Bounds(Vector3.zero, new Vector3(1f, 2f, 0f))
+        };
+        foreach (Bounds camera in emptyOverlaps)
+        {
+            Assert.That(GrassDispatchMath.TryIntersectXZ(source, camera, out Bounds intersection), Is.False);
+            AssertBoundsRepresentation(intersection, default);
+        }
+
+        Bounds invalid = new Bounds(new Vector3(float.NaN, 0f, 0f), Vector3.one);
+        Vector3 minimum = new Vector3(Mathf.Max(source.min.x, invalid.min.x), 0f,
+            Mathf.Max(source.min.z, invalid.min.z));
+        Vector3 maximum = new Vector3(Mathf.Min(source.max.x, invalid.max.x), 0f,
+            Mathf.Min(source.max.z, invalid.max.z));
+        Bounds former = default;
+        former.SetMinMax(minimum, maximum);
+        Assert.That(GrassDispatchMath.TryIntersectXZ(source, invalid, out Bounds result), Is.True);
+        AssertBoundsRepresentation(result, former);
+        Assert.That(GrassDispatchMath.TryGetGridRange(result, 0.1f, out _), Is.False,
+            "Unrepresentable overlap must still reach the existing downstream range rejection.");
+    }
+
+    [TestCase(1e8f, 0.0000001f)]
+    [TestCase(1e30f, 1e-10f)]
+    public void FilterExpansionKeepsTinyEndpointsAcrossWideCancellation(float extent, float margin)
+    {
+        Bounds source = new Bounds(new Vector3(extent, 9.25f, -extent), Vector3.zero);
+        source.extents = new Vector3(extent, 0.125f, extent);
+        Assert.That(source.min.x, Is.Zero);
+        Assert.That(source.max.z, Is.Zero);
+        Bounds expanded = GrassDispatchMath.ExpandXZ(source, margin);
+        AssertExpandedSupport(source, expanded, margin);
+        Assert.That(expanded.min.x, Is.LessThan(0f));
+        Assert.That(expanded.max.z, Is.GreaterThan(0f));
+    }
+
+    [Test]
+    public void ZeroFilterMarginPreservesTheOriginalCenterAndExtents()
+    {
+        // The X endpoints collapse at float precision. A zero-margin request
+        // must not reconstruct and discard the still-authored nonzero extent.
+        Bounds source = new Bounds(new Vector3(16777216f, 7.25f, -3.25f), new Vector3(0.5f, 3f, 1f));
+        AssertBoundsRepresentation(GrassDispatchMath.ExpandXZ(source, 0f), source);
+    }
+
+    [Test]
+    public void InvalidFilterExpansionRetainsItsFormerExceptionsAndRangeRejection()
+    {
+        foreach (float margin in new[] { -1f, float.NaN, float.PositiveInfinity, float.MaxValue })
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                GrassDispatchMath.ExpandXZ(new Bounds(Vector3.zero, Vector3.one), margin));
+
+        Bounds inverted = new Bounds(Vector3.zero, Vector3.zero);
+        inverted.extents = new Vector3(-2f, 3f, -2f);
+        Bounds enormous = new Bounds(Vector3.zero, Vector3.zero);
+        enormous.extents = new Vector3(float.MaxValue, 3f, float.MaxValue);
+        Bounds[] inputs =
+        {
+            new Bounds(new Vector3(float.NaN, 7f, 0f), Vector3.one),
+            new Bounds(new Vector3(float.PositiveInfinity, 7f, 0f), Vector3.one),
+            inverted,
+            enormous
+        };
+        for (int index = 0; index < inputs.Length; index++)
+        {
+            float margin = index == inputs.Length - 1 ? float.MaxValue * 0.5f : 0.25f;
+            Bounds former = inputs[index];
+            former.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
+            Bounds expanded = GrassDispatchMath.ExpandXZ(inputs[index], margin);
+            AssertBoundsRepresentation(expanded, former);
+            Assert.That(GrassDispatchMath.TryGetGridRange(expanded, 0.1f, out _), Is.False);
+        }
+    }
+
     [TestCase(84168, true)]
     [TestCase(140005, false)]
     [TestCase(-86916, true)]
@@ -153,7 +328,7 @@ public class GrassDispatchMathTests
         float root = (float)((double)(float)cell * spacing);
         Bounds former = new Bounds(new Vector3((tile + 0.5f) * cells * spacing, 0f, 0f),
             new Vector3((cells + 1) * spacing, 0f, (cells + 1) * spacing));
-        former = GrassDispatchMath.ExpandXZ(former, captureFootprint);
+        former.Expand(new Vector3(captureFootprint * 2f, 0f, captureFootprint * 2f));
         Assert.That(minimum ? former.min.x > root : former.max.x < root, Is.True,
             "The existing capture margin must still leave the root outside the former tile query.");
 
@@ -320,5 +495,50 @@ public class GrassDispatchMathTests
             GrassDispatchMath.ThreadGroupCount(GrassDispatchMath.MaximumDispatchCells + 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => GrassDispatchMath.FloorDivide(1, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => GrassDispatchMath.FloorDivide(1, -1));
+    }
+
+    private static void AssertExpandedSupport(Bounds source, Bounds expanded, float margin)
+    {
+        Assert.That((double)expanded.min.x, Is.LessThanOrEqualTo((double)source.min.x - margin));
+        Assert.That((double)expanded.min.z, Is.LessThanOrEqualTo((double)source.min.z - margin));
+        Assert.That((double)expanded.max.x, Is.GreaterThanOrEqualTo((double)source.max.x + margin));
+        Assert.That((double)expanded.max.z, Is.GreaterThanOrEqualTo((double)source.max.z + margin));
+        Assert.That(expanded.center.y, Is.EqualTo(source.center.y));
+        Assert.That(expanded.extents.y, Is.EqualTo(source.extents.y));
+    }
+
+    private static void AssertBoundsRepresentation(Bounds actual, Bounds expected)
+    {
+        for (int axis = 0; axis < 3; axis++)
+        {
+            Assert.That(BitConverter.SingleToInt32Bits(actual.center[axis]),
+                Is.EqualTo(BitConverter.SingleToInt32Bits(expected.center[axis])));
+            Assert.That(BitConverter.SingleToInt32Bits(actual.extents[axis]),
+                Is.EqualTo(BitConverter.SingleToInt32Bits(expected.extents[axis])));
+        }
+    }
+
+    private static Vector2 SeededRoot(int x, int z, float spacing)
+    {
+        // Forward root generation from the shipped compute hash; independent
+        // of the inverse grid calculation and Bounds expansion under test.
+        uint seed = Hash(Hash(unchecked((uint)x) ^ 0x9e3779b9u) ^ unchecked((uint)z));
+        float jitterX = (Hash(seed ^ 0xa511e9b3u) >> 8) * (1f / 16777216f) - 0.5f;
+        float jitterZ = (Hash(seed ^ 0x63d83595u) >> 8) * (1f / 16777216f) - 0.5f;
+        float coordinateX = (float)((double)(float)x + jitterX);
+        float coordinateZ = (float)((double)(float)z + jitterZ);
+        return new Vector2((float)((double)coordinateX * spacing), (float)((double)coordinateZ * spacing));
+    }
+
+    private static uint Hash(uint value)
+    {
+        unchecked
+        {
+            value ^= value >> 16;
+            value *= 0x85ebca6bu;
+            value ^= value >> 13;
+            value *= 0xc2b2ae35u;
+            return value ^ (value >> 16);
+        }
     }
 }
