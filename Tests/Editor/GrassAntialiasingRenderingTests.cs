@@ -1,0 +1,239 @@
+using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
+using UnityEngine.Experimental.Rendering;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+using Object = UnityEngine.Object;
+
+/// <summary>Renders the shipped blade shader without temporal accumulation or a replacement fragment program.</summary>
+[Category("GrassGPU")]
+[NonParallelizable]
+public sealed class GrassAntialiasingRenderingTests
+{
+    private const int Size = 128;
+    private const float BladePixelWidth = 4f;
+    private const float BladePixelHeight = Size * 0.5f;
+    private const string ShaderPath = "Packages/com.cone.grass/Runtime/Shaders/GrassBladeShader.shader";
+    private Material material;
+    private GraphicsBuffer positions;
+    private Texture2D empty;
+
+    [SetUp]
+    public void SetUp()
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !SystemInfo.supportsComputeShaders ||
+            !SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Render))
+            Assert.Ignore("Blade coverage tests require a graphics device, structured buffers, and an RGBA8 render target.");
+
+        Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(ShaderPath);
+        Assert.That(shader, Is.Not.Null);
+        Assert.That(shader.isSupported, Is.True, "The shipped blade shader must be supported on the tested graphics API.");
+        material = new Material(shader) { enableInstancing = true };
+        positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, sizeof(float) * 4);
+        empty = new Texture2D(1, 1, TextureFormat.RGBA32, false, true);
+        empty.SetPixel(0, 0, Color.clear);
+        empty.Apply(false, false);
+
+        material.SetColor("_Color", Color.white);
+        material.SetColor("_AOColor", Color.white);
+        material.SetFloat("_GrassHeight", 1f);
+        material.SetFloat("_GrassWidthRandomness", 0f);
+        material.SetFloat("_GrassHeightRandomness", 0f);
+        material.SetFloat("_GrassCurving", 0f);
+        material.SetFloat("_ExpandDistantGrassWidth", 0f);
+        material.SetFloat("_SubdivisionHeightBoost", 0f);
+        material.SetFloat("_WindStrength", 0f);
+        material.SetFloat("_GroundBlendStrength", 0f);
+        int pass = material.FindPass("GrassForward");
+        Assert.That(pass, Is.GreaterThanOrEqualTo(0));
+        ShaderUtil.CompilePass(material, pass, true);
+        Assert.That(ShaderUtil.IsPassCompiled(material, pass), Is.True,
+            "Compile the actual forward pass synchronously before comparing its rendered coverage.");
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        positions?.Dispose();
+        if (material) Object.DestroyImmediate(material);
+        if (empty) Object.DestroyImmediate(empty);
+    }
+
+    [TestCase(0)]
+    [TestCase(2)]
+    [TestCase(5)]
+    public void FullBladeCoveragePreservesNativeMsaaSilhouetteArea(int subdivisions)
+    {
+        Color[] pixels = Render(subdivisions, 4, 1f, BladePixelWidth, 0f);
+        float geometricArea = BladePixelWidth * BladePixelHeight * 0.5f;
+        Assert.That(CoveredArea(pixels), Is.EqualTo(geometricArea).Within(4f),
+            "A fully covered blade must preserve the rasterizer's triangle coverage. " +
+            "Applying analytic edge alpha through A2C a second time erodes this thin silhouette.");
+    }
+
+    [TestCase(0.5f, 2f)]
+    [TestCase(0.25f, 1f)]
+    public void DensityAndMinimumWidthCompensationAttenuateTheSameExpandedGeometry(
+        float densityCoverage, float originalPixelWidth)
+    {
+        Color[] full = Render(0, 4, 1f, BladePixelWidth, 0f);
+        Color[] thinned = Render(0, 4, densityCoverage, BladePixelWidth, 0f);
+        Color[] widened = Render(0, 4, 1f, originalPixelWidth, BladePixelWidth);
+        float ratio = CoveredArea(thinned) / CoveredArea(full);
+        // A2C quantization and sample placement are device-dependent. Require
+        // real attenuation while allowing different valid hardware masks.
+        Assert.That(ratio, Is.InRange(densityCoverage - 0.2f, densityCoverage + 0.2f));
+        AssertSamePixels(thinned, widened,
+            "Minimum-width expansion must keep its proportional coverage compensation in the MSAA color pass.");
+    }
+
+    [Test]
+    public void SingleSampleCoverageDoesNotChangeWhenOnlyTimeAdvances()
+    {
+        Color[] first = Render(0, 1, 0.5f, BladePixelWidth, 0f, 0f);
+        Color[] later = Render(0, 1, 0.5f, BladePixelWidth, 0f, 37.123f);
+        Assert.That(CoveredArea(first), Is.GreaterThan(0f).And.LessThan(BladePixelWidth * BladePixelHeight * 0.5f));
+        AssertSamePixels(first, later,
+            "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
+    }
+
+    private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
+        float minimumPixelWidth, float time = 0f)
+    {
+        var descriptor = new RenderTextureDescriptor(Size, Size)
+        {
+            graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
+            depthBufferBits = 0, msaaSamples = samples, sRGB = false, bindMS = false
+        };
+        if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != samples)
+            Assert.Ignore("The active graphics device does not support the requested " + samples + "x MSAA target.");
+
+        Mesh mesh = null;
+        RenderTexture target = null;
+        RenderTexture resolved = null;
+        Texture2D readback = null;
+        RenderTexture previousTarget = RenderTexture.active;
+        bool previousSRGBWrite = GL.sRGBWrite;
+        var commands = new CommandBuffer { name = "Grass Native Coverage Regression" };
+        try
+        {
+            mesh = InfiniteGrassRenderer.CreateBladeMesh(subdivisions);
+            target = new RenderTexture(descriptor);
+            Assert.That(target.Create(), Is.True);
+            Assert.That(target.antiAliasing, Is.EqualTo(samples), "Inspect the created target, not only the requested sample count.");
+            descriptor.msaaSamples = 1;
+            resolved = new RenderTexture(descriptor);
+            Assert.That(resolved.Create(), Is.True);
+            readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
+
+            positions.SetData(new[] { new Vector4(0f, -0.5f, 2f, coverage) });
+            // The shipped mesh's full base width is half of _GrassWidth. An
+            // orthographic two-unit viewport gives Size/2 pixels per world unit.
+            material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size);
+            material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
+            material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
+
+            var properties = new MaterialPropertyBlock();
+            properties.SetBuffer("_GrassPositions", positions);
+            properties.SetInteger("_GrassInstanceOffset", 0);
+            properties.SetInteger("_GrassUseExplicitTime", 1);
+            properties.SetFloat("_GrassTime", time);
+            properties.SetFloat("_DrawDistance", 100f);
+            properties.SetFloat("_TextureUpdateThreshold", 1f);
+            properties.SetVector("_CenterPos", Vector4.zero);
+            properties.SetTexture("_GrassColorRT", empty);
+            properties.SetTexture("_GrassGroundColorRT", empty);
+            properties.SetTexture("_GrassSlopeRT", empty);
+            properties.SetTexture("_GrassHeightMapRT", empty);
+            properties.SetTexture("_WindTexture", Texture2D.grayTexture);
+            properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
+            properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
+            properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));
+            properties.SetVector("_GrassSHBr", Vector4.zero);
+            properties.SetVector("_GrassSHBg", Vector4.zero);
+            properties.SetVector("_GrassSHBb", Vector4.zero);
+            properties.SetVector("_GrassSHC", Vector4.zero);
+
+            Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
+            Matrix4x4 projection = GL.GetGPUProjectionMatrix(Matrix4x4.Ortho(-1f, 1f, -1f, 1f, 0.1f, 10f), true);
+            string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
+            var previousMatrices = new Matrix4x4[matrixNames.Length];
+            for (int index = 0; index < matrixNames.Length; index++)
+                previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
+            string[] vectorNames =
+            {
+                "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
+                "_MainLightColor", "_MainLightPosition", "unity_FogColor", "unity_FogParams", "_Time", "_TimeParameters"
+            };
+            Vector4[] vectors =
+            {
+                Vector4.zero, new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
+                new Vector4(2f, 2f, 0f, 1f), new Vector4(1f, 0.1f, 10f, 0.1f),
+                Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
+                new Vector4(time / 20f, time, time * 2f, time * 3f),
+                new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
+            };
+            var previousVectors = new Vector4[vectorNames.Length];
+            for (int index = 0; index < vectorNames.Length; index++)
+            {
+                previousVectors[index] = Shader.GetGlobalVector(vectorNames[index]);
+                commands.SetGlobalVector(vectorNames[index], vectors[index]);
+            }
+            commands.SetRenderTarget(target);
+            commands.SetViewport(new Rect(0f, 0f, Size, Size));
+            commands.ClearRenderTarget(false, true, Color.clear);
+            RenderingUtils.SetViewAndProjectionMatrices(commands, view, projection, false);
+            int pass = material.FindPass("GrassForward");
+            Assert.That(pass, Is.GreaterThanOrEqualTo(0));
+            commands.DrawMesh(mesh, Matrix4x4.identity, material, 0, pass, properties);
+            if (samples > 1)
+                commands.ResolveAntiAliasedSurface(target, resolved);
+            else
+                commands.CopyTexture(target, resolved);
+            for (int index = 0; index < matrixNames.Length; index++)
+                commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
+            for (int index = 0; index < vectorNames.Length; index++)
+                commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+            GL.sRGBWrite = false;
+            Graphics.ExecuteCommandBuffer(commands);
+
+            RenderTexture.active = resolved;
+            readback.ReadPixels(new Rect(0f, 0f, Size, Size), 0, 0, false);
+            readback.Apply(false, false);
+            Color[] pixels = readback.GetPixels();
+            foreach (Color pixel in pixels)
+            {
+                Assert.That(pixel.g, Is.EqualTo(pixel.r).Within(1f / 255f),
+                    "The configured blade must be white, including at covered samples; an error shader is not a valid mask.");
+                Assert.That(pixel.b, Is.EqualTo(pixel.r).Within(1f / 255f));
+            }
+            return pixels;
+        }
+        finally
+        {
+            GL.sRGBWrite = previousSRGBWrite;
+            RenderTexture.active = previousTarget;
+            commands.Release();
+            if (mesh) Object.DestroyImmediate(mesh);
+            if (target) Object.DestroyImmediate(target);
+            if (resolved) Object.DestroyImmediate(resolved);
+            if (readback) Object.DestroyImmediate(readback);
+        }
+    }
+
+    private static float CoveredArea(Color[] pixels)
+    {
+        float area = 0f;
+        foreach (Color pixel in pixels)
+            area += pixel.r;
+        return area;
+    }
+
+    private static void AssertSamePixels(Color[] expected, Color[] actual, string message)
+    {
+        Assert.That(actual.Length, Is.EqualTo(expected.Length));
+        for (int index = 0; index < actual.Length; index++)
+            Assert.That(actual[index].r, Is.EqualTo(expected[index].r).Within(1f / 255f), message + " Pixel " + index);
+    }
+}

@@ -187,6 +187,46 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(bakeCount, Is.EqualTo(3));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SourceEditsDuringBakeNotificationRequireAnotherBake(bool saveSource)
+    {
+        bool changed = false;
+        Action<Terrain, Texture2D> changeSource = (source, output) =>
+        {
+            if (source != terrain || changed)
+                return;
+            changed = true;
+            SetDiffuse(Color.blue);
+            if (saveSource)
+                AssetDatabase.SaveAssetIfDirty(diffuse);
+        };
+        TerrainGrassAlbedoBaker.Baked += changeSource;
+        try
+        {
+            Texture2D first = Refresh();
+            Assert.That(changed, Is.True);
+            Assert.That(bakeCount, Is.EqualTo(1));
+            AssertColor(first.GetPixel(32, 32), Color.red);
+            Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False,
+                "The notification changed the source after the saved red image was rendered.");
+
+            Assert.That(Refresh(), Is.SameAs(first));
+            Assert.That(bakeCount, Is.EqualTo(2),
+                "A post-bake source edit must not be mistaken for the source of the earlier image.");
+            AssertColor(first.GetPixel(32, 32), Color.blue);
+            Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message),
+                Is.EqualTo(saveSource), message);
+            for (int i = 0; i < 3; i++)
+                Refresh();
+            Assert.That(bakeCount, Is.EqualTo(2), "Once the changed source is baked, polling must settle.");
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= changeSource;
+        }
+    }
+
     [Test]
     public void SharedTerrainOutputAtAnotherResolutionClearsConflictingCoverage()
     {

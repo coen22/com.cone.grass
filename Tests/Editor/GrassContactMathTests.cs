@@ -10,6 +10,21 @@ using UnityEngine.Rendering.Universal;
 
 public class GrassContactMathTests
 {
+    [Test]
+    public void DisabledContactsReturnBeforeAccessingAnyRenderResources()
+    {
+        using var contacts = new GrassContactShadows();
+        GrassContactShadows.Settings[] disabledSettings =
+        {
+            null,
+            new GrassContactShadows.Settings(),
+            new GrassContactShadows.Settings { enabled = true, strength = 0f }
+        };
+        foreach (GrassContactShadows.Settings settings in disabledSettings)
+            Assert.DoesNotThrow(() => contacts.Record(null, null, default, default,
+                null, null, null, null, null, settings));
+    }
+
     [TestCase(1)]
     [TestCase(4)]
     [NonParallelizable]

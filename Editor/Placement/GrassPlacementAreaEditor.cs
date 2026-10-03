@@ -34,6 +34,9 @@ public sealed class GrassPlacementAreaEditor : Editor
             EditorGUILayout.HelpBox("This area is empty until a density map is assigned or painted.", MessageType.Info);
         if (area.UsesTerrainBounds && !area.Terrain)
             EditorGUILayout.HelpBox("Assign a Terrain to use its bounds, or turn off Use Terrain Bounds for a world-space area.", MessageType.Info);
+        if (!area.Terrain && area.PaintSurface && !area.PaintSurface.GetComponent<Renderer>() &&
+            !area.PaintSurface.GetComponentInParent<Renderer>())
+            EditorGUILayout.HelpBox("The assigned Paint Surface needs a Renderer on the same object or a parent. Grass coverage stays disabled until one is available.", MessageType.Warning);
 
         if (area.Shape == GrassPlacementShape.Texture && !area.DensityAsset && area.DensityTexture)
         {

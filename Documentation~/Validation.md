@@ -2,6 +2,8 @@
 
 This document separates implemented source changes from results that require a Unity project and GPU. Keep issues #27–#34 open until their acceptance criteria have been exercised.
 
+**Quality baseline:** TAA disabled, camera antialiasing **None**, grass **Motion Vectors > Off**, and zero queue overflow. Test single-sample output plus actual 2x/4x/8x MSAA attachments where supported. Temporal consumers are optional follow-up integrations and cannot satisfy the baseline silhouette, contact or LOD acceptance checks.
+
 ## Current evidence
 
 | Check | Status |
@@ -13,7 +15,7 @@ This document separates implemented source changes from results that require a U
 | HLSL compilation against pinned public URP 17.6 headers | 102/102 DXC invocations passed locally: DXIL and SPIR-V; separate CI job added |
 | Density, grid boundaries, Terrain decoding, LOD geometry, premultiplied edge math, projection/depth round trips | Mathematical/source checks performed |
 | Core placement, settings, mesh and dispatch EditMode cases | Authored; not executed in Unity |
-| Shipped compute kernels, shader passes, motion history and albedo GPU cases | Authored; not executed in Unity |
+| Shipped compute kernels, contact shader, motion history and albedo GPU cases | Authored; not executed in Unity |
 | Optional MicroVerse bridge EditMode cases | Authored; not executed in Unity |
 | Unity 6.6 shader/C# import | Actual Editor CLI attempted; licensing rejected startup before import/tests |
 | Unity 6.6 standalone build | Not run |
@@ -90,7 +92,22 @@ Unity -batchmode -nographics -quit -buildTarget StandaloneLinux64 -projectPath /
 
 `BuildCurrent` creates a clean development player and then rebuilds it incrementally without changing the scene or its assets. Both must succeed. It saves `Builds/build-results.json` and the executable under `Builds/<target>/` inside the generated project. Selecting the target on the command line lets Unity reload its platform configuration before the build method executes. Windows and macOS standalone targets are also accepted when installed and selected by the host Editor.
 
-Launch the built player with `-grassSmoke -grassSmokeOutput /path/to/results/player` to run its opt-in rendering probe. A normal launch leaves the generated scene available for inspection. The probe records device information, observed asynchronous counts, requested render settings, logs and PNG captures while exercising grass enable/disable, contact and motion requests, render scale, requested MSAA, empty coverage and restoration. It exits nonzero on missing required graphics capabilities, timeouts, detected rendering errors or failed observations. This is a functional smoke test; its images and requested settings do not certify contact-shadow quality, correct temporal vectors, actual attachment MSAA counts, or performance gains. Do not use `-nographics` for this player probe.
+Launch the built player with `-grassSmoke -grassSmokeOutput /path/to/results/player` to run its opt-in rendering probe. A normal launch leaves the generated scene available for inspection. Do not use `-nographics` for this player probe.
+
+The required stages cover grass off/on, a camera pan with varying wind, contacts, render scales 0.75/1.25, requested 2x/4x/8x MSAA, an empty mask, no sources and restored coverage. All required stages keep camera AA **None**, post-processing off and motion history **Off**. The pan records actual camera displacement; the setup checks the generated wind texture, strength and scroll. A validation-only renderer feature observes the same color/depth attachments after the grass draw, recording allocated RenderTexture sample counts or explicit imported-target metadata for direct output. It does not redirect the camera into a probe texture.
+
+The probe records device details, asynchronous counts, frame identities, attachment formats/dimensions/sample counts, logs and PNG captures. Missing required capabilities, stale or incompatible attachments, timeouts, rendering errors, unexpected counts or overflow fail the run. A requested MSAA count that the device cannot support is recorded as **unsupported**, with its observed fallback count; it does not become a passing observation for the requested count.
+
+Check the produced evidence with:
+
+```sh
+python3 Tools~/report_player_results.py /path/to/results/player
+python3 Tools~/report_player_results.py /path/to/results/player --require-msaa 2 4 8
+```
+
+The second command requires successful observations at all three sample counts. The reporter checks the complete baseline, stage chronology, decoded captures and the grass off/on image difference. It rejects absent, stale, contradictory or malformed evidence. Rebuild the player after changing the probe; older result formats do not establish this baseline.
+
+Add `-grassSmokeMotion` only for the optional final motion stage, and use `--require-motion` when reporting that additional run. The baseline remains present and independent of that stage. This is functional rendering evidence: observing attachment samples and a changing grass image does not certify A2C image quality, contact-shadow quality, motion-vector values, native MicroVerse generation or performance gains. Inspect the captures and perform the detailed comparisons below.
 
 ### GitHub Actions
 
@@ -120,6 +137,7 @@ Verify the package version actually resolved by that editor, then record it with
 | Pipeline | URP Forward and Forward+ |
 | Camera | Game and Scene views; perspective and orthographic |
 | Rendering | MSAA off, 2x, 4x, 8x where supported; render scale below/at/above one |
+| Antialiasing baseline | Camera AA None, grass motion Off; record actual grass color/depth sample counts and unsupported fallbacks |
 | Camera movement | Stationary rotation, slow pan, crossing capture snaps, teleport, negative X/Z, steep pitch |
 | Lifetime | Enable/disable renderer and feature, change capacity/LOD quality, remove a camera, change active renderer asset |
 | Editor | Domain reload on/off, scene reload on/off, opening Prefab Stage, multiple Scene views |
@@ -134,7 +152,7 @@ Overlay, reflection, preview, and XR cameras are deliberately excluded by the cu
 - Circle/Box: move, rotate around Y, apply nonuniform X/Z scale, and soften edges. Verify all four map corners and that a small spot stays small when assigned a Terrain.
 - External map: linear red-channel density, unreadable texture, missing texture, wrong texture dimension, replaced asset, and resolution change.
 - Terrain: changed height, holes, different origin/size, negative coordinates, adjacent borders/corners, and multiple tiles.
-- Mesh surface: assigned paint surface, legacy height layer, partial vertex-color red, missing capture material, and a moved surface followed by Refresh Grass Data.
+- Mesh surface: assigned paint surface, legacy height layer, partial vertex-color red, missing capture material, and a moved surface followed by Refresh Grass Data. Destroy or deactivate an explicit collider, remove its associated Renderer, or move its object into a preview/unloaded scene; coverage must stop. Explicitly clearing the binding restores the generic fallback. Disabling physics alone may retain the associated visible mesh support.
 - Rotate a stationary camera to reveal previously off-screen parts of the same capture window.
 - Moving color, mask, and slope modifiers work while the camera is stationary. After spawning new modifier renderers or replacing an inventory entry, refresh cached grass data.
 - Check data-map orientation on each graphics API. World +X and +Z must move in the same direction in generation, density, color, slope, and ground capture.
@@ -154,13 +172,15 @@ The projection models one captured mesh height at each XZ position. Ground color
 - Force a small buffer capacity. Writes remain in bounds; counts are clamped and overflow is reported asynchronously.
 - A source/camera grid above the 67,108,864-candidate budget (64 × 1024²) must skip generation and issue the explicit warning. It must not silently choose a moving subset or wrap counters.
 - Confirm argument layout/stride on every target API. The CPU probes the platform-provided typed layout instead of assuming the instance-count byte offset.
-- Confirm no repeated large GPU allocations at steady state. Large capacity reductions shrink the position buffer; bounded idle terrain/camera caches release their maps. Check repeated TAA enable/disable cycles release motion history.
+- Confirm no repeated large GPU or managed-array allocations at steady state. Large capacity reductions shrink the position buffer; bounded idle terrain/camera caches release their maps. Check repeated optional motion-mode changes release history, including removal of the material/compute prerequisite and unsupported camera changes.
 - Confirm motion history stays within the configured budget: `32 * capacity + 4 * NextPowerOfTwo(2 * capacity)` bytes for roots and hash keys, plus counts and texture snapshots. At two million blades the buffers use 77.04 MiB per active camera; each pair of 1024² RGBAHalf snapshots adds 16 MiB. Test the supported RGBAFloat fallback and device-limit rejection.
 - Confirm normal camera matrices remain unchanged after top-down capture passes.
 
 ## Blending and aliasing comparisons
 
 Use the same scene, camera path, wind animation, resolution, and population settings for each comparison. Save short camera pans as well as still images.
+
+Run the entire baseline with camera AA **None**, post-processing off and grass motion **Off**. Record zero overflow in every captured frame: atomic queue reservations do not guarantee a stable surviving subset when capacity is exhausted. Keep resolution and effective sample count in the evidence alongside the requested settings.
 
 - Match a single TerrainLayer at several tile sizes, offsets, and diffuse remap settings.
 - Test a soft MicroVerse spline edge over a contrasting neighboring terrain layer. Bake native URP terrain albedo and compare it with the selected-layer fallback. A surviving blade at low density should receive the full configured ground-match strength when using a full-terrain color map.
@@ -169,10 +189,15 @@ Use the same scene, camera path, wind animation, resolution, and population sett
 - Inspect root normals on slopes with Use Ground Normal off/on.
 - Verify filtered color, slope, and ground map boundaries do not acquire dark fringes or a default bend.
 - Compare minimum width zero/one pixel with specular fade disabled/enabled.
-- Compare MSAA off/4x with Alpha to Coverage disabled/enabled. A2C must stay off on single-sample targets.
+- Compare MSAA off/2x/4x/8x with Alpha to Coverage disabled/enabled. Record the actual grass color and depth attachment sample counts, including render-scale changes and direct screen output. A2C must stay off on single-sample targets; unsupported MSAA requests must be recorded as unsupported.
+- For a fully covered blade, verify A2C preserves native MSAA geometry-edge coverage. Density and minimum-width compensation still attenuate partial blades. The single-sample contact depth records an analytic silhouette approximation and must not add a second edge fade to multisampled color.
 - Check density and both geometry LOD boundaries during slow and fast movement. Near/middle/far should use different indirect mesh draws.
 - Check very distant grazing angles and blade tips. A deterministic fallback can still show a pattern; it is not a substitute for sufficient pixel coverage.
-- Run TAA and camera-and-object motion blur with Motion Vectors Auto/Always/Off. Inspect the actual motion texture while panning, rotating, changing LOD, animating wind and editing an interaction texture. The source path reconstructs previous geometry, but temporal visual acceptance remains unrun.
+
+### Optional motion-vector acceptance
+
+After the baseline, test any motion consumer the project actually needs. Run camera-and-object motion blur or custom consumers with Motion Vectors Auto/Always/Off. If a project separately opts into TAA, assess it here. Inspect the actual motion texture while panning, rotating, changing LOD, animating wind and editing an interaction texture. The source path reconstructs previous geometry, but temporal visual acceptance remains unrun.
+
 - Render the same camera twice in one frame, skip a frame, change render scale and viewport, teleport, toggle motion mode and change material/spacing. Check history reset and resource lifetime, including edit-mode behavior.
 - Use small motion-history test tables to force collisions, duplicate XZ roots and absent history. Those cases must not attach another blade's previous position.
 
@@ -199,6 +224,7 @@ Use the actual installed versions of MicroVerse Core, Splines, and Masks:
 5. Refresh and save, close/reopen the scene, then make clean and incremental standalone builds.
 6. Replace a saved mask output or edit a bake source after saving the scene. The unconditional build preflight must reject stale scene bindings before Unity can reuse cached scene data.
 7. Preview an unsaved terrain texture edit. Its bake must not be certified by an older disk hash; save the source and rebake before build readiness is restored.
+8. Edit or save a terrain input from a bake-completion observer. The next refresh must bake the changed input instead of certifying it against older pixels. A failed observer must be logged while later observers still receive the successful saved output.
 
 The bridge does not know the native generation transaction state. Verified completion/cancellation callbacks require the installed Core/Splines/Masks source and remain follow-up work. The bridge checks saved scenes in an unconditional player-build preflight, because Unity can reuse cached scenes without invoking a scene processor. Prefab/addressable or other content builders must validate their own binding inputs.
 

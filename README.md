@@ -35,6 +35,8 @@ The included old Sample Scene explicitly selects legacy mode. Existing user scen
 
 For an authored mesh patch, assign its **Paint Surface** collider with an associated Renderer. That explicit Renderer is captured independently of the layer mask. Patches without an assigned surface use the feature's height-layer fallback.
 
+An explicit mesh binding stops coverage if its collider is destroyed, its object becomes inactive, its scene is unloaded or opened in a preview, or its associated Renderer is removed. Clear the binding deliberately to return to the height-layer fallback. A disabled physics collider can still identify an active visible Renderer on the same object or a parent.
+
 Assigned mesh transforms, bounds, mesh replacement and enable/disable changes invalidate their surface capture. Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after other cached mesh edits, or disable **Cache Surface Data** for continuously deformed surfaces whose bounds remain unchanged. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new runtime modifier renderers or changing their materials so the shared capture inventory includes them; editor hierarchy and scene changes refresh discovery automatically.
 
 ## MicroVerse spline workflow
@@ -88,27 +90,32 @@ This is a **custom screen-space approximation**. Unity's [pipeline comparison](h
 
 ## Reducing aliasing
 
-The new path combines several controls:
+Evaluate grass quality with **TAA disabled**. New renderer settings use **Motion Vectors > Off**; the baseline uses spatial coverage and stable geometry without frame history:
 
 - Stable world-space seeds for roots, density decisions, and LOD selection.
 - Fractional population coverage near density transitions.
 - Real geometry LOD with a stable transition band.
 - A projected **Minimum Pixel Width**, with proportional coverage compensation so widening thin blades does not simply make the field denser.
-- Analytic blade-edge coverage.
+- Native triangle-edge coverage under MSAA; analytic blade-edge coverage for the single-sample fallback.
 - **Alpha to Coverage** enabled only when the actual camera target uses MSAA; deterministic coverage discard otherwise.
 - A distance range that fades narrow specular highlights.
-- Shared deformation and coverage for color, contact depth, and motion vectors.
-- Previous-frame wind, interaction, camera-facing shape, root height and geometric LOD for temporal consumers.
+- Shared deformation and per-blade density/width coverage for color and contact depth.
 
-Start by checking 4x MSAA, a one-pixel minimum width, and restrained distant width expansion in the target scene. Compare camera pans and wind motion with contacts both on and off. Unity documents that [AlphaToMask requires MSAA](https://docs.unity3d.com/6000.6/Documentation/Manual/writing-shader-alpha-to-mask.html); enabling it on a single-sample target has platform-dependent results.
+For multisampled color, A2C receives the blade's density and width compensation. The rasterizer covers its tapered geometric silhouette. Applying an analytic edge fade to that output as well would thin the same edge twice, because the [A2C mask is intersected with primitive sample coverage](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-blend-state#alpha-to-coverage). The separate single-sample contact depth keeps its analytic silhouette estimate.
 
-**Motion Vectors** has **Auto**, **Always**, and **Off** modes. Auto enables the indirect motion path for supported URP temporal AA or camera-and-object motion blur. Always requests motion data for custom consumers. Off releases that camera's history. The pass augments URP's existing motion/depth targets and uses exact world-XZ root matching, so append order and LOD queue changes do not assign another blade's history. It reconstructs the actual previous mesh triangles and snapshots wind/interaction maps.
+Start with a one-pixel minimum width and restrained distant width expansion. Compare the same camera pans, wind motion, grazing angles, painted edges and LOD transitions with MSAA off, then with actual 2x/4x/8x attachments where supported. Keep camera antialiasing at **None**, motion history **Off**, and contacts both off/on during these checks. A requested URP sample count is insufficient evidence: inspect the color/depth attachments used by the grass draw. The generated standalone probe records those attachments and marks hardware fallbacks explicitly. Unity documents that [AlphaToMask requires MSAA](https://docs.unity3d.com/6000.6/Documentation/Manual/writing-shader-alpha-to-mask.html); enabling it on a single-sample target has platform-dependent results.
+
+Keep **Overflow Grass Count** at zero during comparisons. Over-capacity LOD queues drop roots by GPU reservation order, so the surviving subset can change across frames. Increase the affected queue's capacity or reduce its density before evaluating silhouette stability. The single-sample fallback has a fixed blade-space pattern; very small silhouettes can still alias as their pixel coverage changes. Raising pixel coverage or using supported MSAA addresses that sampling limit without temporal accumulation.
+
+### Optional motion consumers
+
+**Motion Vectors** has **Off** (the default), **Auto**, and **Always** modes. Existing explicitly serialized mode selections are retained. Auto enables the indirect motion path for supported URP temporal AA or camera-and-object motion blur. Always requests motion data for custom consumers. Off releases that camera's history. The pass augments URP's existing motion/depth targets and uses exact world-XZ root matching, so append order and LOD queue changes do not assign another blade's history. It reconstructs the actual previous mesh triangles and snapshots wind/interaction maps.
 
 Repeated renders in one `Time.frameCount` retain the same previous snapshot, matching URP's camera-matrix history. Missing or ambiguous roots use camera-only motion. Initial/reset frames and rendering gaps reset grass motion history; incompatible material, spacing, viewport and target-size changes also reset it. Hash lookup is bounded to 128 slots and does not perform CPU position readback.
 
 Motion history is allocated only while requested. For capacity `C`, two root snapshots and one hash table use `32 * C + 4 * NextPowerOfTwo(2 * C)` bytes, plus small count/dispatch buffers. That is **77.04 MiB at 2,000,000 blades**, or **616.28 MiB at 16,000,000**, per active camera. Two interaction and two wind snapshots are additional: each pair of 1024² RGBAHalf textures adds 16 MiB, doubled if the device needs the RGBAFloat fallback. Lower **Max Blade Count** reduces this allocation; the renderer checks individual device buffer limits.
 
-This source implementation still needs visual validation with TAA; passing syntax checks does not establish temporal image quality. Use Auto or Off when custom motion consumers are absent, and configure the anti-aliasing method in URP. FXAA/SMAA may help the final image but do not replace stable geometry and coverage.
+Keep motion history Off for the baseline. Enable it only for a consumer that needs motion data and validate that integration separately. Its temporal visual behavior remains unverified. FXAA/SMAA can be compared as optional spatial post-processing after the underlying geometry and coverage have passed their checks.
 
 ## Rendering and performance changes
 
@@ -129,6 +136,8 @@ Generation checks dispatch boundaries, surface/area coverage, distance density, 
 Density, ground color and surface revisions are tracked separately. A paint stroke or replaced MicroVerse mask can refresh the affected density capture while height remains cached. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Empty painted blocks and tiles outside rotated box/circle areas skip dispatch work. Tile checks reuse captured placement mappings, and the candidate budget counts actual clipped cells so long, narrow regions do not exceed it merely because they touch many edge tiles. Cropped draw bounds retain the original mask UVs. Scene inventory is shared across cameras instead of rediscovered on each camera movement or stroke.
 
 When no dispatch remains, the renderer resets counts and indirect arguments, releases motion history, and skips grass color, contact and motion passes. Direct camera output uses the actual attachment metadata for MSAA and format decisions, including URP backbuffers without a texture descriptor. Motion history also releases on unsupported material changes, recreates lost GPU texture storage, and preserves wind sampling when texture-quality settings reduce the active mip level.
+
+Removing a required material or compute shader releases camera resources immediately; a camera becoming unsupported releases its own cache. Optional motion snapshots recover invalid GPU buffers and reuse per-pass layout arrays while retaining independent metadata for pending draws. These source paths have regression coverage; steady-state allocation measurements still require Unity execution.
 
 Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
 

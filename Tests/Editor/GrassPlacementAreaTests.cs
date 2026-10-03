@@ -211,12 +211,19 @@ public sealed class GrassPlacementAreaTests
 
     [TestCase(GrassPlacementShape.Box)]
     [TestCase(GrassPlacementShape.Circle)]
+    [TestCase(GrassPlacementShape.Texture)]
     public void RotatedShapeOccupancyRejectsEmptyOuterBoundsWithoutDroppingItsBoundary(GrassPlacementShape shape)
     {
         GrassPlacementArea area = NewArea();
         ConfigureLocal(area, new Vector2(4f, 80f));
         var serialized = new SerializedObject(area);
         serialized.FindProperty("shape").enumValueIndex = (int)shape;
+        if (shape == GrassPlacementShape.Texture)
+        {
+            Texture2D texture = NewTexture();
+            texture.Apply(false, true);
+            serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+        }
         serialized.ApplyModifiedPropertiesWithoutUndo();
         area.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
         Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
@@ -232,7 +239,7 @@ public sealed class GrassPlacementAreaTests
         Matrix4x4 maskToWorld = snapshot.WorldToMask.inverse;
         Vector3 nearCorner = maskToWorld.MultiplyPoint3x4(new Vector3(0.95f, 0f, 0.95f));
         Assert.That(snapshot.IntersectsCoverage(new Bounds(nearCorner, Vector3.one * 0.01f)),
-            Is.EqualTo(shape == GrassPlacementShape.Box));
+            Is.EqualTo(shape != GrassPlacementShape.Circle));
         Vector3 justOutsideEdge = maskToWorld.MultiplyPoint3x4(new Vector3(1.001f, 0f, 0.5f));
         Assert.That(snapshot.IntersectsCoverage(new Bounds(justOutsideEdge, Vector3.one * 0.02f)), Is.True,
             "A query straddling the geometric edge must remain eligible after the caller adds its filter margin.");
@@ -449,6 +456,128 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void DestroyingAnExplicitMeshSurfaceDisablesCoverageAndPaintingUntilItsBindingIsCleared()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+
+        Object.DestroyImmediate(surface);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+        uint revision = density.Revision;
+        Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.False);
+        Assert.That(density.Revision, Is.EqualTo(revision));
+
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("paintSurface").objectReferenceValue = null;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(area.TryGetCaptureData(out _), Is.True,
+            "Explicitly clearing the binding restores the supported generic-surface mode.");
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+        Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.True);
+    }
+
+    [Test]
+    public void ADeactivatedExplicitMeshSurfaceStopsCoverageAndRestoresItWhenReactivated()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+
+        surface.gameObject.SetActive(false);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+
+        surface.gameObject.SetActive(true);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+    }
+
+    [Test]
+    public void RemovingTheExplicitMeshRendererDisablesCoverageUntilItsRendererIsRestored()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+
+        Object.DestroyImmediate(surface.GetComponent<MeshRenderer>());
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+        uint revision = density.Revision;
+        Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.False);
+        Assert.That(density.Revision, Is.EqualTo(revision));
+
+        surface.gameObject.AddComponent<MeshRenderer>();
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AnExplicitMeshSurfaceAcceptsAParentRendererEvenWithItsColliderDisabled(bool colliderEnabled)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider parentSurface = NewMeshSurface(area);
+        var child = new GameObject("Grass child surface collider");
+        sceneObjects.Add(child);
+        child.transform.SetParent(parentSurface.transform, false);
+        BoxCollider surface = child.AddComponent<BoxCollider>();
+        surface.enabled = colliderEnabled;
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData data), Is.True,
+            "The visible parent renderer can support grass independently of physics participation.");
+        Assert.That(area.IntersectsCoverage(data.WorldBounds), Is.True);
+    }
+
+    [Test]
+    public void MovingAnExplicitMeshSurfaceIntoAPreviewSceneDisablesCoverageAndPaintingUntilItReturns()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Scene originalScene = surface.gameObject.scene;
+        Scene preview = EditorSceneManager.NewPreviewScene();
+        try
+        {
+            SceneManager.MoveGameObjectToScene(surface.gameObject, preview);
+            Assert.That(area.gameObject.scene, Is.EqualTo(originalScene));
+            Assert.That(area.TryGetCaptureData(out _), Is.False);
+            Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+            uint revision = density.Revision;
+            Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.False);
+            Assert.That(density.Revision, Is.EqualTo(revision));
+
+            SceneManager.MoveGameObjectToScene(surface.gameObject, originalScene);
+            Assert.That(area.TryGetCaptureData(out _), Is.True);
+            Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+        }
+        finally
+        {
+            if (surface && surface.gameObject.scene == preview)
+                SceneManager.MoveGameObjectToScene(surface.gameObject, originalScene);
+            EditorSceneManager.ClosePreviewScene(preview);
+        }
+    }
+
+    [Test]
     public void MovingAnExplicitTerrainIntoAPreviewSceneDisablesCoverageAndPaintingUntilItReturns()
     {
         Terrain terrain = NewTerrain(Vector3.zero, new Vector3(100f, 10f, 100f));
@@ -628,6 +757,18 @@ public sealed class GrassPlacementAreaTests
         var texture = new Texture2D(16, 16, TextureFormat.R8, false, true);
         assets.Add(texture);
         return texture;
+    }
+
+    private Collider NewMeshSurface(GrassPlacementArea area)
+    {
+        GameObject gameObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        sceneObjects.Add(gameObject);
+        gameObject.transform.localScale = new Vector3(20f, 1f, 20f);
+        Collider surface = gameObject.GetComponent<Collider>();
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        return surface;
     }
 
     private static void ConfigureLocal(GrassPlacementArea area, Vector2 size, Terrain terrain = null)

@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 /// <summary>Run in a URP Editor test project with a graphics device; these exercise the actual GPU bake and saved assets.</summary>
@@ -213,6 +215,39 @@ public sealed class TerrainGrassAlbedoBakerTests
             Assert.That(areas[i].GroundColorRevision, Is.GreaterThan(groundRevisions[i]));
             Assert.That(areas[i].DensityRevision, Is.EqualTo(densityRevisions[i]));
             Assert.That(areas[i].SurfaceRevision, Is.EqualTo(surfaceRevisions[i]));
+        }
+    }
+
+    [Test]
+    public void FailingBakeObserverDoesNotPreventLaterObserversReceivingSavedOutput()
+    {
+        SetLayers(new[] { Layer(Color.green, true) }, new[] { 1f });
+        Terrain notifiedTerrain = null;
+        Texture2D notifiedTexture = null;
+        Action<Terrain, Texture2D> failingObserver = (source, output) =>
+            throw new InvalidOperationException("Injected ground-albedo observer failure.");
+        Action<Terrain, Texture2D> laterObserver = (source, output) =>
+        {
+            notifiedTerrain = source;
+            notifiedTexture = output;
+        };
+        TerrainGrassAlbedoBaker.Baked += failingObserver;
+        TerrainGrassAlbedoBaker.Baked += laterObserver;
+        try
+        {
+            LogAssert.Expect(LogType.Exception, new Regex("Injected ground-albedo observer failure"));
+            Texture2D output = Bake();
+            Assert.That(notifiedTerrain, Is.SameAs(terrain));
+            Assert.That(notifiedTexture, Is.SameAs(output),
+                "All observers must receive the successfully saved output even when an earlier observer fails.");
+            Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(outputPath), Is.SameAs(output));
+            Assert.That(EditorUtility.IsDirty(output), Is.False);
+            AssertColor(output.GetPixel(8, 8), Color.green, 0.015f);
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= failingObserver;
+            TerrainGrassAlbedoBaker.Baked -= laterObserver;
         }
     }
 

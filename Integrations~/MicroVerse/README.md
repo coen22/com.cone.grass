@@ -54,7 +54,7 @@ With **Auto Refresh** enabled, saved asset changes, scene opening/saving, inspec
 
 Mask discovery is cached per asset. Ordinary polling checks object identity, dimensions, graphics format, update count, editor dirty count and Unity's cached asset dependency hash. A steady poll does not reload every subasset, read pixels, change scene dirtiness or schedule a grass capture. A changed mask invalidates density and the associated ground-color coverage, while terrain height remains cached. A changed ground-color map invalidates only color. Terrain height edits use the core placement surface invalidation path.
 
-The optional ground bake also uses a source signature, including terrain texture notifications, layer/material properties and asset changes. It reuses a current saved output across editor reloads and rebakes when its inputs change. GPU capture and readback occur during a required bake, not on each poll.
+The optional ground bake also uses a source signature, including terrain texture notifications, layer/material properties and asset changes. It reuses a current saved output across editor reloads and rebakes when its inputs change. GPU capture and readback occur during a required bake, not on each poll. Source edits made by save callbacks or bake observers remain changes to process on the next refresh; they cannot certify pixels produced before those edits.
 
 A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
 

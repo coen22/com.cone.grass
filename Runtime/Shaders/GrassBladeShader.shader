@@ -178,7 +178,7 @@ Shader "InfiniteGrass/GrassBladeShader"
 
             half4 GrassForwardFragment(GrassForwardVaryings input) : SV_Target
             {
-                half alpha = GrassFragmentCoverage(input.shapeCoordinates, input.coverage, input.seed);
+                half alpha = GrassForwardCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 half groundBlend = GrassGroundBlend(input.shapeCoordinates.y, input.groundColor.a);
                 half3 albedo = lerp(input.grassAlbedo, input.groundColor.rgb, groundBlend);
                 half3 normalWS = SafeNormalize(input.normalWSAndSpecular.xyz);
@@ -222,7 +222,9 @@ Shader "InfiniteGrass/GrassBladeShader"
         }
 
         // A dedicated, single-sample depth source for the contact-shadow renderer.
-        // Both passes call the same deformation and coverage functions.
+        // Deformation and per-blade coverage match color. This single-sample
+        // target estimates silhouette coverage analytically; MSAA color uses
+        // the rasterizer's geometric sample mask for that silhouette instead.
         Pass
         {
             Name "GrassContactDepth"

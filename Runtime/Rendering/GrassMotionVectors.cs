@@ -18,8 +18,8 @@ public sealed class GrassMotionVectors : IDisposable
     [Serializable]
     public sealed class Settings
     {
-        [Tooltip("Auto supplies grass motion for temporal AA and object motion blur on single-sample cameras. Always also supports custom motion consumers.")]
-        public Mode mode = Mode.Auto;
+        [Tooltip("Optional motion history. Auto supplies grass motion for temporal AA and object motion blur on single-sample cameras. Always also supports custom motion consumers.")]
+        public Mode mode = Mode.Off;
     }
 
     private static class Id
@@ -258,9 +258,10 @@ public sealed class GrassMotionVectors : IDisposable
             pass.Roots = destination.Roots;
             pass.SnapshotCounts = destination.Counts;
             pass.Dispatch = history.DispatchArguments;
-            pass.Offsets = (int[])lodOffsets.Clone();
-            pass.Capacities = (int[])lodCapacities.Clone();
-            pass.Rows = new[] { (lodMeshes[0].vertexCount - 1) / 2, (lodMeshes[1].vertexCount - 1) / 2, (lodMeshes[2].vertexCount - 1) / 2, 0 };
+            // Each pooled pass owns its layout until execution. A second record
+            // for this camera cannot overwrite a pending pass's metadata, and
+            // warmed passes need no new arrays on subsequent frames.
+            pass.CaptureLayout(lodOffsets, lodCapacities, lodMeshes);
             pass.History = history;
             pass.Snapshot = destination;
             pass.SnapshotIndex = destinationIndex;
@@ -305,8 +306,8 @@ public sealed class GrassMotionVectors : IDisposable
                 data.Snapshot.TargetWidth = data.TargetWidth;
                 data.Snapshot.TargetHeight = data.TargetHeight;
                 data.Snapshot.CameraRect = data.CameraRect;
-                data.Snapshot.Offsets = data.Offsets;
-                data.Snapshot.Capacities = data.Capacities;
+                Array.Copy(data.Offsets, data.Snapshot.Offsets, data.Offsets.Length);
+                Array.Copy(data.Capacities, data.Snapshot.Capacities, data.Capacities.Length);
                 data.History.RenderedFrame = data.FrameNumber;
                 data.History.LatestIndex = data.SnapshotIndex;
                 data.History.PreviousValid = data.PreviousValid;
@@ -498,14 +499,18 @@ public sealed class GrassMotionVectors : IDisposable
         public bool EnsureAllocation(int capacity, Texture slope, Texture wind, GraphicsFormat format)
         {
             int size = HistoryTableSize(capacity);
-            bool changed = Keys == null || Keys.count != size;
+            bool changed = Keys == null || !Keys.IsValid() || Keys.count != size;
             if (changed)
             {
                 Keys?.Dispose();
                 Keys = new GraphicsBuffer(GraphicsBuffer.Target.Structured, size, sizeof(uint));
             }
-            if (DispatchArguments == null)
+            if (DispatchArguments == null || !DispatchArguments.IsValid())
+            {
+                DispatchArguments?.Dispose();
                 DispatchArguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments, 9, sizeof(uint));
+                changed = true;
+            }
             for (int i = 0; i < Snapshots.Length; i++)
                 changed |= Snapshots[i].EnsureAllocation(capacity, slope, wind, format);
             if (changed)
@@ -543,18 +548,23 @@ public sealed class GrassMotionVectors : IDisposable
         public int TargetWidth, TargetHeight;
         public Rect CameraRect;
         public FrameState Frame;
-        public int[] Offsets, Capacities;
+        public readonly int[] Offsets = new int[4];
+        public readonly int[] Capacities = new int[4];
 
         public bool EnsureAllocation(int capacity, Texture slope, Texture wind, GraphicsFormat format)
         {
-            bool changed = Roots == null || Roots.count != capacity;
+            bool changed = Roots == null || !Roots.IsValid() || Roots.count != capacity;
             if (changed)
             {
                 Roots?.Dispose();
                 Roots = new GraphicsBuffer(GraphicsBuffer.Target.Structured, capacity, sizeof(float) * 4);
             }
-            if (Counts == null)
+            if (Counts == null || !Counts.IsValid())
+            {
+                Counts?.Dispose();
                 Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 3, sizeof(uint));
+                changed = true;
+            }
             changed |= AllocateTexture(ref Slope, slope, format, "Grass Interaction History");
             changed |= AllocateTexture(ref Wind, wind, format, "Grass Wind History");
             return changed;
@@ -627,7 +637,9 @@ public sealed class GrassMotionVectors : IDisposable
         public ComputeShader Shader;
         public int CaptureKernel, StoreKernel;
         public GraphicsBuffer Positions, Counts, Roots, SnapshotCounts, Dispatch;
-        public int[] Offsets, Capacities, Rows;
+        public readonly int[] Offsets = new int[4];
+        public readonly int[] Capacities = new int[4];
+        public readonly int[] Rows = new int[4];
         public CameraHistory History;
         public RootSnapshot Snapshot;
         public int SnapshotIndex;
@@ -638,6 +650,14 @@ public sealed class GrassMotionVectors : IDisposable
         public float Spacing;
         public int TargetWidth, TargetHeight;
         public Rect CameraRect;
+
+        public void CaptureLayout(int[] offsets, int[] capacities, Mesh[] meshes)
+        {
+            Array.Copy(offsets, Offsets, Offsets.Length);
+            Array.Copy(capacities, Capacities, Capacities.Length);
+            for (int lod = 0; lod < 3; lod++)
+                Rows[lod] = (meshes[lod].vertexCount - 1) / 2;
+        }
     }
 
     private sealed class HashPass

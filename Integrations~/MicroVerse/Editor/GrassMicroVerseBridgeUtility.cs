@@ -433,10 +433,10 @@ public static class GrassMicroVerseBridgeUtility
             if (markSceneDirty)
                 MarkAuthoringObjectDirty(bridge);
         }
-        // Saving the output can invoke asset callbacks. Cache only after they
-        // finish; a subsequent producer source change will alter this signature.
-        TerrainGrassAlbedoBaker.TryGetSourceSignature(bridge.Terrain, bridge.GroundBakeResolution,
-            out signature, out _);
+        // Keep the signature of the inputs that produced this image. Saving the
+        // output and notifying Baked subscribers can also edit source assets;
+        // adopting their later signature would certify those edits without ever
+        // baking them. The next poll must observe that change and bake again.
         groundBakes[bridge] = new GroundBakeState
         {
             SourceSignature = signature, AssetPath = path, SavedKey = sourceKey, AssetRevision = assetRevision,
