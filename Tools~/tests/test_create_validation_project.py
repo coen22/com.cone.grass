@@ -143,6 +143,35 @@ class ValidationProjectGeneratorTests(unittest.TestCase):
                 self.assertIn("copied source directory", result.stderr)
                 self.assertFalse(destination.exists())
 
+    def test_missing_required_sources_preserve_existing_assets_and_do_not_create_a_project(self):
+        self.assertEqual(self.generate().returncode, 0)
+        guid = "1234567890abcdef1234567890abcdef"
+        for index, relative in enumerate(("Editor/Bootstrap.cs", "ValidationRuntime/Probe.cs", "MicroVerseMaskBridge/Bridge.cs")):
+            metadata = "guid: " + f"{int(guid, 16) + index:032x}" + "\n"
+            (self.output / ("Assets/" + relative + ".meta")).write_text(metadata, encoding="utf-8")
+        settings = self.output / "Assets/ValidationSettings"
+        settings.mkdir()
+        (settings / "GrassValidation.unity").write_text(
+            "m_Script: {fileID: 11500000, guid: " + guid + ", type: 3}\n", encoding="utf-8")
+        original = {str(path.relative_to(self.output)): path.read_bytes() if path.is_file() else None
+                    for path in self.output.rglob("*")}
+        for source in (self.sample, self.bootstrap, self.runtime):
+            with self.subTest(source=source):
+                unavailable = source.with_name(source.name + ".unavailable")
+                source.rename(unavailable)
+                try:
+                    result = self.generate()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("required validation template directory", result.stderr)
+                    self.assertEqual({str(path.relative_to(self.output)): path.read_bytes() if path.is_file() else None
+                                      for path in self.output.rglob("*")}, original)
+                    fresh = self.folder / "Fresh project"
+                    result = self.generate(fresh)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(fresh.exists())
+                finally:
+                    unavailable.rename(source)
+
     def test_unrelated_output_is_preserved(self):
         self.output.mkdir()
         unrelated = self.output / "User document.txt"
