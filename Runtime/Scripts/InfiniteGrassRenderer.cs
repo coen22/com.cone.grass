@@ -64,6 +64,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public bool alphaToCoverage = true;
     [Range(0f, 3f)] public float minimumPixelWidth = 1f;
     public Vector2 specularFadeRange = new Vector2(30f, 100f);
+    public GrassMotionVectors.Settings motionVectors = new GrassMotionVectors.Settings();
 
     [Header("Optional Contact Shadows")]
     public GrassContactShadows.Settings contactShadows = new GrassContactShadows.Settings();
@@ -77,6 +78,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public uint OverflowGrassCount { get; internal set; }
     public uint Revision { get; private set; }
     public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Finite(maxBufferCount, 2f) * 1000000f), 3, 16000000);
+    public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
     private Mesh[] meshes;
     private int cachedSubdivision = -1;
@@ -90,7 +92,9 @@ public class InfiniteGrassRenderer : MonoBehaviour
 
     private void OnEnable()
     {
-        if (!IsSceneInstance())
+        // Scene objects receive OnEnable before an additive scene reports
+        // isLoaded. Register now; rendering starts after scene activation.
+        if (!IsSceneInstance(false))
             return;
         if (Instance != null && Instance != this)
         {
@@ -124,16 +128,27 @@ public class InfiniteGrassRenderer : MonoBehaviour
         ReleaseMeshes();
     }
 
-    // Restore the singleton when both scene and domain reload are disabled in Enter Play Mode.
+    // Scene moves can change eligibility without an OnDisable callback. Also
+    // restore ownership when Enter Play Mode skips scene and domain reload.
     private void Update()
     {
-        if (Instance == null && isActiveAndEnabled && IsSceneInstance())
+        bool sceneEligible = isActiveAndEnabled && IsSceneInstance();
+        if (Instance == this && !sceneEligible)
+        {
+            Instance = null;
+            ReleaseMeshes();
+        }
+        if (Instance == null && sceneEligible)
+        {
             Instance = this;
+            ValidateSettings();
+            RefreshGrassData();
+        }
     }
 
-    private bool IsSceneInstance()
+    private bool IsSceneInstance(bool requireLoaded = true)
     {
-        if (!gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
+        if (!gameObject.scene.IsValid() || (requireLoaded && !gameObject.scene.isLoaded))
             return false;
 #if UNITY_EDITOR
         if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
@@ -286,6 +301,8 @@ public class InfiniteGrassRenderer : MonoBehaviour
         minimumPixelWidth = Mathf.Clamp(Finite(minimumPixelWidth, 1f), 0f, 3f);
         specularFadeRange.x = Mathf.Max(0f, Finite(specularFadeRange.x, 30f));
         specularFadeRange.y = Mathf.Max(specularFadeRange.x + 0.01f, Finite(specularFadeRange.y, 100f));
+        if (motionVectors == null)
+            motionVectors = new GrassMotionVectors.Settings();
         if (contactShadows == null)
             contactShadows = new GrassContactShadows.Settings();
     }

@@ -2,12 +2,12 @@
 
 Procedural, GPU-generated grass with explicit placement, editable density maps, geometric LOD, terrain color matching, and optional screen-space contact shadows.
 
-**2.0 preview:** this branch targets **Unity 6.6 / URP 17.6**. Unity 6.7 is a separate validation target. The new rendering path has source and mathematical checks plus authored EditMode tests, but has **not yet been imported, built, or visually profiled in Unity**. See [validation and known limits](Documentation~/Validation.md) before adopting it in a production project.
+**2.0 preview:** this package targets **Unity 6.6 / URP 17.6**. Unity 6.7 is a separate validation target. GitHub runs package checks and Roslyn C# 9 syntax validation; the Unity job requires configured licensing credentials. The new rendering path has **not yet been imported, built, or visually profiled in Unity**. See [validation and known limits](Documentation~/Validation.md) for the exact evidence and test commands.
 
 ## Install and set up
 
-1. In Unity 6.6, install this Git package through Package Manager. For this implementation branch, use:
-   `https://github.com/coen22/com.cone.grass.git#codex/grass-urp6-placement-contact-shadows`
+1. In Unity 6.6, install this Git package through Package Manager:
+   `https://github.com/coen22/com.cone.grass.git#main`
 2. Use a URP renderer with RenderGraph enabled. Add **Grass Data Renderer Feature** to its Renderer Features.
 3. Assign `GrassPositionsCompute.compute` and the included `GrassHeightMapMat` to the feature. The height layer remains relevant to the legacy mesh surface path and unassigned mesh-surface fallback.
 4. Add one **Infinite Grass Renderer** component to the scene and assign the included grass blade material, or a copy of it.
@@ -23,9 +23,9 @@ A positive area mask means **black = no grass, white = full grass**. Missing mas
 
 Select a Placement Area and create a persistent density asset in its inspector. Use the Scene brush to paint, hold **Shift** to erase temporarily, or select erase mode. Radius, strength, and hardness control the brush. Each stroke supports Undo/Redo; changes are saved with the asset.
 
-Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. It is not dependent on a texture being CPU-readable at runtime.
+Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. Small strokes update occupancy counts and upload a bounded pixel rectangle through a reusable staging texture where regional copies are supported. Unsupported copies and full edits use the authoritative whole-map data.
 
-For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; the producer must call `MarkDirty()` when its contents change without changing its texture reference.
+For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers can call `MarkDensityDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path.
 
 ### Mesh surfaces and legacy scenes
 
@@ -35,7 +35,7 @@ The included old Sample Scene explicitly selects legacy mode. Existing user scen
 
 For an authored mesh patch, assign its **Paint Surface** collider with an associated Renderer. That explicit Renderer is captured independently of the layer mask. Patches without an assigned surface use the feature's height-layer fallback.
 
-Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after changing a cached mesh surface, or disable **Cache Surface Data** while it moves. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new modifier renderers so the cached capture inventory includes them.
+Assigned mesh transforms, bounds, mesh replacement and enable/disable changes invalidate their surface capture. Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after other cached mesh edits, or disable **Cache Surface Data** for continuously deformed surfaces whose bounds remain unchanged. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new runtime modifier renderers or changing their materials so the shared capture inventory includes them; editor hierarchy and scene changes refresh discovery automatically.
 
 ## MicroVerse spline workflow
 
@@ -46,7 +46,8 @@ Install the **MicroVerse Mask Bridge** sample from Package Manager. The sample a
 3. Use the same region for a **positive Mask Stamp**, writing density to a saved **MaskTarget**.
 4. Add a **Grass MicroVerse Bridge** and its adjacent Placement Area for each affected Terrain.
 5. In the bridge inspector, choose the MaskTarget asset, the explicit generated texture name for that Terrain, and the same TerrainLayer.
-6. Refresh the saved mask and save the scene. Spline edits then update through asset changes and optional editor polling. For a clean standalone build, resolve and save all mappings first.
+6. For mixed grass/dirt edges, enable **Bake Terrain Ground Albedo** and choose an output asset for each Terrain. Bake, refresh the saved mask, and save the scene.
+7. Spline edits update through asset changes and optional editor polling. The build preflight checks saved bindings before both clean and incremental player builds and reports stale inputs with the corrective action.
 
 The bridge rebinds uniquely named texture subassets after replacement, rejects ambiguous/missing/sRGB outputs, and clears stale coverage on failure. It never guesses which tile belongs to a terrain.
 
@@ -58,9 +59,15 @@ The ground capture samples unlit albedo using the selected TerrainLayer's world 
 
 **Ground Blend Height** is a fraction of blade height; the root transition remains consistent between geometry LODs. The optional material setting **Use Ground Normal** reconstructs a normal from the cached world-height map and helps align root lighting on slopes. It costs extra height samples and is off by default.
 
-A single TerrainLayer does not reproduce a mixture of several terrain layers or an arbitrary custom terrain material. For those areas, supply a density-aligned **Ground Color Texture** containing the final blended **albedo**, with no baked direct lighting or shadows. That texture overrides the selected layer. A native full-terrain-material albedo baker is not included.
+A single TerrainLayer does not reproduce a mixture of several terrain layers. The editor **Terrain Grass Albedo Baker** captures the native URP Terrain/Lit albedo using the installed URP blend functions. It handles terrain-relative tiling and offsets, diffuse/mask remaps, opacity-as-density, height blending, and additional groups beyond four layers. It samples non-readable source textures on the GPU and saves a linear RGBAHalf texture with mipmaps. Rebaking preserves the output asset's identity and invalidates ground color on its consumers.
+
+Open **Tools > Cone > Grass > Bake Terrain Ground Albedo**, use a Placement Area's context menu, or use the MicroVerse bridge's integrated controls. The [baker guide](Editor/GroundColor/README.md) covers setup. A full-terrain color map uses its own terrain-aligned UVs, independent of a small placement patch. Surviving blades receive the configured ground-match strength even at a feathered low-density spline edge.
+
+The baker requires the native `Universal Render Pipeline/Terrain/Lit` material. Custom terrain shaders and MicroSplat need their own final blended **albedo** output without direct lighting or shadows. Assign it as **Ground Color Texture** and choose terrain-bounds mapping for a full-tile map. This overrides the selected layer. Unsupported native-bake inputs fail with an actionable message.
 
 The MicroVerse Texture Stamp remains visible as distant blades thin out. Keep its boundary and the positive density mask aligned; changing only one stamp's filters or falloff creates a visible mismatch.
+
+Ground color is captured in a shared XZ projection. Vertically overlapping surfaces cannot retain different ground colors at the same XZ coordinates. Use this workflow for terrain tiles and surfaces whose ground-color footprints do not overlap vertically.
 
 ## URP contact shadows
 
@@ -75,7 +82,7 @@ Enable **Contact Shadows > Enabled** on Infinite Grass Renderer. The effect supp
 | Thickness | 0.15 m | Tolerance around sampled depth |
 | Maximum distance | 50 m | Limits contacts to nearby receivers |
 
-The feature requests scene depth and draws a dedicated grass depth/coverage pass with matching deformation. Contact evaluation reads those depths and multiplies the existing camera color attachment through fixed-function blending. It preserves MSAA color samples and alpha, and does not sample the color attachment it writes. Disabled contacts schedule no contact passes or intermediates.
+The feature requests scene depth and draws a dedicated grass depth/coverage pass with matching deformation. Contact evaluation reads those depths and multiplies the existing camera color attachment through fixed-function blending. It preserves MSAA color samples and alpha, and does not sample the color attachment it writes. Contact depth rejects fragments outside the receiver distance plus ray reach, and the search uses explicit projection/origin mapping for viewport and depth-texture differences. Disabled contacts schedule no contact passes or intermediates.
 
 This is a **custom screen-space approximation**. Unity's [pipeline comparison](https://docs.unity3d.com/6000.6/Documentation/Manual/render-pipelines-feature-comparison.html) lists built-in contact shadows for HDRP, not URP. Off-screen and hidden casters are unavailable. Only the nearest grass depth is stored, so fractional/MSAA silhouettes are approximate. The final color multiplication also attenuates ambient/emissive contributions. It supplements normal main-light shadow reception; it does not add grass to the directional light's shadow atlas.
 
@@ -90,11 +97,18 @@ The new path combines several controls:
 - Analytic blade-edge coverage.
 - **Alpha to Coverage** enabled only when the actual camera target uses MSAA; deterministic coverage discard otherwise.
 - A distance range that fades narrow specular highlights.
-- Shared deformation and coverage for color and contact depth.
+- Shared deformation and coverage for color, contact depth, and motion vectors.
+- Previous-frame wind, interaction, camera-facing shape, root height and geometric LOD for temporal consumers.
 
 Start by checking 4x MSAA, a one-pixel minimum width, and restrained distant width expansion in the target scene. Compare camera pans and wind motion with contacts both on and off. Unity documents that [AlphaToMask requires MSAA](https://docs.unity3d.com/6000.6/Documentation/Manual/writing-shader-alpha-to-mask.html); enabling it on a single-sample target has platform-dependent results.
 
-**TAA motion vectors are not implemented.** The custom indirect draw and wind deformation need a proper previous-frame motion-vector path before complete TAA support can be claimed. Camera-only vectors cannot describe animated blades. FXAA/SMAA may help the final image but do not replace stable geometry and coverage.
+**Motion Vectors** has **Auto**, **Always**, and **Off** modes. Auto enables the indirect motion path for supported URP temporal AA or camera-and-object motion blur. Always requests motion data for custom consumers. Off releases that camera's history. The pass augments URP's existing motion/depth targets and uses exact world-XZ root matching, so append order and LOD queue changes do not assign another blade's history. It reconstructs the actual previous mesh triangles and snapshots wind/interaction maps.
+
+Repeated renders in one `Time.frameCount` retain the same previous snapshot, matching URP's camera-matrix history. Missing or ambiguous roots use camera-only motion. Initial/reset frames and rendering gaps reset grass motion history; incompatible material, spacing, viewport and target-size changes also reset it. Hash lookup is bounded to 128 slots and does not perform CPU position readback.
+
+Motion history is allocated only while requested. For capacity `C`, two root snapshots and one hash table use `32 * C + 4 * NextPowerOfTwo(2 * C)` bytes, plus small count/dispatch buffers. That is **77.04 MiB at 2,000,000 blades**, or **616.28 MiB at 16,000,000**, per active camera. Two interaction and two wind snapshots are additional: each pair of 1024² RGBAHalf textures adds 16 MiB, doubled if the device needs the RGBAFloat fallback. Lower **Max Blade Count** reduces this allocation; the renderer checks individual device buffer limits.
+
+This source implementation still needs visual validation with TAA; passing syntax checks does not establish temporal image quality. Use Auto or Off when custom motion consumers are absent, and configure the anti-aliasing method in URP. FXAA/SMAA may help the final image but do not replace stable geometry and coverage.
 
 ## Rendering and performance changes
 
@@ -110,15 +124,19 @@ At the default five subdivisions, the new meshes use:
 
 The old near mesh duplicated row vertices and used 23 vertices. Its distance deformation retained all 11 triangles. The new near mesh shares rows; middle/far draws use separate meshes and independent GPU queues.
 
-Generation checks dispatch boundaries, surface/area coverage, distance density, and a conservative frustum radius before writing bounded queues. Distance density remains full only to **Full Density Distance**, then fades toward **Draw Distance**. Overflow is safely dropped and available in diagnostics. Tune queue weights/capacity if diagnostics show overflow.
+Generation checks dispatch boundaries, surface/area coverage, distance density, and a conservative frustum radius before writing bounded queues. Each 8x8 workgroup combines accepted roots before reserving up to three global LOD ranges, reducing counter contention. Rounded edge threads still participate in every group barrier. Distance density remains full only to **Full Density Distance**, then fades toward **Draw Distance**. Overflow is safely dropped and available in diagnostics. Tune queue weights/capacity if diagnostics show overflow.
 
-Static placement and height captures reuse data until their mapping or source revision changes. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
+Density, ground color and surface revisions are tracked separately. A paint stroke or replaced MicroVerse mask can refresh the affected density capture while height remains cached. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Empty painted blocks skip dispatch tiles, and cropped draw bounds retain the original mask UVs. Scene inventory is shared across cameras instead of rediscovered on each camera movement or stroke.
+
+Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
 
 These are structural reductions, **not measured frame-rate claims**. The richer fragment lighting, extra ground samples, and enabled contact shadows also cost GPU time. Profile the target scene at equal visual coverage. GPU Resident Drawer does not automatically optimize these custom indirect draws.
 
 ## Migration notes
 
 - Package baseline changes from the inconsistent Unity 2021.3/URP 17.1 declaration to Unity 6.6/URP 17.6.
+- Required Terrain, Terrain Physics, Physics and IMGUI modules are explicit package dependencies.
+- Object identity uses Unity 6.6 `EntityId`; full identities are retained as cache/group keys instead of truncating them to integer hashes.
 - This is a `2.0.0-preview.1` API preview.
 - New components use **Authored Areas**. Set **Legacy Surface Layer** explicitly for previous layer-based scenes.
 - `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot.
@@ -126,8 +144,29 @@ These are structural reductions, **not measured frame-rate claims**. The richer 
 - `GetGrassMeshCache()` remains a near-mesh compatibility accessor; `GetLodMeshes()` returns the three shared meshes.
 - Custom capture shaders should use `_GrassCaptureVP` and put their capture `LightMode` tag and name on the actual pass.
 - Custom blade shaders need the `GrassForward` pass and `_GrassInstanceOffset`; contact support additionally needs the `GrassContactDepth` contract.
+- Indirect motion support needs the `GrassMotionVectors` pass and the package history/deformation contracts. Updating a custom color pass alone does not provide temporal motion.
 - Main-light and scene ambient-probe SH lighting are the default; the draw explicitly supplies its SH coefficients and does not sample local light probes per grass root. Optional additional-light shading targets Forward+ clustered lighting; ordinary Forward per-object light indices are unavailable to this indirect draw.
 - The intended initial camera target is single-view Game/Scene base cameras. Overlay, reflection, preview, and XR cameras are excluded. Deferred, camera stacking variants, TAA, and additional graphics APIs require explicit validation.
+
+## Executable validation
+
+Run the license-independent checks from the repository root:
+
+```sh
+python3 Tools~/validate_source.py .
+python3 -B -m unittest discover -s Tools~/tests -v
+dotnet run --project Tools~/SourceChecks -- .
+```
+
+The last command needs .NET 8 and restores a pinned Roslyn package. It parses C# 9 editor/player branches, including the optional sample. It does not bind Unity APIs or compile shaders.
+
+Create a disposable project with the package tests, optional bridge sample and native URP setup:
+
+```sh
+python3 Tools~/create_validation_project.py --unity 6000.6.0f1 --urp 17.6.0
+```
+
+Open the generated project with that installed Unity version and run EditMode tests. A graphics device is required for compute, shader-pass and albedo tests. The GitHub workflow runs the same project when Unity licensing credentials are configured, saves logs/results, and explicitly reports skipped GPU cases. See [validation](Documentation~/Validation.md) for licensing configuration, the 6.7 target and rendered acceptance cases.
 
 ## Implementation tracking
 

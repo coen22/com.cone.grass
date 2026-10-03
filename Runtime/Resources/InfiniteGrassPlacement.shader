@@ -11,6 +11,7 @@ Shader "Hidden/InfiniteGrass/Placement"
         #include "../Shaders/GrassCaptureSampling.hlsl"
         float4x4 _GrassCaptureVP;
         float4x4 _PlacementWorldToMask;
+        float4x4 _PlacementGroundWorldToMask;
         float4 _PlacementTerrainRect;
         int _PlacementHasTerrain;
         int _PlacementShape;
@@ -22,6 +23,7 @@ Shader "Hidden/InfiniteGrass/Placement"
         float4 _PlacementGroundRemapMin;
         float4 _PlacementGroundRemapMax;
         int _PlacementHasGroundColor;
+        int _PlacementGroundColorUsesTerrainBounds;
         int _PlacementHasGroundLayer;
         TEXTURE2D(_PlacementDensityTexture);
         TEXTURE2D(_PlacementGroundColorTexture);
@@ -108,11 +110,20 @@ Shader "Hidden/InfiniteGrass/Placement"
             #pragma fragment FragmentGround
             float4 FragmentGround(Varyings input) : SV_Target
             {
-                float alpha = Coverage(input) * saturate(_PlacementGroundStrength);
+                float coverage = Coverage(input);
+                clip(coverage > 0 ? 1 : -1);
+                // The complete TerrainLit color already includes the spline's splat transition.
+                // Sparse surviving roots still need the full requested match to that ground color.
+                float matchWeight = _PlacementHasGroundColor != 0 && _PlacementGroundColorUsesTerrainBounds != 0
+                    ? 1 : coverage;
+                float alpha = matchWeight * saturate(_PlacementGroundStrength);
                 clip(alpha - 0.00001);
                 float3 albedo = 1;
                 if (_PlacementHasGroundColor != 0)
-                    albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundColorTexture, sampler_LinearClamp, input.uv).rgb;
+                {
+                    float2 groundUV = mul(_PlacementGroundWorldToMask, float4(input.positionWS, 1)).xz;
+                    albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundColorTexture, sampler_LinearClamp, groundUV).rgb;
+                }
                 else if (_PlacementHasGroundLayer != 0)
                 {
                     float2 layerUV = input.positionWS.xz * _PlacementGroundLayerUV.xy + _PlacementGroundLayerUV.zw;

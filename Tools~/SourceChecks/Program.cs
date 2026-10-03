@@ -9,10 +9,11 @@ if (args.Length != 1 || !File.Exists(Path.Combine(args[0], "package.json")))
 }
 
 string root = Path.GetFullPath(args[0]);
-string[] ignoredDirectories = { ".git", "Tools~", "Validation~", "bin", "obj", "Library", "Temp" };
+string[] ignoredDirectories = { ".git", "Validation~", "bin", "obj", "Library", "Temp" };
 string[] files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
     .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
         .Any(segment => ignoredDirectories.Contains(segment, StringComparer.Ordinal)))
+    .Where(path => !Path.GetRelativePath(root, path).Replace('\\', '/').StartsWith("Tools~/SourceChecks/", StringComparison.Ordinal))
     .OrderBy(path => path, StringComparer.Ordinal).ToArray();
 
 if (files.Length == 0)
@@ -44,6 +45,27 @@ foreach (var configuration in configurations)
             errors++;
         }
 
+        // Unity 6.6 makes Object.GetInstanceID obsolete with error=true. Keep a
+        // narrow regression guard for this known migration. This intentionally
+        // checks invocation names, not general Unity API binding, and ignores
+        // comments, string literals and inactive preprocessor branches.
+        foreach (InvocationExpressionSyntax invocation in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            string? name = invocation.Expression switch
+            {
+                MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+                MemberBindingExpressionSyntax member => member.Name.Identifier.ValueText,
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                _ => null
+            };
+            if (name == "GetInstanceID")
+            {
+                var line = tree.GetLineSpan(invocation.Span).StartLinePosition;
+                Console.Error.WriteLine($"[{configuration.Name}] {relative}:{line.Line + 1}: GetInstanceID is obsolete in the Unity 6.6 baseline; use GetEntityId and preserve full EntityId identity.");
+                errors++;
+            }
+        }
+
         // These checks inspect active player syntax only. Editor-only directories
         // are deliberately parsed above, but Unity does not compile them in a player.
         if (!configuration.Defines.Contains("UNITY_EDITOR") && !relative.Split('/').Contains("Editor") && !relative.StartsWith("Tests/", StringComparison.Ordinal))
@@ -61,5 +83,5 @@ foreach (var configuration in configurations)
 }
 
 Console.WriteLine($"Parsed {files.Length} C# files in {configurations.Length} conditional configurations using C# 9; {errors} errors.");
-Console.WriteLine("This is Roslyn syntax validation. Unity API binding, shader compilation, builds, and rendering require the Unity validation job.");
+Console.WriteLine("Roslyn syntax plus a narrow known-obsolete API guard only. Unity API binding, shader compilation, builds, and rendering require the Unity validation job.");
 return errors == 0 ? 0 : 1;

@@ -23,6 +23,12 @@ public sealed class GrassMicroVerseBridge : MonoBehaviour
     [SerializeField] private string textureSubAssetName;
     [SerializeField] private TerrainLayer groundLayer;
     [SerializeField] private Texture2D groundColorOverride;
+    [SerializeField] private bool bakeTerrainGroundColor;
+    [SerializeField, Range(64, 4096)] private int groundBakeResolution = 1024;
+    [SerializeField] private string groundBakeAssetPath;
+    [SerializeField, HideInInspector] private Texture2D bakedGroundColor;
+    [SerializeField, HideInInspector] private string groundBakeSourceKey;
+    [SerializeField, HideInInspector] private string groundBakeOutputKey;
     [SerializeField] private Color groundTint = Color.white;
     [SerializeField, Range(0f, 1f)] private float groundColorStrength = 1f;
     [SerializeField] private bool autoRefresh = true;
@@ -41,6 +47,12 @@ public sealed class GrassMicroVerseBridge : MonoBehaviour
     public string TextureSubAssetName => textureSubAssetName;
     public TerrainLayer GroundLayer => groundLayer;
     public Texture2D GroundColorOverride => groundColorOverride;
+    public bool BakeTerrainGroundColor => bakeTerrainGroundColor;
+    public int GroundBakeResolution => Mathf.Clamp(groundBakeResolution, 64, 4096);
+    public string GroundBakeAssetPath => groundBakeAssetPath;
+    public Texture2D BakedGroundColor => bakedGroundColor;
+    public string GroundBakeSourceKey => groundBakeSourceKey;
+    public string GroundBakeOutputKey => groundBakeOutputKey;
     public Color GroundTint => groundTint;
     public float GroundColorStrength => groundColorStrength;
     public bool AutoRefresh => autoRefresh;
@@ -64,7 +76,13 @@ public sealed class GrassMicroVerseBridge : MonoBehaviour
 
     private void OnEnable()
     {
-        activeBridges.Add(this);
+        // Build preflight reads saved scenes in a preview scene. Those objects
+        // must not enter the live polling registry or modify the open scene.
+        // OnEnable can run while a normal scene is still loading. Registration
+        // must not depend on isLoaded; the watcher waits until loading completes.
+        if (gameObject.scene.IsValid() &&
+            !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
+            activeBridges.Add(this);
         Interlocked.Exchange(ref refreshRequested, 1);
     }
 
@@ -89,6 +107,14 @@ public sealed class GrassMicroVerseBridge : MonoBehaviour
     {
         LastRefreshSucceeded = succeeded;
         LastRefreshMessage = message;
+    }
+
+    public void SetBakedGroundColor(Texture2D texture, string assetPath, string sourceKey, string outputKey)
+    {
+        bakedGroundColor = texture;
+        groundBakeAssetPath = assetPath;
+        groundBakeSourceKey = sourceKey;
+        groundBakeOutputKey = outputKey;
     }
 #endif
 }

@@ -277,7 +277,8 @@ public sealed class GrassPlacementAreaEditor : Editor
             return;
         if (Area.DensityAsset)
             Area.DensityAsset.NotifyChanged();
-        Area.MarkDirty();
+        // Density Undo queues the affected coverage/ground maps through the asset. Other serialized
+        // area edits are classified by its next state comparison, so a color Undo does not rebuild heights.
         RefreshViews();
         Repaint();
     }

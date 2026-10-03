@@ -26,6 +26,12 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
             TEXTURE2D_X_FLOAT(_GrassContactGrassDepth);
             float4 _GrassContactDepthScale;
             float4 _GrassContactGrassDepthScale;
+            // All projection and reconstruction use the grass depth texture's
+            // normalized viewport UVs. Sampling scale/bias handles other origins.
+            float4x4 _GrassContactViewProjection;
+            float4x4 _GrassContactInverseViewProjection;
+            float4x4 _GrassContactInverseProjection;
+            float4x4 _GrassContactViewMatrix;
             // strength, ray length, bias, thickness (all lengths are world units).
             float4 _GrassContactParameters;
             // maximum camera distance, sample count, normalized edge fade width.
@@ -34,53 +40,69 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
             bool HasSurface(float rawDepth)
             {
                 #if UNITY_REVERSED_Z
-                    return rawDepth > 0.0000001;
+                    return rawDepth > 0.0 && rawDepth <= 1.0;
                 #else
-                    return rawDepth < 0.9999999;
+                    return rawDepth >= 0.0 && rawDepth < 1.0;
                 #endif
             }
 
-            float EyeDepth(float rawDepth)
+            float RawToClipDepth(float rawDepth)
             {
-                // LinearEyeDepth's reciprocal expression is for perspective cameras.
-                if (unity_OrthoParams.w > 0.5)
-                {
-                    #if UNITY_REVERSED_Z
-                        rawDepth = 1.0 - rawDepth;
-                    #endif
-                    return lerp(_ProjectionParams.y, _ProjectionParams.z, rawDepth);
-                }
-                return LinearEyeDepth(rawDepth, _ZBufferParams);
+                #if UNITY_REVERSED_Z
+                    return rawDepth;
+                #else
+                    return lerp(UNITY_NEAR_CLIP_VALUE, 1.0, rawDepth);
+                #endif
+            }
+
+            float ClipToRawDepth(float clipDepth)
+            {
+                #if UNITY_REVERSED_Z
+                    return clipDepth;
+                #else
+                    return (clipDepth - UNITY_NEAR_CLIP_VALUE) / (1.0 - UNITY_NEAR_CLIP_VALUE);
+                #endif
+            }
+
+            float EyeDepth(float2 uv, float rawDepth)
+            {
+                float4 positionCS = float4(uv * 2.0 - 1.0, RawToClipDepth(rawDepth), 1.0);
+                #if UNITY_UV_STARTS_AT_TOP
+                    positionCS.y = -positionCS.y;
+                #endif
+                // Two inverse-projection rows also support orthographic and
+                // oblique near planes, which a near/far-only depth formula cannot.
+                float viewZ = dot(_GrassContactInverseProjection[2], positionCS);
+                float viewW = dot(_GrassContactInverseProjection[3], positionCS);
+                return abs(viewW) > 0.0000001 ? -viewZ / viewW : FLT_MAX;
             }
 
             float3 ReconstructWorld(float2 uv, float rawDepth)
             {
-                #if !UNITY_REVERSED_Z
-                    rawDepth = lerp(UNITY_NEAR_CLIP_VALUE, 1.0, rawDepth);
-                #endif
-                return ComputeWorldSpacePosition(uv, rawDepth, UNITY_MATRIX_I_VP);
+                return ComputeWorldSpacePosition(uv, RawToClipDepth(rawDepth),
+                    _GrassContactInverseViewProjection);
             }
 
             void SampleDepths(float2 uv, out float sceneRaw, out float grassRaw, out float grassCoverage)
             {
                 sceneRaw = SAMPLE_TEXTURE2D_X_LOD(_GrassContactSceneDepth,
-                    sampler_PointClamp, uv * _GrassContactDepthScale.xy, 0).r;
+                    sampler_PointClamp, uv * _GrassContactDepthScale.xy + _GrassContactDepthScale.zw, 0).r;
                 float2 grass = SAMPLE_TEXTURE2D_X_LOD(_GrassContactGrassDepth,
-                    sampler_PointClamp, uv * _GrassContactGrassDepthScale.xy, 0).rg;
+                    sampler_PointClamp, uv * _GrassContactGrassDepthScale.xy + _GrassContactGrassDepthScale.zw, 0).rg;
                 grassRaw = grass.r;
                 grassCoverage = saturate(grass.g);
             }
 
-            bool GrassIsVisible(float sceneRaw, float grassRaw, float grassCoverage)
+            bool GrassIsVisible(float2 uv, float sceneRaw, float grassRaw, float grassCoverage)
             {
                 if (grassCoverage <= 0.0 || !HasSurface(grassRaw))
                     return false;
                 if (!HasSurface(sceneRaw))
                     return true;
-                float sceneEye = EyeDepth(sceneRaw);
+                float sceneEye = EyeDepth(uv, sceneRaw);
                 // Accommodate depth-copy rounding, without exposing hidden grass
                 // through nearer opaque objects.
-                return EyeDepth(grassRaw) <= sceneEye + max(0.001, sceneEye * 0.00001);
+                return EyeDepth(uv, grassRaw) <= sceneEye + max(0.001, sceneEye * 0.00001);
             }
 
             float EdgeWeight(float2 uv)
@@ -95,12 +117,14 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
                 float2 uv = input.texcoord;
                 float sceneRaw, grassRaw, receiverGrassCoverage;
                 SampleDepths(uv, sceneRaw, grassRaw, receiverGrassCoverage);
-                bool receiverIsGrass = GrassIsVisible(sceneRaw, grassRaw, receiverGrassCoverage);
+                bool receiverIsGrass = GrassIsVisible(uv, sceneRaw, grassRaw, receiverGrassCoverage);
                 float receiverRaw = receiverIsGrass ? grassRaw : sceneRaw;
                 if (!HasSurface(receiverRaw))
                     return half4(1, 1, 1, 1);
 
                 float3 receiverWS = ReconstructWorld(uv, receiverRaw);
+                if (!all(isfinite(receiverWS)))
+                    return half4(1, 1, 1, 1);
                 float cameraDistance = distance(receiverWS, _WorldSpaceCameraPos);
                 float maxDistance = _GrassContactLimits.x;
                 if (cameraDistance >= maxDistance)
@@ -125,13 +149,16 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
 
                     float travel = bias + (sampleIndex + 0.5) * stepLength;
                     float3 sampleWS = receiverWS + lightDirection * travel;
-                    float sampleEye = -TransformWorldToView(sampleWS).z;
-                    if (sampleEye <= _ProjectionParams.y)
-                        break;
-
-                    float4 sampleCS = TransformWorldToHClip(sampleWS);
+                    float4 sampleCS = mul(_GrassContactViewProjection, float4(sampleWS, 1.0));
                     if (sampleCS.w <= 0.00001)
                         break;
+
+                    // Test the actual clipping volume, including an oblique near
+                    // plane, instead of comparing eye Z with camera.nearClipPlane.
+                    float sampleRaw = ClipToRawDepth(sampleCS.z / sampleCS.w);
+                    if (sampleRaw < 0.0 || sampleRaw > 1.0)
+                        break;
+                    float sampleEye = -mul(_GrassContactViewMatrix, float4(sampleWS, 1.0)).z;
 
                     float2 sampleNDC = sampleCS.xy / sampleCS.w;
                     // Inverse of ComputeWorldSpacePosition's texture-UV conversion.
@@ -144,7 +171,7 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
 
                     float sampleSceneRaw, sampleGrassRaw, hitGrassCoverage;
                     SampleDepths(sampleUV, sampleSceneRaw, sampleGrassRaw, hitGrassCoverage);
-                    bool hitIsGrass = GrassIsVisible(sampleSceneRaw, sampleGrassRaw, hitGrassCoverage);
+                    bool hitIsGrass = GrassIsVisible(sampleUV, sampleSceneRaw, sampleGrassRaw, hitGrassCoverage);
 
                     // Limit the effect to contacts involving grass. Existing terrain
                     // and unrelated opaque objects do not shadow each other here.
@@ -155,7 +182,7 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
                     if (!HasSurface(nearestRaw))
                         continue;
 
-                    float depthDifference = sampleEye - EyeDepth(nearestRaw);
+                    float depthDifference = sampleEye - EyeDepth(sampleUV, nearestRaw);
                     if (depthDifference > bias && depthDifference < thickness + bias)
                     {
                         float depthWeight = 1.0 - smoothstep(thickness * 0.5,

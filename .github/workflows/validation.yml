@@ -45,6 +45,8 @@ jobs:
         run: dotnet run --project Tools~/SourceChecks -- .
       - name: Verify disposable test project generation
         run: python3 Tools~/create_validation_project.py
+      - name: Verify validation-tool regression tests
+        run: python3 -B -m unittest discover -s Tools~/tests -v
       - name: Report Unity validation availability
         id: license
         env:

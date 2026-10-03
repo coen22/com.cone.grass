@@ -6,6 +6,7 @@ using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.SceneManagement;
 
 /// <summary>Persistent, single-view grass rendering for the URP RenderGraph path.</summary>
 public class GrassDataRendererFeature : ScriptableRendererFeature
@@ -29,25 +30,33 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
     {
+        grassPass?.PruneCameras();
         InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-        if (!owner || !owner.isActiveAndEnabled)
+        if (!owner || !owner.IsReadyForRendering)
         {
             grassPass?.ReleaseCameras();
             return;
         }
 
         Camera camera = renderingData.cameraData.camera;
-        if (grassPass == null || !owner.grassMaterial || !computeShader ||
-            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing ||
+        if (grassPass == null || !(renderer is UniversalRenderer) || !owner.grassMaterial || !computeShader ||
+            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer ||
             camera == null || camera.stereoEnabled ||
             renderingData.cameraData.renderType != CameraRenderType.Base ||
             (camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) ||
             (camera.cameraType == CameraType.SceneView && !owner.renderInSceneView))
             return;
 
-        bool contacts = owner.contactShadows != null && owner.contactShadows.enabled &&
-            owner.contactShadows.strength > 0f;
-        grassPass.ConfigureInput(contacts ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None);
+        bool contacts = GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
+        bool motion = grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
+            renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,
+            owner.motionVectors);
+        ScriptableRenderPassInput inputs = contacts || motion ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None;
+        if (motion)
+            inputs |= ScriptableRenderPassInput.Motion;
+        // Explicit Depth schedules URP's depth copy and built-in motion producer
+        // before this pass, so grass can augment the completed vector textures.
+        grassPass.ConfigureInput(inputs);
         // The contact overlay multiplies the existing attachment without sampling camera color.
         grassPass.requiresIntermediateTexture = false;
         renderer.EnqueuePass(grassPass);
@@ -57,7 +66,6 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
     {
         grassPass?.Dispose();
         grassPass = null;
-        GrassContactShadows.Cleanup();
     }
 
     private static class Id
@@ -102,6 +110,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int TerrainHasHoles = Shader.PropertyToID("_TerrainHasHoles");
         public static readonly int InstanceOffset = Shader.PropertyToID("_GrassInstanceOffset");
         public static readonly int MainLightCascades = Shader.PropertyToID("_GrassMainLightShadowCascades");
+        public static readonly int ExplicitTime = Shader.PropertyToID("_GrassUseExplicitTime");
         public static readonly int SHAr = Shader.PropertyToID("_GrassSHAr");
         public static readonly int SHAg = Shader.PropertyToID("_GrassSHAg");
         public static readonly int SHAb = Shader.PropertyToID("_GrassSHAb");
@@ -128,6 +137,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int PlacementFalloff = Shader.PropertyToID("_PlacementEdgeFalloff");
         public static readonly int PlacementTexture = Shader.PropertyToID("_PlacementDensityTexture");
         public static readonly int PlacementGroundTexture = Shader.PropertyToID("_PlacementGroundColorTexture");
+        public static readonly int PlacementGroundMapping = Shader.PropertyToID("_PlacementGroundWorldToMask");
+        public static readonly int PlacementTerrainGroundColor = Shader.PropertyToID("_PlacementGroundColorUsesTerrainBounds");
         public static readonly int PlacementHasGround = Shader.PropertyToID("_PlacementHasGroundColor");
         public static readonly int PlacementTint = Shader.PropertyToID("_PlacementGroundTint");
         public static readonly int PlacementGroundStrength = Shader.PropertyToID("_PlacementGroundStrength");
@@ -147,9 +158,13 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
     private sealed class GrassDataPass : ScriptableRenderPass, IDisposable
     {
         private const int TileCells = 256;
-        private const int MaximumDispatchCells = 65535 * 8;
-        private const long MaximumCandidates = 64L * 1024 * 1024;
+        private const int MaximumDispatchCells = GrassDispatchMath.MaximumDispatchCells;
+        private const long MaximumCandidates = GrassDispatchMath.MaximumCandidates;
         private const long MaximumTileSearch = 16384;
+        private const int MaximumRetainedInactiveGroups = 8;
+        private const double CameraIdleSeconds = 10.0;
+        private const double GroupIdleSeconds = 3.0;
+        private const ulong VersionSeed = 14695981039346656037UL;
         private static readonly ShaderTagId LightMode = new ShaderTagId("LightMode");
 
         private readonly LayerMask surfaceLayer;
@@ -158,6 +173,15 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private readonly Dictionary<Camera, CameraState> cameras = new Dictionary<Camera, CameraState>();
         private readonly List<Camera> staleCameras = new List<Camera>();
         private readonly List<Material> sharedMaterials = new List<Material>();
+        private readonly GrassContactShadows contacts = new GrassContactShadows();
+        private readonly GrassMotionVectors motion = new GrassMotionVectors();
+        private readonly List<Renderer> modifierInventory = new List<Renderer>();
+        private Renderer[] rendererInventory;
+        private Terrain[] terrainInventory;
+        private InfiniteGrassRenderer inventoryOwner;
+        private uint inventoryOwnerRevision;
+        private uint inventoryRevision;
+        private bool inventoryDirty = true;
         private readonly int resetKernel;
         private readonly int generateKernel;
         private readonly int finalizeKernel;
@@ -168,12 +192,20 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private Mesh captureQuad;
         private bool missingPlacementWarning;
         private bool missingHeightWarning;
+        private bool disposed;
 
         public GrassDataPass(LayerMask layer, Material height, ComputeShader shader)
         {
             surfaceLayer = layer;
             heightMaterial = height;
             generationShader = shader;
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            SceneManager.sceneUnloaded += OnSceneUnloaded;
+            TerrainCallbacks.heightmapChanged += OnTerrainHeightChanged;
+            TerrainCallbacks.textureChanged += OnTerrainTextureChanged;
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.hierarchyChanged += InvalidateInventory;
+#endif
             argumentStride = GraphicsBuffer.IndirectDrawIndexedArgs.size;
             try
             {
@@ -196,7 +228,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public override void RecordRenderGraph(RenderGraph graph, ContextContainer frameData)
         {
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-            if (!owner || !owner.isActiveAndEnabled || !owner.grassMaterial || !kernelsValid)
+            if (disposed || !owner || !owner.IsReadyForRendering || !owner.grassMaterial || !kernelsValid)
                 return;
 
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
@@ -212,9 +244,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 state = new CameraState(camera);
                 cameras.Add(camera, state);
             }
-            state.LastFrame = Time.frameCount;
+            state.LastUsedTime = Time.realtimeSinceStartupAsDouble;
             state.ImportedTextures.Clear();
-            state.FrameTextureDependencies.Clear();
 
             bool authored = owner.placementMode == GrassPlacementMode.AuthoredAreas;
             if (authored && !EnsurePlacementMaterial())
@@ -224,8 +255,18 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             if (meshes == null || meshes.Length != 3 || !meshes[0] || !meshes[1] || !meshes[2])
                 return;
 
+            long positionBytes = (long)owner.Capacity * sizeof(float) * 4;
+            if (positionBytes > SystemInfo.maxGraphicsBufferSize)
+            {
+                if (!state.WarnedBufferLimit)
+                    Debug.LogWarning("The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.", owner);
+                state.WarnedBufferLimit = true;
+                return;
+            }
+            state.WarnedBufferLimit = false;
+            bool ownerChanged = state.Owner != owner;
             bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
-            state.UpdateMaterial(owner,
+            bool materialChanged = state.UpdateMaterial(owner,
                 graph.GetTextureDesc(resources.activeColorTexture).msaaSamples != MSAASamples.None);
             int forwardPass = state.BladeMaterial.FindPass("GrassForward");
             if (forwardPass < 0)
@@ -238,43 +279,54 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 return;
             }
 
-            float spacing = Mathf.Max(0.001f, owner.spacing);
-            float distanceLimit = Mathf.Max(0.01f, owner.drawDistance);
-            float capturePadding = Mathf.Max(0.01f, owner.textureUpdateThreshold);
+            float spacing = Mathf.Max(0.001f, FiniteOr(owner.spacing, 0.1f));
+            float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f));
+            float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.textureUpdateThreshold, 10f));
+            if (ownerChanged || materialChanged || state.MotionSpacing != spacing)
+                motion.ResetHistory(camera);
+            state.MotionSpacing = spacing;
             Vector3 cameraPosition = camera.transform.position;
+            if (!IsFinite(cameraPosition))
+                return;
             Vector2 center = new Vector2(Mathf.Floor(cameraPosition.x / capturePadding) * capturePadding,
                 Mathf.Floor(cameraPosition.z / capturePadding) * capturePadding);
             float extent = distanceLimit + capturePadding;
+            if (!IsFinite(new Vector3(center.x, extent * 2f, center.y)))
+                return;
             Bounds captureBounds = new Bounds(new Vector3(center.x, 0f, center.y),
                 new Vector3(2f * extent, 0f, 2f * extent));
 
             // Capture the complete window, not just this frame's view. Rotating a
             // stationary camera must not reveal regions missing from cached maps.
-            CollectSources(state, captureBounds);
-            bool staticDirty = allocationChanged || !state.CacheValid ||
+            EnsureInventory(owner);
+            state.CaptureRenderers = rendererInventory;
+            state.ModifierRenderers = modifierInventory;
+            CollectSources(state, captureBounds, authored);
+            CollectSurfaceTerrains(state, captureBounds, authored);
+            bool captureMappingChanged = allocationChanged || !state.CacheValid ||
                 state.Owner != owner || state.Center != center ||
                 state.CaptureExtent != extent || state.CaptureRange != owner.captureHeightRange ||
-                state.Authored != authored || state.OwnerRevision != owner.Revision ||
-                state.PlacementRevision != GrassPlacementArea.Revision;
-            if (staticDirty || state.CaptureRenderers == null)
-            {
-                // Runtime source creation/material replacement can explicitly call
-                // InfiniteGrassRenderer.RefreshGrassData to refresh this inventory.
-                state.CaptureRenderers = UnityEngine.Object.FindObjectsByType<Renderer>(
-                    FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-                RebuildModifierInventory(state);
-            }
+                state.Authored != authored;
+            bool inventoryChanged = state.InventoryRevision != inventoryRevision;
+            bool refreshRequested = state.OwnerRevision != owner.Revision;
+            bool groundDirty = captureMappingChanged || refreshRequested || state.GroundVersion != state.NextGroundVersion;
 
-            float minHeight = Mathf.Min(owner.captureHeightRange.x, owner.captureHeightRange.y);
-            float maxHeight = Mathf.Max(owner.captureHeightRange.x, owner.captureHeightRange.y);
-            for (int i = 0; i < state.ActiveGroups.Count; i++)
+            float minHeight = Mathf.Min(FiniteOr(owner.captureHeightRange.x, -100f), FiniteOr(owner.captureHeightRange.y, 1000f));
+            float maxHeight = Mathf.Max(FiniteOr(owner.captureHeightRange.x, -100f), FiniteOr(owner.captureHeightRange.y, 1000f));
+            for (int i = 0; i < state.SurfaceTerrains.Count; i++)
             {
-                Terrain terrain = state.ActiveGroups[i].Terrain;
+                Terrain terrain = state.SurfaceTerrains[i];
                 if (!terrain || !terrain.terrainData)
                     continue;
-                minHeight = Mathf.Min(minHeight, terrain.transform.position.y);
-                maxHeight = Mathf.Max(maxHeight, terrain.transform.position.y + terrain.terrainData.size.y);
+                Vector3 origin = terrain.transform.position;
+                Vector3 size = terrain.terrainData.size;
+                if (!IsFinite(origin) || !IsFinite(size))
+                    continue;
+                minHeight = Mathf.Min(minHeight, origin.y);
+                maxHeight = Mathf.Max(maxHeight, origin.y + size.y);
             }
+            if (!IsFinite(new Vector3(minHeight, maxHeight, maxHeight - minHeight + 2f)))
+                return;
             captureBounds.SetMinMax(new Vector3(center.x - extent, minHeight, center.y - extent),
                 new Vector3(center.x + extent, Mathf.Max(minHeight + 1f, maxHeight), center.y + extent));
             Matrix4x4 captureVP = MakeCaptureMatrix(center, extent, captureBounds.min.y, captureBounds.max.y);
@@ -297,27 +349,41 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 TerrainGroup group = state.ActiveGroups[i];
                 if (i == 0)
                 {
-                    group.DensityMap?.Release();
-                    group.DensityMap = null;
+                    if (state.PrimaryDensityGroup != group)
+                        group.DensityCaptured = false;
+                    if (!group.UsesPrimaryDensity)
+                    {
+                        group.DensityMap?.Release();
+                        group.DensityMap = null;
+                        group.DensityCaptured = false;
+                    }
+                    group.UsesPrimaryDensity = true;
                     group.DensityTexture = density;
                 }
                 else
                 {
-                    staticDirty |= CameraState.Allocate(ref group.DensityMap, state.Density.rt.width,
+                    bool reallocated = CameraState.Allocate(ref group.DensityMap, state.Density.rt.width,
                         GraphicsFormat.R8_UNorm, "Grass Surface Density");
+                    if (group.UsesPrimaryDensity || reallocated)
+                        group.DensityCaptured = false;
+                    group.UsesPrimaryDensity = false;
                     group.DensityTexture = graph.ImportTexture(group.DensityMap);
                 }
+                group.DensityDirty = captureMappingChanged || refreshRequested || !group.DensityCaptured ||
+                    group.CapturedDensityVersion != group.DensityVersion;
             }
-            bool recaptureHeight = staticDirty || !owner.cacheSurfaceData;
-            bool recaptureModifiers = staticDirty || owner.updateModifiersEveryFrame;
+            state.PrimaryDensityGroup = state.ActiveGroups.Count > 0 ? state.ActiveGroups[0] : null;
+            bool recaptureHeight = captureMappingChanged || inventoryChanged || state.SurfaceDirty ||
+                state.SurfaceVersion != state.NextSurfaceVersion || !owner.cacheSurfaceData;
+            bool recaptureModifiers = captureMappingChanged || inventoryChanged || owner.updateModifiersEveryFrame;
 
             if (recaptureHeight)
             {
                 CollectRendererDraws(state, captureBounds, true, false, authored);
                 BuildHeightCapture(graph, state, height, heightDepth, captureVP);
             }
-            if (staticDirty)
-                BuildPlacementCapture(graph, state, density, ground, captureVP, authored);
+            BuildPlacementCapture(graph, state, density, ground, captureVP, authored, groundDirty,
+                captureMappingChanged || state.HadDensitySources != (state.ActiveGroups.Count > 0));
             if (recaptureModifiers)
             {
                 CollectRendererDraws(state, captureBounds, false, true, authored);
@@ -333,9 +399,16 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.CaptureRange = owner.captureHeightRange;
             state.Authored = authored;
             state.OwnerRevision = owner.Revision;
-            state.PlacementRevision = GrassPlacementArea.Revision;
+            state.InventoryRevision = inventoryRevision;
+            state.SurfaceVersion = state.NextSurfaceVersion;
+            state.GroundVersion = state.NextGroundVersion;
+            state.SurfaceDirty = false;
+            state.HadDensitySources = state.ActiveGroups.Count > 0;
 
-            float bladeRadius = CalculateBladeRadius(state.BladeMaterial, owner, camera);
+            float scaledHeight = Mathf.Max(1, cameraData.scaledHeight);
+            if (camera.allowDynamicResolution)
+                scaledHeight *= Mathf.Clamp(ScalableBufferManager.heightScaleFactor, 0.01f, 1f);
+            float bladeRadius = CalculateBladeRadius(state.BladeMaterial, owner, camera, scaledHeight);
             Bounds cameraBounds = CalculateCameraBounds(camera, distanceLimit, bladeRadius);
             owner.cameraBounds = cameraBounds;
             GeometryUtility.CalculateFrustumPlanes(camera, state.Planes);
@@ -388,58 +461,147 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 });
             }
 
-            GrassContactShadows.Record(graph, frameData, positions, arguments, state.Positions,
+            if (WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
+                    cameraData.cameraTargetDescriptor.msaaSamples, owner.motionVectors))
+                motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
+                    state.Counts, state.Arguments, meshes, state.BladeMaterial, state.DrawProperties,
+                    state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing);
+            contacts.Record(graph, frameData, positions, arguments, state.Positions,
                 state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.contactShadows,
                 state.VertexTextures);
             BuildReadback(graph, state, counts, owner);
             state.PruneTextureWrappers();
         }
 
-        private void CollectSources(CameraState state, Bounds captureBounds)
+        public bool WantsMotion(Camera camera, bool postProcessEnabled, AntialiasingMode antialiasing,
+            int msaaSamples, GrassMotionVectors.Settings settings)
+        {
+            bool requested = GrassMotionVectors.IsRequested(camera, postProcessEnabled, antialiasing, msaaSamples, settings);
+            if (!requested)
+                motion.Release(camera);
+            return requested;
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode) => InvalidateInventory();
+        private void OnSceneUnloaded(Scene scene) => InvalidateInventory();
+        private void InvalidateInventory() => inventoryDirty = true;
+
+        private void OnTerrainHeightChanged(Terrain terrain, RectInt region, bool synched) => MarkTerrainSurfaceDirty(terrain);
+
+        private void OnTerrainTextureChanged(Terrain terrain, string textureName, RectInt region, bool synched)
+        {
+            if (textureName == TerrainData.HolesTextureName)
+                MarkTerrainSurfaceDirty(terrain);
+        }
+
+        private void MarkTerrainSurfaceDirty(Terrain terrain)
+        {
+            foreach (CameraState state in cameras.Values)
+                if (state.SurfaceTerrains.Contains(terrain))
+                    state.SurfaceDirty = true;
+        }
+
+        private void EnsureInventory(InfiniteGrassRenderer owner)
+        {
+            // Paint/MicroVerse source revisions and camera movement never trigger
+            // scene discovery. New runtime renderers/material assignments can
+            // explicitly request discovery with owner.RefreshGrassData().
+            if (!inventoryDirty && inventoryOwner == owner && inventoryOwnerRevision == owner.Revision)
+                return;
+            rendererInventory = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+            terrainInventory = Terrain.activeTerrains;
+            RebuildModifierInventory();
+            inventoryOwner = owner;
+            inventoryOwnerRevision = owner.Revision;
+            inventoryDirty = false;
+            unchecked { inventoryRevision++; }
+        }
+
+        private void CollectSources(CameraState state, Bounds captureBounds, bool authored)
         {
             state.Sources.Clear();
             state.ActiveGroups.Clear();
             state.ExplicitSurfaces.Clear();
             state.HasMeshSurfaceFallback = false;
+            state.NextGroundVersion = VersionSeed;
+            state.NextSurfaceVersion = VersionSeed;
             foreach (TerrainGroup group in state.Groups.Values)
+            {
                 group.Sources.Clear();
+                group.DensityVersion = VersionSeed;
+            }
 
             IReadOnlyList<GrassPlacementArea> areas = GrassPlacementArea.ActiveAreas;
-            for (int i = 0; i < areas.Count; i++)
+            for (int i = 0; authored && i < areas.Count; i++)
             {
                 GrassPlacementArea area = areas[i];
-                if (!area || !area.TryGetCaptureData(out GrassPlacementDrawData data) ||
+                if (!area || !area.IntersectsCoverage(captureBounds) ||
+                    !area.TryGetCaptureData(out GrassPlacementDrawData data) ||
                     !IntersectsXZ(data.WorldBounds, captureBounds))
                     continue;
                 var source = new PlacementSource { Area = area, Data = data };
                 state.Sources.Add(source);
+                uint sourceHash = unchecked((uint)area.GetEntityId().GetHashCode());
+                state.NextGroundVersion = MixVersion(MixVersion(state.NextGroundVersion, sourceHash), area.GroundColorRevision);
+                state.NextSurfaceVersion = MixVersion(MixVersion(state.NextSurfaceVersion, sourceHash), area.SurfaceRevision);
                 if (!data.Terrain)
                 {
                     Renderer supportingRenderer = area.PaintSurface ? area.PaintSurface.GetComponent<Renderer>() : null;
                     if (!supportingRenderer && area.PaintSurface)
                         supportingRenderer = area.PaintSurface.GetComponentInParent<Renderer>();
                     if (supportingRenderer)
+                    {
                         state.ExplicitSurfaces.Add(supportingRenderer);
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                            unchecked((uint)supportingRenderer.GetEntityId().GetHashCode()));
+                        uint visibility = (supportingRenderer.enabled ? 1u : 0u) |
+                            (supportingRenderer.forceRenderingOff ? 2u : 0u) |
+                            (supportingRenderer.gameObject.activeInHierarchy ? 4u : 0u) |
+                            ((uint)supportingRenderer.gameObject.layer << 3);
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, visibility);
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                            unchecked((uint)supportingRenderer.localToWorldMatrix.GetHashCode()));
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                            unchecked((uint)supportingRenderer.bounds.GetHashCode()));
+                        Mesh supportingMesh = supportingRenderer is SkinnedMeshRenderer skinned ? skinned.sharedMesh :
+                            (supportingRenderer.TryGetComponent(out MeshFilter filter) ? filter.sharedMesh : null);
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                            supportingMesh ? unchecked((uint)supportingMesh.GetEntityId().GetHashCode()) : 0u);
+                    }
                     else
                         state.HasMeshSurfaceFallback = true;
                 }
-                int key = data.Terrain ? data.Terrain.GetInstanceID() : 0;
+                EntityId key = data.Terrain ? data.Terrain.GetEntityId() : EntityId.None;
                 if (!state.Groups.TryGetValue(key, out TerrainGroup group))
                 {
-                    group = new TerrainGroup();
+                    group = new TerrainGroup { Key = key };
                     state.Groups.Add(key, group);
                 }
                 if (group.Sources.Count == 0)
                 {
                     group.Terrain = data.Terrain;
+                    group.LastUsedTime = state.LastUsedTime;
                     state.ActiveGroups.Add(group);
                 }
                 group.Sources.Add(source);
+                group.DensityVersion = MixVersion(MixVersion(group.DensityVersion, sourceHash), area.DensityRevision);
             }
+            // Keep the shared primary-density texture assigned to a stable group
+            // even when source registration order changes.
+            state.ActiveGroups.Sort(GroupKeyComparer.Instance);
             state.StaleGroupKeys.Clear();
-            foreach (KeyValuePair<int, TerrainGroup> pair in state.Groups)
+            state.InactiveGroups.Clear();
+            foreach (KeyValuePair<EntityId, TerrainGroup> pair in state.Groups)
                 if (pair.Value.Sources.Count == 0)
-                    state.StaleGroupKeys.Add(pair.Key);
+                {
+                    if (state.LastUsedTime - pair.Value.LastUsedTime > GroupIdleSeconds)
+                        state.StaleGroupKeys.Add(pair.Key);
+                    else
+                        state.InactiveGroups.Add(pair.Value);
+                }
+            state.InactiveGroups.Sort(GroupAgeComparer.Instance);
+            for (int i = 0; i < state.InactiveGroups.Count - MaximumRetainedInactiveGroups; i++)
+                state.StaleGroupKeys.Add(state.InactiveGroups[i].Key);
             for (int i = 0; i < state.StaleGroupKeys.Count; i++)
             {
                 TerrainGroup inactive = state.Groups[state.StaleGroupKeys[i]];
@@ -448,46 +610,107 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             }
         }
 
+        private void CollectSurfaceTerrains(CameraState state, Bounds captureBounds, bool authored)
+        {
+            state.SurfaceTerrains.Clear();
+            for (int i = 0; i < state.ActiveGroups.Count; i++)
+            {
+                Terrain terrain = state.ActiveGroups[i].Terrain;
+                if (terrain && terrain.terrainData)
+                    state.SurfaceTerrains.Add(terrain);
+            }
+            if (!authored || state.HasMeshSurfaceFallback)
+            {
+                for (int i = 0; terrainInventory != null && i < terrainInventory.Length; i++)
+                {
+                    Terrain terrain = terrainInventory[i];
+                    if (!terrain || !terrain.isActiveAndEnabled || !terrain.terrainData ||
+                        !terrain.gameObject.scene.IsValid() || !terrain.gameObject.scene.isLoaded ||
+                        (surfaceLayer.value & (1 << terrain.gameObject.layer)) == 0 ||
+                        state.SurfaceTerrains.Contains(terrain))
+                        continue;
+#if UNITY_EDITOR
+                    if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(terrain.gameObject.scene))
+                        continue;
+#endif
+                    Bounds bounds = new Bounds(terrain.transform.position + terrain.terrainData.size * 0.5f,
+                        terrain.terrainData.size);
+                    if (IntersectsXZ(bounds, captureBounds))
+                        state.SurfaceTerrains.Add(terrain);
+                }
+            }
+            for (int i = 0; i < state.SurfaceTerrains.Count; i++)
+            {
+                Terrain terrain = state.SurfaceTerrains[i];
+                TerrainData data = terrain.terrainData;
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, unchecked((uint)terrain.GetEntityId().GetHashCode()));
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, unchecked((uint)terrain.transform.position.GetHashCode()));
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, unchecked((uint)data.size.GetHashCode()));
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, unchecked((uint)data.GetEntityId().GetHashCode()));
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                    data.heightmapTexture ? unchecked((uint)data.heightmapTexture.GetEntityId().GetHashCode()) : 0u);
+                state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
+                    data.holesTexture ? unchecked((uint)data.holesTexture.GetEntityId().GetHashCode()) : 0u);
+            }
+        }
+
+        private static ulong MixVersion(ulong hash, uint value) => unchecked((hash ^ value) * 1099511628211UL);
+
         private void CollectRendererDraws(CameraState state, Bounds captureBounds, bool heights, bool modifiers, bool authored)
         {
-            if (heights) state.HeightDraws.Clear();
+            if (heights)
+            {
+                state.HeightDraws.Clear();
+                state.RequiresMeshHeight = false;
+                // Explicit supporting renderers do not need a selected layer or
+                // a scene-inventory refresh after they are assigned at runtime.
+                if (authored)
+                    foreach (Renderer renderer in state.ExplicitSurfaces)
+                        CollectRendererDraws(state, renderer, captureBounds, true, false);
+                if (!authored || state.HasMeshSurfaceFallback)
+                    for (int i = 0; state.CaptureRenderers != null && i < state.CaptureRenderers.Length; i++)
+                    {
+                        Renderer renderer = state.CaptureRenderers[i];
+                        if (!renderer || (surfaceLayer.value & (1 << renderer.gameObject.layer)) == 0 ||
+                            (authored && state.ExplicitSurfaces.Contains(renderer)))
+                            continue;
+                        CollectRendererDraws(state, renderer, captureBounds, true, false);
+                    }
+            }
             if (modifiers)
             {
                 state.MaskDraws.Clear();
                 state.ColorDraws.Clear();
                 state.SlopeDraws.Clear();
+                for (int i = 0; state.ModifierRenderers != null && i < state.ModifierRenderers.Count; i++)
+                    CollectRendererDraws(state, state.ModifierRenderers[i], captureBounds, false, true);
             }
-            IReadOnlyList<Renderer> renderers = heights ?
-                (IReadOnlyList<Renderer>)state.CaptureRenderers : state.ModifierRenderers;
-            if (renderers == null)
+        }
+
+        private void CollectRendererDraws(CameraState state, Renderer renderer, Bounds captureBounds,
+            bool heights, bool modifiers)
+        {
+            if (!renderer || !renderer.enabled || renderer.forceRenderingOff ||
+                !renderer.gameObject.activeInHierarchy || !renderer.gameObject.scene.IsValid() ||
+                !renderer.gameObject.scene.isLoaded || !IntersectsXZ(renderer.bounds, captureBounds))
                 return;
-            for (int i = 0; i < renderers.Count; i++)
-            {
-                Renderer renderer = renderers[i];
-                if (!renderer || !renderer.enabled || renderer.forceRenderingOff ||
-                    !renderer.gameObject.activeInHierarchy || !renderer.gameObject.scene.IsValid() ||
-                    !renderer.gameObject.scene.isLoaded || !IntersectsXZ(renderer.bounds, captureBounds))
-                    continue;
 #if UNITY_EDITOR
-                if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(renderer.gameObject.scene))
-                    continue;
+            if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(renderer.gameObject.scene))
+                return;
 #endif
-                sharedMaterials.Clear();
-                renderer.GetSharedMaterials(sharedMaterials);
-                for (int submesh = 0; submesh < sharedMaterials.Count; submesh++)
-                {
-                    Material sourceMaterial = sharedMaterials[submesh];
-                    bool selectedSurface = state.ExplicitSurfaces.Contains(renderer) ||
-                        ((!authored || state.HasMeshSurfaceFallback) &&
-                            (surfaceLayer.value & (1 << renderer.gameObject.layer)) != 0);
-                    if (heights && heightMaterial && selectedSurface)
-                        state.HeightDraws.Add(new RendererDraw(renderer, heightMaterial, submesh, 0));
-                    if (!modifiers || !sourceMaterial)
-                        continue;
-                    AddModifierDraw(state.MaskDraws, renderer, sourceMaterial, submesh, "GrassMask");
-                    AddModifierDraw(state.ColorDraws, renderer, sourceMaterial, submesh, "GrassColor");
-                    AddModifierDraw(state.SlopeDraws, renderer, sourceMaterial, submesh, "GrassSlope");
-                }
+            state.RequiresMeshHeight |= heights;
+            sharedMaterials.Clear();
+            renderer.GetSharedMaterials(sharedMaterials);
+            for (int submesh = 0; submesh < sharedMaterials.Count; submesh++)
+            {
+                Material sourceMaterial = sharedMaterials[submesh];
+                if (heights && heightMaterial)
+                    state.HeightDraws.Add(new RendererDraw(renderer, heightMaterial, submesh, 0));
+                if (!modifiers || !sourceMaterial)
+                    continue;
+                AddModifierDraw(state.MaskDraws, renderer, sourceMaterial, submesh, "GrassMask");
+                AddModifierDraw(state.ColorDraws, renderer, sourceMaterial, submesh, "GrassColor");
+                AddModifierDraw(state.SlopeDraws, renderer, sourceMaterial, submesh, "GrassSlope");
             }
         }
 
@@ -499,12 +722,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 draws.Add(new RendererDraw(renderer, material, submesh, pass));
         }
 
-        private void RebuildModifierInventory(CameraState state)
+        private void RebuildModifierInventory()
         {
-            state.ModifierRenderers.Clear();
-            for (int i = 0; i < state.CaptureRenderers.Length; i++)
+            modifierInventory.Clear();
+            for (int i = 0; i < rendererInventory.Length; i++)
             {
-                Renderer renderer = state.CaptureRenderers[i];
+                Renderer renderer = rendererInventory[i];
                 if (!renderer)
                     continue;
                 sharedMaterials.Clear();
@@ -515,7 +738,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     if (!material || (FindModifierPass(material, "GrassMask") < 0 &&
                         FindModifierPass(material, "GrassColor") < 0 && FindModifierPass(material, "GrassSlope") < 0))
                         continue;
-                    state.ModifierRenderers.Add(renderer);
+                    modifierInventory.Add(renderer);
                     break;
                 }
             }
@@ -540,36 +763,57 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private void BuildHeightCapture(RenderGraph graph, CameraState state, TextureHandle height,
             TextureHandle depth, Matrix4x4 captureVP)
         {
-            if (!heightMaterial && !missingHeightWarning)
+            if (!heightMaterial && state.RequiresMeshHeight && !missingHeightWarning)
             {
                 Debug.LogWarning("Grass mesh surfaces require the height capture material. Explicit Terrain areas still use TerrainData.");
                 missingHeightWarning = true;
             }
             BuildRendererCapture(graph, state, "Grass Surface Height", state.HeightDraws, height, depth, captureVP, Color.clear);
-            if (!EnsurePlacementMaterial())
+            if (state.SurfaceTerrains.Count == 0 || !EnsurePlacementMaterial())
                 return;
             int terrainPass = placementMaterial.FindPass("TerrainHeight");
             if (terrainPass < 0)
                 return;
 
+            state.TerrainDraws.Clear();
+            for (int i = 0; i < state.SurfaceTerrains.Count; i++)
+            {
+                Terrain terrain = state.SurfaceTerrains[i];
+                TerrainData data = terrain ? terrain.terrainData : null;
+                if (!data || !data.heightmapTexture)
+                    continue;
+                Vector3 origin = terrain.transform.position;
+                Vector3 size = data.size;
+                if (!IsFinite(origin) || !IsFinite(size) || size.x <= 0f || size.z <= 0f)
+                    continue;
+                Texture heightmap = data.heightmapTexture;
+                Texture holes = data.holesTexture;
+                state.TerrainDraws.Add(new TerrainDraw
+                {
+                    Origin = origin,
+                    Size = size,
+                    Height = ImportTexture(graph, state, heightmap),
+                    Holes = ImportTexture(graph, state, holes ? holes : Texture2D.whiteTexture),
+                    HasHoles = holes,
+                    HeightTexelSize = new Vector4(1f / heightmap.width, 1f / heightmap.height, heightmap.width, heightmap.height),
+                    LocalToWorld = Matrix4x4.TRS(origin + new Vector3(size.x * 0.5f, 0f, size.z * 0.5f),
+                        Quaternion.identity, new Vector3(size.x, 1f, size.z))
+                });
+            }
+            if (state.TerrainDraws.Count == 0)
+                return;
             using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<TerrainCapturePass>(
                        "Grass Terrain Surface Height", out TerrainCapturePass pass))
             {
-                pass.Groups = state.ActiveGroups;
+                pass.Draws = state.TerrainDraws;
                 pass.Quad = captureQuad;
                 pass.Material = placementMaterial;
                 pass.PassIndex = terrainPass;
                 pass.CaptureVP = captureVP;
-                for (int i = 0; i < pass.Groups.Count; i++)
+                for (int i = 0; i < pass.Draws.Count; i++)
                 {
-                    TerrainGroup group = pass.Groups[i];
-                    if (!group.Terrain || !group.Terrain.terrainData)
-                        continue;
-                    TerrainData data = group.Terrain.terrainData;
-                    group.HeightTexture = ImportTexture(graph, state, data.heightmapTexture);
-                    group.HolesTexture = ImportTexture(graph, state, data.holesTexture ? data.holesTexture : Texture2D.whiteTexture);
-                    builder.UseTexture(group.HeightTexture, AccessFlags.Read);
-                    builder.UseTexture(group.HolesTexture, AccessFlags.Read);
+                    builder.UseTexture(pass.Draws[i].Height, AccessFlags.Read);
+                    builder.UseTexture(pass.Draws[i].Holes, AccessFlags.Read);
                 }
                 builder.SetRenderAttachment(height, 0, AccessFlags.ReadWrite);
                 builder.SetRenderAttachmentDepth(depth, AccessFlags.ReadWrite);
@@ -577,28 +821,21 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 builder.SetRenderFunc(static (TerrainCapturePass data, RasterGraphContext context) =>
                 {
                     context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
-                    for (int i = 0; i < data.Groups.Count; i++)
+                    for (int i = 0; i < data.Draws.Count; i++)
                     {
-                        Terrain terrain = data.Groups[i].Terrain;
-                        if (!terrain || !terrain.terrainData)
-                            continue;
-                        TerrainData terrainData = terrain.terrainData;
-                        Vector3 origin = terrain.transform.position;
-                        Vector3 size = terrainData.size;
+                        TerrainDraw draw = data.Draws[i];
+                        Vector3 origin = draw.Origin;
+                        Vector3 size = draw.Size;
                         MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
                         properties.SetVector(Id.PlacementTerrain, new Vector4(origin.x, origin.z, size.x, size.z));
                         properties.SetInteger(Id.PlacementHasTerrain, 1);
-                        properties.SetTexture(Id.PlacementHeight, data.Groups[i].HeightTexture);
-                        Texture heightmap = terrainData.heightmapTexture;
-                        properties.SetVector(Id.PlacementHeightTexelSize, new Vector4(1f / heightmap.width,
-                            1f / heightmap.height, heightmap.width, heightmap.height));
-                        properties.SetTexture(Id.PlacementHoles, data.Groups[i].HolesTexture);
-                        properties.SetInteger(Id.PlacementHasHoles, terrainData.holesTexture ? 1 : 0);
+                        properties.SetTexture(Id.PlacementHeight, draw.Height);
+                        properties.SetVector(Id.PlacementHeightTexelSize, draw.HeightTexelSize);
+                        properties.SetTexture(Id.PlacementHoles, draw.Holes);
+                        properties.SetInteger(Id.PlacementHasHoles, draw.HasHoles ? 1 : 0);
                         properties.SetFloat(Id.PlacementOriginY, origin.y);
                         properties.SetFloat(Id.PlacementHeightRange, size.y);
-                        Matrix4x4 matrix = Matrix4x4.TRS(origin + new Vector3(size.x * 0.5f, 0f, size.z * 0.5f),
-                            Quaternion.identity, new Vector3(size.x, 1f, size.z));
-                        context.cmd.DrawMesh(data.Quad, matrix, data.Material, 0, data.PassIndex, properties);
+                        context.cmd.DrawMesh(data.Quad, draw.LocalToWorld, data.Material, 0, data.PassIndex, properties);
                     }
                 });
             }
@@ -642,65 +879,86 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         }
 
         private void BuildPlacementCapture(RenderGraph graph, CameraState state, TextureHandle density,
-            TextureHandle ground, Matrix4x4 captureVP, bool authored)
+            TextureHandle ground, Matrix4x4 captureVP, bool authored, bool groundDirty, bool clearEmptyDensity)
         {
-            state.FrameTextureDependencies.Clear();
-            for (int i = 0; i < state.Sources.Count; i++)
+            if (authored)
             {
-                GrassPlacementDrawData source = state.Sources[i].Data;
-                AddTextureDependency(graph, state, source.DensityTexture);
-                AddTextureDependency(graph, state, source.GroundColorTexture);
-                AddTextureDependency(graph, state, source.GroundLayerTexture);
-            }
-            int outputCount = 2 + Mathf.Max(0, state.ActiveGroups.Count - 1);
-            for (int output = 0; output < outputCount; output++)
-            {
-                using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<PlacementCapturePass>(
-                           output == 1 ? "Grass Ground Color" : "Grass Authored Surface Density", out PlacementCapturePass pass))
+                for (int i = 0; i < state.ActiveGroups.Count; i++)
                 {
-                    pass.Sources = output == 1 || state.ActiveGroups.Count == 0 ? state.Sources :
-                        state.ActiveGroups[output == 0 ? 0 : output - 1].Sources;
-                    pass.Quad = captureQuad;
-                    pass.Material = placementMaterial;
-                    pass.CaptureVP = captureVP;
-                    pass.PassIndex = output == 1 ? 1 : 0;
-                    pass.DrawSources = authored && placementMaterial;
-                    foreach (TextureHandle texture in state.FrameTextureDependencies)
-                        builder.UseTexture(texture, AccessFlags.Read);
-                    TextureHandle target = output == 1 ? ground :
-                        (output == 0 ? density : state.ActiveGroups[output - 1].DensityTexture);
-                    builder.SetRenderAttachment(target, 0, AccessFlags.Write);
-                    builder.AllowGlobalStateModification(true);
-                    builder.SetRenderFunc(static (PlacementCapturePass data, RasterGraphContext context) =>
-                    {
-                        context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
-                        context.cmd.ClearRenderTarget(false, true, Color.clear);
-                        if (!data.DrawSources)
-                            return;
-                        for (int i = 0; i < data.Sources.Count; i++)
-                        {
-                            GrassPlacementDrawData source = data.Sources[i].Data;
-                            MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
-                            properties.SetMatrix(Id.PlacementMapping, source.WorldToMask);
-                            properties.SetVector(Id.PlacementTerrain, source.TerrainRect);
-                            properties.SetInteger(Id.PlacementHasTerrain, source.Terrain ? 1 : 0);
-                            properties.SetInteger(Id.PlacementShape, (int)source.Shape);
-                            properties.SetFloat(Id.PlacementDensity, source.Density);
-                            properties.SetFloat(Id.PlacementFalloff, source.EdgeFalloff);
-                            properties.SetTexture(Id.PlacementTexture, source.DensityTexture ? source.DensityTexture : Texture2D.whiteTexture);
-                            properties.SetTexture(Id.PlacementGroundTexture, source.GroundColorTexture ? source.GroundColorTexture : Texture2D.whiteTexture);
-                            properties.SetInteger(Id.PlacementHasGround, source.GroundColorTexture ? 1 : 0);
-                            properties.SetColor(Id.PlacementTint, source.GroundTint);
-                            properties.SetFloat(Id.PlacementGroundStrength, source.GroundColorStrength);
-                            properties.SetTexture(Id.PlacementLayer, source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture);
-                            properties.SetInteger(Id.PlacementHasLayer, source.GroundLayerTexture ? 1 : 0);
-                            properties.SetVector(Id.PlacementLayerUV, source.GroundLayerUV);
-                            properties.SetVector(Id.PlacementRemapMin, source.GroundLayerRemapMin);
-                            properties.SetVector(Id.PlacementRemapMax, source.GroundLayerRemapMax);
-                            context.cmd.DrawMesh(data.Quad, source.LocalToWorld, data.Material, 0, data.PassIndex, properties);
-                        }
-                    });
+                    TerrainGroup group = state.ActiveGroups[i];
+                    if (!group.DensityDirty)
+                        continue;
+                    BuildPlacementCapture(graph, state, group.Sources, group.DensityTexture,
+                        captureVP, 0, true);
+                    group.DensityCaptured = true;
+                    group.CapturedDensityVersion = group.DensityVersion;
                 }
+            }
+            if ((!authored || state.ActiveGroups.Count == 0) && clearEmptyDensity)
+                BuildPlacementCapture(graph, state, state.Sources, density, captureVP, 0, false);
+            if (groundDirty)
+                BuildPlacementCapture(graph, state, state.Sources, ground, captureVP, 1, authored);
+        }
+
+        private void BuildPlacementCapture(RenderGraph graph, CameraState state,
+            List<PlacementSource> sources, TextureHandle target, Matrix4x4 captureVP, int passIndex, bool drawSources)
+        {
+            using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<PlacementCapturePass>(
+                       passIndex == 1 ? "Grass Ground Color" : "Grass Authored Surface Density", out PlacementCapturePass pass))
+            {
+                pass.Sources = sources;
+                pass.Quad = captureQuad;
+                pass.Material = placementMaterial;
+                pass.CaptureVP = captureVP;
+                pass.PassIndex = passIndex;
+                pass.DrawSources = drawSources && placementMaterial;
+                // Each map imports only its own source textures. Static maps do
+                // not keep wrappers or unrelated source inputs alive every frame.
+                for (int i = 0; pass.DrawSources && i < sources.Count; i++)
+                {
+                    GrassPlacementDrawData source = sources[i].Data;
+                    if (source.DensityTexture)
+                        builder.UseTexture(ImportTexture(graph, state, source.DensityTexture), AccessFlags.Read);
+                    if (passIndex != 1)
+                        continue;
+                    if (source.GroundColorTexture)
+                        builder.UseTexture(ImportTexture(graph, state, source.GroundColorTexture), AccessFlags.Read);
+                    if (source.GroundLayerTexture)
+                        builder.UseTexture(ImportTexture(graph, state, source.GroundLayerTexture), AccessFlags.Read);
+                }
+                builder.SetRenderAttachment(target, 0, AccessFlags.Write);
+                builder.AllowGlobalStateModification(true);
+                builder.SetRenderFunc(static (PlacementCapturePass data, RasterGraphContext context) =>
+                {
+                    context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
+                    context.cmd.ClearRenderTarget(false, true, Color.clear);
+                    if (!data.DrawSources)
+                        return;
+                    for (int i = 0; i < data.Sources.Count; i++)
+                    {
+                        GrassPlacementDrawData source = data.Sources[i].Data;
+                        MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
+                        properties.SetMatrix(Id.PlacementMapping, source.WorldToMask);
+                        properties.SetMatrix(Id.PlacementGroundMapping, source.GroundWorldToMask);
+                        properties.SetVector(Id.PlacementTerrain, source.TerrainRect);
+                        properties.SetInteger(Id.PlacementHasTerrain, source.Terrain ? 1 : 0);
+                        properties.SetInteger(Id.PlacementShape, (int)source.Shape);
+                        properties.SetFloat(Id.PlacementDensity, source.Density);
+                        properties.SetFloat(Id.PlacementFalloff, source.EdgeFalloff);
+                        properties.SetTexture(Id.PlacementTexture, source.DensityTexture ? source.DensityTexture : Texture2D.whiteTexture);
+                        properties.SetTexture(Id.PlacementGroundTexture, source.GroundColorTexture ? source.GroundColorTexture : Texture2D.whiteTexture);
+                        properties.SetInteger(Id.PlacementTerrainGroundColor, source.GroundColorUsesTerrainBounds ? 1 : 0);
+                        properties.SetInteger(Id.PlacementHasGround, source.GroundColorTexture ? 1 : 0);
+                        properties.SetColor(Id.PlacementTint, source.GroundTint);
+                        properties.SetFloat(Id.PlacementGroundStrength, source.GroundColorStrength);
+                        properties.SetTexture(Id.PlacementLayer, source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture);
+                        properties.SetInteger(Id.PlacementHasLayer, source.GroundLayerTexture ? 1 : 0);
+                        properties.SetVector(Id.PlacementLayerUV, source.GroundLayerUV);
+                        properties.SetVector(Id.PlacementRemapMin, source.GroundLayerRemapMin);
+                        properties.SetVector(Id.PlacementRemapMax, source.GroundLayerRemapMax);
+                        context.cmd.DrawMesh(data.Quad, source.LocalToWorld, data.Material, 0, data.PassIndex, properties);
+                    }
+                });
             }
         }
 
@@ -709,6 +967,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         {
             state.DispatchCount = 0;
             state.CandidateCount = 0;
+            float densityFootprint = (2f * state.CaptureExtent) / state.Density.rt.width;
             bool valid = TryGridBounds(bounds, spacing, out int minX, out int minZ, out int maxX, out int maxZ);
             if (valid && !authored)
                 valid = AddDispatch(state, null, minX, minZ, maxX - minX, maxZ - minZ);
@@ -722,7 +981,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     for (int a = 0; a < group.Sources.Count && valid; a++)
                     {
                         PlacementSource source = group.Sources[a];
-                        if (!IntersectXZ(source.Data.WorldBounds, bounds, out Bounds intersection))
+                        // The cached density map is sampled bilinearly. Its
+                        // positive footprint can reach one capture texel beyond
+                        // the authored quad, including into an adjacent cell tile.
+                        Bounds filteredBounds = GrassDispatchMath.ExpandXZ(source.Data.WorldBounds, densityFootprint);
+                        if (!IntersectXZ(filteredBounds, bounds, out Bounds intersection))
                             continue;
                         if (!TryGridBounds(intersection, spacing, out int x0, out int z0, out int x1, out int z1))
                         {
@@ -747,6 +1010,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                             Bounds tileBounds = new Bounds(
                                 new Vector3((tx + 0.5f) * TileCells * spacing, 0f, (tz + 0.5f) * TileCells * spacing),
                                 new Vector3((TileCells + 1) * spacing, 0f, (TileCells + 1) * spacing));
+                            tileBounds = GrassDispatchMath.ExpandXZ(tileBounds, densityFootprint);
                             if (!source.Area.IntersectsCoverage(tileBounds))
                                 continue;
                             group.Tiles.Add(tile);
@@ -812,10 +1076,10 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         {
             if (width <= 0 || height <= 0)
                 return true;
-            long candidates = (long)width * height;
-            if (candidates > MaximumCandidates - state.CandidateCount)
+            if (!GrassDispatchMath.TryAddCandidateBudget(state.CandidateCount, width, height,
+                    MaximumCandidates, out long updatedBudget))
                 return false;
-            state.CandidateCount += candidates;
+            state.CandidateCount = updatedBudget;
             for (int dz = 0; dz < height; dz += MaximumDispatchCells)
             for (int dx = 0; dx < width; dx += MaximumDispatchCells)
             {
@@ -860,11 +1124,13 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 pass.Spacing = spacing;
                 pass.DrawDistance = distanceLimit;
                 pass.CapturePadding = capturePadding;
-                pass.FullDensityDistance = owner.fullDensityDistance;
-                pass.DensityExponent = owner.densityFalloffExponent;
-                pass.DensityTransition = owner.densityTransition;
-                pass.LodDistances = new Vector4(owner.nearLodDistance, owner.subdivisionDistance, 0f, 0f);
-                pass.LodTransition = owner.lodTransitionWidth;
+                pass.FullDensityDistance = Mathf.Clamp(FiniteOr(owner.fullDensityDistance, 30f), 0f, distanceLimit);
+                pass.DensityExponent = Mathf.Max(0f, FiniteOr(owner.densityFalloffExponent, 4f));
+                pass.DensityTransition = Mathf.Clamp01(FiniteOr(owner.densityTransition, 0.05f));
+                float nearLod = Mathf.Max(0f, FiniteOr(owner.nearLodDistance, 30f));
+                float farLod = Mathf.Max(nearLod, FiniteOr(owner.subdivisionDistance, 100f));
+                pass.LodDistances = new Vector4(nearLod, farLod, 0f, 0f);
+                pass.LodTransition = Mathf.Max(0f, FiniteOr(owner.lodTransitionWidth, 10f));
                 pass.BoundsRadius = radius;
                 pass.Authored = authored;
                 pass.ArgumentStride = argumentStride;
@@ -922,7 +1188,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.TerrainHoles, dispatch.TerrainHoles);
                         cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.Density, dispatch.Density);
                         cmd.DispatchCompute(shader, data.GenerateKernel,
-                            (dispatch.SizeInCells[0] + 7) / 8, (dispatch.SizeInCells[1] + 7) / 8, 1);
+                            GrassDispatchMath.ThreadGroupCount(dispatch.SizeInCells[0]),
+                            GrassDispatchMath.ThreadGroupCount(dispatch.SizeInCells[1]), 1);
                     }
                     cmd.SetComputeBufferParam(shader, data.FinalizeKernel, Id.Counts, data.Counts);
                     cmd.SetComputeBufferParam(shader, data.FinalizeKernel, Id.Arguments, data.Arguments);
@@ -1010,13 +1277,13 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             return GL.GetGPUProjectionMatrix(projection, true) * view;
         }
 
-        private static float CalculateBladeRadius(Material material, InfiniteGrassRenderer owner, Camera camera)
+        private static float CalculateBladeRadius(Material material, InfiniteGrassRenderer owner, Camera camera, float scaledHeight)
         {
             float height = Mathf.Max(0f, material.GetFloat("_GrassHeight")) * (1f + Mathf.Max(0f, owner.subdivisionHeightBoost));
             float width = Mathf.Max(0f, material.GetFloat("_GrassWidth")) + Mathf.Max(0f, material.GetFloat("_ExpandDistantGrassWidth"));
             float pixelWidth = owner.minimumPixelWidth * 2f *
-                (camera.orthographic ? 1f : owner.drawDistance) /
-                Mathf.Max(1f, camera.pixelHeight * Mathf.Abs(camera.projectionMatrix.m11));
+                (camera.orthographic ? 1f : Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f))) /
+                (Mathf.Max(1f, scaledHeight) * Mathf.Max(0.001f, Mathf.Abs(camera.projectionMatrix.m11)));
             return height + Mathf.Max(width * 0.25f, pixelWidth * 0.5f) +
                 Mathf.Abs(material.GetFloat("_GrassCurving")) * 1.415f + Mathf.Max(0f, owner.cullingPadding);
         }
@@ -1044,24 +1311,25 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private static bool TryGridBounds(Bounds bounds, float spacing,
             out int minX, out int minZ, out int maxX, out int maxZ)
         {
-            double x0 = Math.Floor((double)bounds.min.x / spacing - 0.5);
-            double z0 = Math.Floor((double)bounds.min.z / spacing - 0.5);
-            double x1 = Math.Ceiling((double)bounds.max.x / spacing + 0.5) + 1;
-            double z1 = Math.Ceiling((double)bounds.max.z / spacing + 0.5) + 1;
-            const double limit = int.MaxValue / 2.0 - TileCells;
             minX = minZ = maxX = maxZ = 0;
-            if (double.IsNaN(x0 + z0 + x1 + z1) || x0 < -limit || z0 < -limit ||
-                x1 > limit || z1 > limit || x1 <= x0 || z1 <= z0)
+            if (!GrassDispatchMath.TryGetGridRange(bounds, spacing, out GrassGridRange range))
                 return false;
-            minX = (int)x0;
-            minZ = (int)z0;
-            maxX = (int)x1;
-            maxZ = (int)z1;
+            minX = range.MinX;
+            minZ = range.MinZ;
+            maxX = range.MaxX;
+            maxZ = range.MaxZ;
             return true;
         }
 
-        private static int FloorDivide(int value, int divisor) =>
-            value >= 0 ? value / divisor : (int)(((long)value - divisor + 1) / divisor);
+        private static int FloorDivide(int value, int divisor) => GrassDispatchMath.FloorDivide(value, divisor);
+
+        private static float FiniteOr(float value, float fallback) =>
+            float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
+
+        private static bool IsFinite(Vector3 value) =>
+            !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+            !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+            !float.IsNaN(value.z) && !float.IsInfinity(value.z);
 
         private static bool IntersectsXZ(Bounds a, Bounds b) =>
             a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.z <= b.max.z && a.max.z >= b.min.z;
@@ -1089,26 +1357,22 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 };
                 state.TextureWrappers.Add(texture, wrapper);
             }
-            wrapper.LastFrame = Time.frameCount;
+            wrapper.LastUsedTime = state.LastUsedTime;
             imported = graph.ImportTexture(wrapper.Handle);
             state.ImportedTextures.Add(texture, imported);
             return imported;
         }
 
-        private static void AddTextureDependency(RenderGraph graph, CameraState state, Texture texture)
+        public void PruneCameras()
         {
-            if (texture)
-                state.FrameTextureDependencies.Add(ImportTexture(graph, state, texture));
-        }
-
-        private void PruneCameras()
-        {
+            double now = Time.realtimeSinceStartupAsDouble;
             staleCameras.Clear();
             foreach (KeyValuePair<Camera, CameraState> pair in cameras)
-                if (!pair.Key || Time.frameCount - pair.Value.LastFrame > 120)
+                if (!pair.Key || now - pair.Value.LastUsedTime > CameraIdleSeconds)
                     staleCameras.Add(pair.Key);
             for (int i = 0; i < staleCameras.Count; i++)
             {
+                motion.Release(staleCameras[i]);
                 cameras[staleCameras[i]].Dispose();
                 cameras.Remove(staleCameras[i]);
             }
@@ -1116,14 +1380,29 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
         public void ReleaseCameras()
         {
-            foreach (CameraState state in cameras.Values)
-                state.Dispose();
+            foreach (KeyValuePair<Camera, CameraState> pair in cameras)
+            {
+                motion.Release(pair.Key);
+                pair.Value.Dispose();
+            }
             cameras.Clear();
         }
 
         public void Dispose()
         {
+            if (disposed)
+                return;
+            disposed = true;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            SceneManager.sceneUnloaded -= OnSceneUnloaded;
+            TerrainCallbacks.heightmapChanged -= OnTerrainHeightChanged;
+            TerrainCallbacks.textureChanged -= OnTerrainTextureChanged;
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.hierarchyChanged -= InvalidateInventory;
+#endif
             ReleaseCameras();
+            motion.Dispose();
+            contacts.Dispose();
             CoreUtils.Destroy(placementMaterial);
             CoreUtils.Destroy(captureQuad);
             placementMaterial = null;
@@ -1134,13 +1413,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         {
             public readonly Camera Camera;
             public InfiniteGrassRenderer Owner;
-            public uint OwnerRevision, PlacementRevision;
-            public bool CacheValid, WarnedBudget, WarnedMaterial, Disposed;
+            public uint OwnerRevision, InventoryRevision;
+            public ulong GroundVersion, NextGroundVersion, SurfaceVersion, NextSurfaceVersion;
+            public bool CacheValid, WarnedBudget, WarnedMaterial, WarnedBufferLimit, Disposed;
             public Vector2 Center;
             public Vector2 CaptureRange;
-            public float CaptureExtent;
-            public bool Authored, HasMeshSurfaceFallback;
-            public int LastFrame;
+            public float CaptureExtent, MotionSpacing;
+            public bool Authored, HasMeshSurfaceFallback, RequiresMeshHeight, SurfaceDirty, HadDensitySources;
+            public double LastUsedTime;
             public RTHandle Height, HeightDepth, Density, Mask, Color, Slope, Ground;
             public GraphicsBuffer Positions, Counts, Arguments;
             public Material BladeMaterial;
@@ -1155,22 +1435,25 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly MaterialPropertyBlock[] DrawProperties = { new MaterialPropertyBlock(), new MaterialPropertyBlock(), new MaterialPropertyBlock() };
             public readonly TextureHandle[] VertexTextures = new TextureHandle[5];
             public Renderer[] CaptureRenderers;
-            public readonly List<Renderer> ModifierRenderers = new List<Renderer>();
+            public IReadOnlyList<Renderer> ModifierRenderers;
             public readonly HashSet<Renderer> ExplicitSurfaces = new HashSet<Renderer>();
+            public readonly List<Terrain> SurfaceTerrains = new List<Terrain>();
+            public readonly List<TerrainDraw> TerrainDraws = new List<TerrainDraw>();
             public readonly List<RendererDraw> HeightDraws = new List<RendererDraw>();
             public readonly List<RendererDraw> MaskDraws = new List<RendererDraw>();
             public readonly List<RendererDraw> ColorDraws = new List<RendererDraw>();
             public readonly List<RendererDraw> SlopeDraws = new List<RendererDraw>();
             public readonly List<PlacementSource> Sources = new List<PlacementSource>();
-            public readonly Dictionary<int, TerrainGroup> Groups = new Dictionary<int, TerrainGroup>();
-            public readonly List<int> StaleGroupKeys = new List<int>();
+            public readonly Dictionary<EntityId, TerrainGroup> Groups = new Dictionary<EntityId, TerrainGroup>();
+            public readonly List<EntityId> StaleGroupKeys = new List<EntityId>();
             public readonly List<TerrainGroup> ActiveGroups = new List<TerrainGroup>();
+            public readonly List<TerrainGroup> InactiveGroups = new List<TerrainGroup>();
+            public TerrainGroup PrimaryDensityGroup;
             public readonly List<DispatchData> Dispatches = new List<DispatchData>();
             public int DispatchCount;
             public long CandidateCount;
             public readonly Dictionary<Texture, TextureWrapper> TextureWrappers = new Dictionary<Texture, TextureWrapper>();
             public readonly Dictionary<Texture, TextureHandle> ImportedTextures = new Dictionary<Texture, TextureHandle>();
-            public readonly HashSet<TextureHandle> FrameTextureDependencies = new HashSet<TextureHandle>();
             private readonly List<Texture> staleTextures = new List<Texture>();
             public bool ReadbackPending;
             public float NextReadbackTime;
@@ -1197,19 +1480,25 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 changed |= Allocate(ref Ground, resolution, GraphicsFormat.R16G16B16A16_SFloat, "Grass Ground Color");
 
                 int capacity = Mathf.Max(3, owner.Capacity);
-                if (Positions == null || allocatedCapacity < capacity)
+                if (Positions == null || !Positions.IsValid() || allocatedCapacity < capacity || capacity <= allocatedCapacity / 2)
                 {
                     Positions?.Dispose();
                     Positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, capacity, sizeof(float) * 4)
-                    { name = "Grass Positions " + Camera.GetInstanceID() };
+                    { name = "Grass Positions " + Camera.GetEntityId() };
                     allocatedCapacity = capacity;
                 }
-                if (Counts == null)
+                if (Counts == null || !Counts.IsValid())
+                {
+                    Counts?.Dispose();
                     Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 4, sizeof(uint)) { name = "Grass Counts" };
-                bool uploadArguments = Arguments == null;
-                if (Arguments == null)
+                }
+                bool uploadArguments = Arguments == null || !Arguments.IsValid();
+                if (uploadArguments)
+                {
+                    Arguments?.Dispose();
                     Arguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments,
                         3, argumentStride) { name = "Grass Indirect Arguments" };
+                }
                 owner.GetLodCapacity(LodCapacities, LodOffsets);
                 for (int lod = 0; lod < 3; lod++)
                 {
@@ -1232,9 +1521,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 return changed;
             }
 
-            public void UpdateMaterial(InfiniteGrassRenderer owner, bool multisampled)
+            public bool UpdateMaterial(InfiniteGrassRenderer owner, bool multisampled)
             {
-                if (!BladeMaterial || sourceMaterial != owner.grassMaterial)
+                bool changed = !BladeMaterial || sourceMaterial != owner.grassMaterial ||
+                    BladeMaterial.shader != owner.grassMaterial.shader;
+                if (changed)
                 {
                     CoreUtils.Destroy(BladeMaterial);
                     BladeMaterial = new Material(owner.grassMaterial) { hideFlags = HideFlags.HideAndDontSave };
@@ -1255,6 +1546,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 BladeMaterial.SetFloat(Id.SubdivisionBumpWidth, owner.subdivisionBumpWidth);
                 BladeMaterial.SetFloat(Id.FullDensity, owner.fullDensityDistance);
                 BladeMaterial.SetFloat(Id.DensityExponent, owner.densityFalloffExponent);
+                return changed;
             }
 
             public void SetDrawProperties(Vector2 center, float distance,
@@ -1268,6 +1560,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 {
                     MaterialPropertyBlock properties = DrawProperties[lod];
                     properties.Clear();
+                    properties.SetInteger(Id.ExplicitTime, 0);
                     properties.SetBuffer(Id.Positions, Positions);
                     properties.SetInteger(Id.InstanceOffset, LodOffsets[lod]);
                     properties.SetInteger(Id.MainLightCascades, mainLightCascades);
@@ -1294,6 +1587,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public static bool Allocate(ref RTHandle handle, int size, GraphicsFormat format,
                 string name, bool depth = false)
             {
+                if (handle != null && (handle.rt == null || !handle.rt.IsCreated()))
+                {
+                    handle.Release();
+                    handle = null;
+                }
                 if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render))
                     format = depth ? SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil) :
                         (format == GraphicsFormat.R8_UNorm ? GraphicsFormat.R8G8B8A8_UNorm : GraphicsFormat.R32G32B32A32_SFloat);
@@ -1315,7 +1613,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             private void OnReadback(AsyncGPUReadbackRequest request)
             {
                 ReadbackPending = false;
-                if (Disposed || request.hasError || !ReadbackOwner)
+                if (Disposed || request.hasError || !ReadbackOwner || !ReadbackOwner.isActiveAndEnabled ||
+                    ReadbackOwner != InfiniteGrassRenderer.Instance)
                     return;
                 var counts = request.GetData<uint>();
                 if (counts.Length < 4)
@@ -1329,7 +1628,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             {
                 staleTextures.Clear();
                 foreach (KeyValuePair<Texture, TextureWrapper> pair in TextureWrappers)
-                    if (!pair.Key || Time.frameCount - pair.Value.LastFrame > 120)
+                    if (!pair.Key || LastUsedTime - pair.Value.LastUsedTime > GroupIdleSeconds)
                         staleTextures.Add(pair.Key);
                 for (int i = 0; i < staleTextures.Count; i++)
                 {
@@ -1366,7 +1665,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private sealed class TextureWrapper
         {
             public RTHandle Handle;
-            public int LastFrame;
+            public double LastUsedTime;
         }
 
         private struct PlacementSource
@@ -1391,12 +1690,37 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
         private sealed class TerrainGroup
         {
+            public EntityId Key;
+            public double LastUsedTime;
+            public ulong DensityVersion, CapturedDensityVersion;
+            public bool UsesPrimaryDensity, DensityCaptured, DensityDirty;
             public Terrain Terrain;
             public RTHandle DensityMap;
-            public TextureHandle HeightTexture, HolesTexture, DensityTexture;
+            public TextureHandle DensityTexture;
             public readonly List<PlacementSource> Sources = new List<PlacementSource>();
             public readonly HashSet<Vector2Int> Tiles = new HashSet<Vector2Int>();
             public readonly List<Vector2Int> SortedTiles = new List<Vector2Int>();
+        }
+
+        private sealed class GroupKeyComparer : IComparer<TerrainGroup>
+        {
+            public static readonly GroupKeyComparer Instance = new GroupKeyComparer();
+            public int Compare(TerrainGroup a, TerrainGroup b) => a.Key.CompareTo(b.Key);
+        }
+
+        private sealed class GroupAgeComparer : IComparer<TerrainGroup>
+        {
+            public static readonly GroupAgeComparer Instance = new GroupAgeComparer();
+            public int Compare(TerrainGroup a, TerrainGroup b) => a.LastUsedTime.CompareTo(b.LastUsedTime);
+        }
+
+        private struct TerrainDraw
+        {
+            public Vector3 Origin, Size;
+            public TextureHandle Height, Holes;
+            public bool HasHoles;
+            public Vector4 HeightTexelSize;
+            public Matrix4x4 LocalToWorld;
         }
 
         private sealed class TileComparer : IComparer<Vector2Int>
@@ -1429,7 +1753,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
         private sealed class TerrainCapturePass
         {
-            public List<TerrainGroup> Groups;
+            public List<TerrainDraw> Draws;
             public Mesh Quad;
             public Material Material;
             public int PassIndex;

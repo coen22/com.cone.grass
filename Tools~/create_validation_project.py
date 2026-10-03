@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -22,10 +23,16 @@ def main():
     root = args.repo.resolve()
     output = args.output.resolve()
     marker = output / ".grass-validation-project"
-    if output.exists() and any(output.iterdir()) and not marker.is_file():
-        parser.error("output contains unrelated files; choose a new directory")
     if output == root or output in root.parents:
         parser.error("output cannot replace the repository or its parent")
+    for source in (root / "Integrations~/MicroVerse", root / "Tools~/UnityProject/Editor"):
+        source = source.resolve()
+        if output == source or source in output.parents:
+            parser.error("output cannot be inside a copied source directory")
+    if output.exists() and not output.is_dir():
+        parser.error("output must be a directory")
+    if output.exists() and any(output.iterdir()) and not marker.is_file():
+        parser.error("output contains unrelated files; choose a new directory")
     package = json.loads((root / "package.json").read_text())
     for directory in ("Assets", "Packages", "ProjectSettings"):
         (output / directory).mkdir(parents=True, exist_ok=True)
@@ -33,13 +40,18 @@ def main():
     # Keep the UPM dependency relative to the project's Packages directory. The
     # project and package are mounted together by GameCI at a different container
     # path, so a host absolute file: dependency would break inside the container.
-    import os
     relative_package = Path(os.path.relpath(root, output / "Packages")).as_posix()
     manifest = {
         "dependencies": {
             package["name"]: "file:" + relative_package,
             "com.unity.render-pipelines.universal": args.urp,
             "com.unity.test-framework": "1.6.0",
+            # Terrain/Collider authoring and runtime diagnostics use these
+            # built-in modules; URP does not enable them transitively.
+            "com.unity.modules.imgui": "1.0.0",
+            "com.unity.modules.physics": "1.0.0",
+            "com.unity.modules.terrain": "1.0.0",
+            "com.unity.modules.terrainphysics": "1.0.0",
         },
         "testables": [package["name"]],
     }
@@ -49,6 +61,7 @@ def main():
     if sample.exists():
         shutil.rmtree(sample)
     shutil.copytree(root / "Integrations~/MicroVerse", sample)
+    shutil.copytree(root / "Tools~/UnityProject/Editor", output / "Assets/Editor", dirs_exist_ok=True)
     print(f"Created {output} for Unity {args.unity}, URP {args.urp}.")
     print("Includes package EditMode tests and synthetic saved-mask bridge tests. Proprietary MicroVerse assemblies are not included.")
 

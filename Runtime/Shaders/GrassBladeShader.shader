@@ -247,13 +247,15 @@ Shader "InfiniteGrass/GrassBladeShader"
                 float2 shapeCoordinates : TEXCOORD0;
                 nointerpolation float coverage : TEXCOORD1;
                 nointerpolation uint seed : TEXCOORD2;
+                float3 positionWS : TEXCOORD3;
             };
 
             GrassDepthVaryings GrassContactDepthVertex(GrassAttributes input, uint instanceID : SV_InstanceID)
             {
                 GrassVertexData blade = BuildGrassVertex(input, instanceID);
                 GrassDepthVaryings output;
-                output.positionCS = TransformWorldToHClip(blade.positionWS);
+                output.positionCS = mul(_GrassContactViewProjection, float4(blade.positionWS, 1.0));
+                output.positionWS = blade.positionWS;
                 output.shapeCoordinates = blade.shapeCoordinates;
                 output.coverage = blade.coverage;
                 output.seed = blade.seed;
@@ -262,11 +264,32 @@ Shader "InfiniteGrass/GrassBladeShader"
 
             float2 GrassContactDepthFragment(GrassDepthVaryings input) : SV_Target
             {
+                float3 cameraDelta = input.positionWS - _WorldSpaceCameraPos;
+                clip(_GrassContactCasterDistance * _GrassContactCasterDistance - dot(cameraDelta, cameraDelta));
                 float coverage = GrassFragmentCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 // Fragment SV_POSITION.z is device depth, matching the depth attachment.
                 // AlphaToMask stays off: fractional coverage is preserved explicitly.
                 return float2(input.positionCS.z, coverage);
             }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "GrassMotionVectors"
+            Tags { "LightMode" = "MotionVectors" }
+            Cull Back
+            ZWrite On
+            ZTest LEqual
+            Blend Off
+            ColorMask RG
+            AlphaToMask Off
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex GrassMotionVertex
+            #pragma fragment GrassMotionFragment
+            #include "GrassMotionVectors.hlsl"
             ENDHLSL
         }
     }

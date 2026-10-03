@@ -1,0 +1,118 @@
+#pragma kernel ClearHistory
+#pragma kernel BuildHistory
+#pragma kernel CaptureCounts
+#pragma kernel StoreRoots
+
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+#include "../Shaders/GrassMotionHistoryLookup.hlsl"
+
+CBUFFER_START(GrassMotionHistoryParameters)
+    int4 _GrassHistoryOffsets;
+    int4 _GrassHistoryCapacities;
+    int4 _GrassHistoryRows;
+    int _GrassHistoryMask;
+    int _GrassHistoryClearWidth;
+    int _GrassHistoryLod;
+    int _GrassHistoryPadding;
+CBUFFER_END
+
+StructuredBuffer<float4> _GrassHistoryPositions;
+StructuredBuffer<uint> _GrassHistoryCounts;
+RWStructuredBuffer<uint> _GrassHistoryKeys;
+RWStructuredBuffer<float4> _GrassHistoryRoots;
+RWStructuredBuffer<uint> _GrassHistorySnapshotCounts;
+RWByteAddressBuffer _GrassHistoryDispatch;
+
+uint GrassHistoryCount(uint lod)
+{
+    return min(_GrassHistoryCounts[lod], (uint)_GrassHistoryCapacities[lod]);
+}
+
+void GrassHistoryWriteDispatch(uint lod, uint count)
+{
+    // DispatchCompute's indirect ABI is three uints, distinct from indexed draw args.
+    uint groups = (count + 63u) / 64u;
+    uint groupsX = max(1u, min(groups, 65535u));
+    uint groupsY = max(1u, (groups + groupsX - 1u) / groupsX);
+    _GrassHistoryDispatch.Store3(lod * 12u, uint3(groupsX, groupsY, 1u));
+}
+
+uint GrassHistoryRootIndex(uint3 id, uint count)
+{
+    uint threadsPerRow = max(1u, min((count + 63u) / 64u, 65535u)) * 64u;
+    return id.x + id.y * threadsPerRow;
+}
+
+[numthreads(128, 1, 1)]
+void ClearHistory(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x + id.y * (uint)_GrassHistoryClearWidth;
+    if (index <= (uint)_GrassHistoryMask)
+        _GrassHistoryKeys[index] = 0u;
+
+    if (index < 3u)
+        GrassHistoryWriteDispatch(index, GrassHistoryCount(index));
+}
+
+[numthreads(64, 1, 1)]
+void BuildHistory(uint3 id : SV_DispatchThreadID)
+{
+    uint lod = (uint)_GrassHistoryLod;
+    uint count = GrassHistoryCount(lod);
+    uint index = GrassHistoryRootIndex(id, count);
+    if (index >= count)
+        return;
+
+    uint rootIndex = (uint)_GrassHistoryOffsets[lod] + index;
+    float4 root = _GrassHistoryPositions[rootIndex];
+    uint seed = GrassHistorySeed(root.xz);
+    // Keep root data compact. The low 24 bits identify one of at most 16m
+    // configured roots; 7 bits cheaply reject unrelated hash collisions. The
+    // remaining bit marks ambiguous stacked roots, even near the probe limit.
+    uint key = (seed & 0x7f000000u) | (rootIndex + 1u);
+    uint slot = seed & (uint)_GrassHistoryMask;
+    [loop]
+    for (uint probe = 0u; probe < 128u; ++probe)
+    {
+        uint occupied;
+        InterlockedCompareExchange(_GrassHistoryKeys[slot], 0u, key, occupied);
+        if (occupied == 0u)
+            return;
+        if ((occupied & 0x7f000000u) == (key & 0x7f000000u))
+        {
+            // Snapshot data is immutable and fully published before this pass.
+            float4 candidate = _GrassHistoryPositions[(occupied & 0x00ffffffu) - 1u];
+            if (all(asuint(candidate.xz) == asuint(root.xz)))
+            {
+                uint ignored;
+                InterlockedOr(_GrassHistoryKeys[slot], 0x80000000u, ignored);
+                return;
+            }
+        }
+        slot = (slot + 1u) & (uint)_GrassHistoryMask;
+    }
+}
+
+[numthreads(4, 1, 1)]
+void CaptureCounts(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= 3u)
+        return;
+    uint count = GrassHistoryCount(id.x);
+    _GrassHistorySnapshotCounts[id.x] = count;
+    GrassHistoryWriteDispatch(id.x, count);
+}
+
+[numthreads(64, 1, 1)]
+void StoreRoots(uint3 id : SV_DispatchThreadID)
+{
+    uint lod = (uint)_GrassHistoryLod;
+    uint count = GrassHistoryCount(lod);
+    uint index = GrassHistoryRootIndex(id, count);
+    if (index >= count)
+        return;
+    uint rootIndex = (uint)_GrassHistoryOffsets[lod] + index;
+    float4 root = _GrassHistoryPositions[rootIndex];
+    root.w = (float)_GrassHistoryRows[lod] + saturate(root.w) * 0.5;
+    _GrassHistoryRoots[rootIndex] = root;
+}

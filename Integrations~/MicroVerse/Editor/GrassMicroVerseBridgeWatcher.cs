@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using UnityEngine;
 using UnityEngine.SceneManagement;
 
 /// <summary>
@@ -15,6 +16,8 @@ public static class GrassMicroVerseBridgeWatcher
         new Dictionary<GrassMicroVerseBridge, double>();
     private static readonly List<GrassMicroVerseBridge> staleEntries =
         new List<GrassMicroVerseBridge>();
+    private static readonly List<GrassMicroVerseBridge> activeSnapshot =
+        new List<GrassMicroVerseBridge>();
     private static double refreshAfter = -1;
 
     static GrassMicroVerseBridgeWatcher()
@@ -24,7 +27,10 @@ public static class GrassMicroVerseBridgeWatcher
         EditorApplication.hierarchyChanged += QueueRefresh;
         Undo.undoRedoPerformed += QueueRefresh;
         EditorSceneManager.sceneOpened += SceneOpened;
+        EditorSceneManager.sceneSaving += SceneSaving;
         EditorSceneManager.sceneSaved += SceneSaved;
+        TerrainGrassAlbedoBaker.SourceChanged += GroundSourceChanged;
+        TerrainGrassAlbedoBaker.Baked += GroundBaked;
     }
 
     public static void QueueRefresh()
@@ -34,6 +40,26 @@ public static class GrassMicroVerseBridgeWatcher
 
     private static void SceneOpened(Scene scene, OpenSceneMode mode) => QueueRefresh();
     private static void SceneSaved(Scene scene) => QueueRefresh();
+    private static void GroundSourceChanged(Terrain terrain) => QueueRefresh();
+    private static void GroundBaked(Terrain terrain, Texture2D texture) => QueueRefresh();
+
+    private static void SceneSaving(Scene scene, string path)
+    {
+        if (EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer ||
+            EditorSceneManager.IsPreviewScene(scene))
+            return;
+
+        // Resolve before serialization, so saved runtime references agree with
+        // cached and clean builds. Never invoke MicroVerse generation here.
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            foreach (GrassMicroVerseBridge bridge in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
+            {
+                if (bridge.enabled && !GrassMicroVerseBridgeUtility.Refresh(bridge))
+                    Debug.LogWarning("Unresolved grass output while saving: " + bridge.LastRefreshMessage, bridge);
+            }
+        }
+    }
 
     private static void Update()
     {
@@ -49,9 +75,12 @@ public static class GrassMicroVerseBridgeWatcher
         refreshAfter = -1;
         bool refreshed = false;
 
-        foreach (GrassMicroVerseBridge bridge in GrassMicroVerseBridge.ActiveBridges)
+        activeSnapshot.Clear();
+        activeSnapshot.AddRange(GrassMicroVerseBridge.ActiveBridges);
+        foreach (GrassMicroVerseBridge bridge in activeSnapshot)
         {
-            if (!bridge || !bridge.AutoRefresh)
+            if (!bridge || !bridge.AutoRefresh || !bridge.gameObject.scene.isLoaded ||
+                EditorSceneManager.IsPreviewScene(bridge.gameObject.scene))
                 continue;
 
             bool changed = bridge.ConsumeRefreshRequest();
@@ -60,9 +89,13 @@ public static class GrassMicroVerseBridgeWatcher
             if (!changed && !refreshAll && !poll)
                 continue;
 
-            GrassMicroVerseBridgeUtility.Refresh(bridge);
+            uint previousRevision = bridge.PlacementArea.SourceRevision;
+            string previousMessage = bridge.LastRefreshMessage;
+            bool previousSuccess = bridge.LastRefreshSucceeded;
+            GrassMicroVerseBridgeUtility.Refresh(bridge, false, true, false);
             nextPoll[bridge] = now + bridge.PollInterval;
-            refreshed = true;
+            refreshed |= previousRevision != bridge.PlacementArea.SourceRevision ||
+                previousMessage != bridge.LastRefreshMessage || previousSuccess != bridge.LastRefreshSucceeded;
         }
 
         staleEntries.Clear();
@@ -73,7 +106,10 @@ public static class GrassMicroVerseBridgeWatcher
         }
 
         foreach (GrassMicroVerseBridge bridge in staleEntries)
+        {
             nextPoll.Remove(bridge);
+            GrassMicroVerseBridgeUtility.Forget(bridge);
+        }
 
         if (refreshed)
         {
@@ -88,7 +124,31 @@ public sealed class GrassMicroVerseMaskPostprocessor : AssetPostprocessor
     private static void OnPostprocessAllAssets(string[] importedAssets, string[] deletedAssets,
         string[] movedAssets, string[] movedFromAssetPaths, bool didDomainReload)
     {
-        // Queue only. Do not mutate or import assets from the import callback.
+        // Invalidate only metadata caches. Do not bake, mutate or import assets
+        // from an asset import callback.
+        Invalidate(importedAssets);
+        Invalidate(deletedAssets);
+        Invalidate(movedAssets);
+        Invalidate(movedFromAssetPaths);
         GrassMicroVerseBridgeWatcher.QueueRefresh();
+    }
+
+    private static void Invalidate(string[] paths)
+    {
+        foreach (string path in paths)
+            GrassMicroVerseBridgeUtility.InvalidateAssetPath(path);
+    }
+}
+
+public sealed class GrassMicroVerseMaskSaveProcessor : AssetModificationProcessor
+{
+    private static string[] OnWillSaveAssets(string[] paths)
+    {
+        // ScriptableObject subasset creation can be saved without an import or
+        // projectChanged notification. Re-discover only when this path is used.
+        foreach (string path in paths)
+            GrassMicroVerseBridgeUtility.InvalidateAssetPath(path);
+        GrassMicroVerseBridgeWatcher.QueueRefresh();
+        return paths;
     }
 }

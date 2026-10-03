@@ -97,7 +97,7 @@ bool GrassInFrustum(float3 positionWS)
 bool GrassTerrainHeight(float2 positionXZ, out float heightWS)
 {
     heightWS = 0.0;
-    if (any(_TerrainSize.xz <= 0.0))
+    if (!all(isfinite(_TerrainSize)) || !all(isfinite(_TerrainOrigin)) || any(_TerrainSize.xz <= 0.0))
         return false;
 
     float2 terrainUV = (positionXZ - _TerrainOrigin.xz) / _TerrainSize.xz;
@@ -110,12 +110,14 @@ bool GrassTerrainHeight(float2 positionXZ, out float heightWS)
         // Match URP TerrainLitInput. Compressed holes may contain ~1/2047
         // instead of zero; point sampling prevents grass crossing hole edges.
         float hole = _TerrainHoles.SampleLevel(pointClampSampler, terrainUV, 0);
-        if (hole < 0.0005)
+        if (!isfinite(hole) || hole < 0.0005)
             return false;
     }
 
     uint width, height;
     _TerrainHeightmap.GetDimensions(width, height);
+    if (width == 0 || height == 0)
+        return false;
     float2 resolution = float2(width, height);
     // Terrain vertices span (resolution - 1) intervals. Sampling raw terrainUV
     // would move the first/last samples half a texel into the supporting surface.
@@ -125,7 +127,51 @@ bool GrassTerrainHeight(float2 positionXZ, out float heightWS)
     // PaintContext.kNormalizedHeightScale = 32766 / 65535. UnpackHeightmap
     // handles API-specific channel packing, but does not undo this height range.
     heightWS = _TerrainOrigin.y + nativeHeight * _TerrainSize.y * (65535.0 / 32766.0);
-    return true;
+    return isfinite(heightWS);
+}
+
+bool GrassCapturedSurfaceHeight(float2 uv, out float heightWS, out float validity)
+{
+    float2 captured = _GrassHeightMapRT.SampleLevel(linearClampSampler, uv, 0);
+    heightWS = captured.r;
+    validity = saturate(captured.g);
+    if (!all(isfinite(captured)) || validity <= 0.0)
+        return false;
+
+    if (validity < 1.0)
+    {
+        // Invalid capture texels contain world height zero. Ordinary bilinear
+        // filtering would pull a mesh-edge root toward that unrelated height.
+        // Normalize only the height weights of valid neighbors; the separately
+        // filtered eligibility remains fractional, including vertex-color masks.
+        uint width, height;
+        _GrassHeightMapRT.GetDimensions(width, height);
+        if (width == 0 || height == 0)
+            return false;
+        float2 pixel = uv * float2(width, height) - 0.5;
+        int2 basePixel = int2(floor(pixel));
+        float2 fraction = frac(pixel);
+        float weightedHeight = 0.0;
+        float validWeight = 0.0;
+        [unroll]
+        for (uint corner = 0; corner < 4; ++corner)
+        {
+            int2 offset = int2(corner & 1u, corner >> 1u);
+            int2 coordinate = clamp(basePixel + offset, int2(0, 0), int2(width, height) - 1);
+            float2 neighbor = _GrassHeightMapRT.Load(int3(coordinate, 0));
+            float2 weightXY = lerp(1.0 - fraction, fraction, float2(offset));
+            float weight = weightXY.x * weightXY.y;
+            if (neighbor.g > 0.0 && all(isfinite(neighbor)))
+            {
+                weightedHeight += neighbor.r * weight;
+                validWeight += weight;
+            }
+        }
+        if (validWeight <= 0.0)
+            return false;
+        heightWS = weightedHeight / validWeight;
+    }
+    return isfinite(heightWS);
 }
 
 float GrassDensityCoverage(float probability, float randomValue)
@@ -170,14 +216,18 @@ void ResetCounts(uint3 id : SV_DispatchThreadID)
         _GrassCounts[id.x] = 0;
 }
 
-[numthreads(8, 8, 1)]
-void CSMain(uint3 id : SV_DispatchThreadID)
+bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod)
 {
+    candidate = 0.0;
+    lod = 0;
     // Dispatch dimensions are rounded up to whole groups, never whole sources.
-    if (any(_GridSize <= 0) || any(id.xy >= (uint2)_GridSize) || _Spacing <= 0.0 || _DrawDistance <= 0.0)
-        return;
+    if (any(_GridSize <= 0) || any(id >= (uint2)_GridSize) ||
+        !isfinite(_Spacing) || !isfinite(_DrawDistance) || !isfinite(_TextureUpdateThreshold) ||
+        !all(isfinite(_CenterPos)) || !all(isfinite(_CameraPosition)) ||
+        _Spacing <= 0.0 || _DrawDistance <= 0.0)
+        return false;
 
-    int2 cell = _GridStartIndex + int2(id.xy);
+    int2 cell = _GridStartIndex + int2(id);
     uint seed = GrassCellSeed(cell);
     float2 jitter = float2(GrassRandom(seed, 0xa511e9b3u), GrassRandom(seed, 0x63d83595u)) - 0.5;
     float2 positionXZ = (float2(cell) + jitter) * _Spacing;
@@ -185,66 +235,98 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // Cheap conservative rejection before any texture fetch or square root.
     float2 cameraDeltaXZ = positionXZ - _CameraPosition.xz;
     if (dot(cameraDeltaXZ, cameraDeltaXZ) >= _DrawDistance * _DrawDistance)
-        return;
+        return false;
 
     float captureExtent = max(_TextureUpdateThreshold + _DrawDistance, 1e-4);
     float2 uv = (positionXZ - _CenterPos) / (2.0 * captureExtent) + 0.5;
     // Sampling clamp-to-edge outside an authored map must never grow grass.
     if (any(uv < 0.0) || any(uv >= 1.0))
-        return;
+        return false;
 
     float authoredDensity = _AuthoredAreas != 0 ? saturate(_GrassDensityRT.SampleLevel(linearClampSampler, uv, 0)) : 1.0;
     if (authoredDensity <= 0.0)
-        return;
+        return false;
     float exclusion = saturate(_GrassMaskMapRT.SampleLevel(linearClampSampler, uv, 0));
     if (exclusion >= 1.0)
-        return;
+        return false;
 
     float heightWS;
     float surfaceValidity = 1.0;
     if (_UseTerrain != 0)
     {
         if (!GrassTerrainHeight(positionXZ, heightWS))
-            return;
+            return false;
     }
     else
     {
-        float2 heightAndValidity = _GrassHeightMapRT.SampleLevel(linearClampSampler, uv, 0);
-        heightWS = heightAndValidity.r;
-        surfaceValidity = saturate(heightAndValidity.g);
-        if (surfaceValidity <= 0.0)
-            return;
+        if (!GrassCapturedSurfaceHeight(uv, heightWS, surfaceValidity))
+            return false;
     }
 
     float3 positionWS = float3(positionXZ.x, heightWS, positionXZ.y);
     if (!GrassInFrustum(positionWS))
-        return;
+        return false;
 
     float distanceToCamera = distance(_CameraPosition, positionWS);
     if (distanceToCamera >= _DrawDistance)
-        return;
+        return false;
 
     float fullDensityDistance = clamp(_FullDensityDistance, 0.0, _DrawDistance);
     float fadeRange = max(_DrawDistance - fullDensityDistance, 1e-4);
     float distanceDensity = pow(saturate((_DrawDistance - distanceToCamera) / fadeRange), max(_DensityFalloffExponent, 0.0));
     float probability = saturate(authoredDensity * surfaceValidity * (1.0 - exclusion) * distanceDensity);
+    if (!isfinite(probability))
+        return false;
     float coverage = GrassDensityCoverage(probability, GrassRandom(seed, 0xb5297a4du));
     if (coverage <= 0.0)
-        return;
+        return false;
 
-    uint lod = GrassSelectLod(distanceToCamera, GrassRandom(seed, 0x68e31da4u));
-    uint capacity = (uint)max(_LodCapacities[lod], 0);
-    uint slot;
-    InterlockedAdd(_GrassCounts[lod], 1u, slot);
-    if (slot >= capacity)
+    lod = GrassSelectLod(distanceToCamera, GrassRandom(seed, 0x68e31da4u));
+    candidate = float4(positionWS, coverage);
+    return true;
+}
+
+// Reserve one contiguous range per non-empty workgroup/LOD instead of one
+// global atomic per blade. Rejected edge threads still reach every barrier.
+groupshared uint GrassGroupCounts[3];
+groupshared uint GrassGroupBases[3];
+groupshared uint GrassGroupAccepted[3];
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
+{
+    if (lane < 3)
+        GrassGroupCounts[lane] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    float4 candidate;
+    uint lod;
+    bool visible = GrassEvaluateCandidate(id.xy, candidate, lod);
+    uint localSlot = 0;
+    if (visible)
+        InterlockedAdd(GrassGroupCounts[lod], 1u, localSlot);
+    GroupMemoryBarrierWithGroupSync();
+
+    if (lane < 3)
     {
-        InterlockedAdd(_GrassCounts[3], 1u);
-        return;
+        uint count = GrassGroupCounts[lane];
+        uint capacity = (uint)max(_LodCapacities[lane], 0);
+        uint first = 0;
+        if (count > 0)
+            InterlockedAdd(_GrassCounts[lane], count, first);
+        uint accepted = first < capacity ? min(count, capacity - first) : 0;
+        GrassGroupBases[lane] = first;
+        GrassGroupAccepted[lane] = accepted;
+        if (count > accepted)
+            InterlockedAdd(_GrassCounts[3], count - accepted);
     }
+    GroupMemoryBarrierWithGroupSync();
 
-    // Atomic reservation assigns disjoint locations; capacity is checked before
-    // the write, and FinalizeArgs also clamps the draw count to its owned range.
-    _GrassPositions[(uint)_LodOffsets[lod] + slot] = float4(positionWS, coverage);
+    if (visible && localSlot < GrassGroupAccepted[lod])
+    {
+        uint destination = (uint)_LodOffsets[lod] + GrassGroupBases[lod] + localSlot;
+        _GrassPositions[destination] = candidate;
+    }
 }
 
 [numthreads(4, 1, 1)]

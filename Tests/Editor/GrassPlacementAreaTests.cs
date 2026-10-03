@@ -2,9 +2,13 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
+[NonParallelizable]
 public sealed class GrassPlacementAreaTests
 {
     private readonly List<GameObject> sceneObjects = new List<GameObject>();
@@ -40,11 +44,13 @@ public sealed class GrassPlacementAreaTests
         Assert.That(data.WorldBounds.size.z, Is.EqualTo(8f).Within(0.0001f));
     }
 
-    [Test]
-    public void TerrainMappingUsesTerrainOriginAndRetainsItsLayerTexturePhase()
+    [TestCase(1f, 1f)]
+    [TestCase(-1f, 1f)]
+    [TestCase(1f, -1f)]
+    public void TerrainMappingUsesTerrainOriginAndRetainsItsLayerTexturePhase(float xSign, float ySign)
     {
         Terrain terrain = NewTerrain(new Vector3(-50f, 7f, 120f), new Vector3(200f, 35f, 100f));
-        var layer = new TerrainLayer { tileSize = new Vector2(10f, 20f), tileOffset = new Vector2(2f, -4f) };
+        var layer = new TerrainLayer { tileSize = new Vector2(10f * xSign, 20f * ySign), tileOffset = new Vector2(2f, -4f) };
         assets.Add(layer);
         terrain.terrainData.terrainLayers = new[] { layer };
         GrassPlacementArea area = NewArea();
@@ -61,10 +67,10 @@ public sealed class GrassPlacementAreaTests
         Assert.That(data.WorldBounds.max.y, Is.EqualTo(42f));
 
         Vector4 mapping = data.GroundLayerUV;
-        Assert.That(-50f * mapping.x + mapping.z, Is.EqualTo(0.2f).Within(0.0001f));
-        Assert.That(120f * mapping.y + mapping.w, Is.EqualTo(-0.2f).Within(0.0001f));
-        Assert.That(-40f * mapping.x + mapping.z, Is.EqualTo(1.2f).Within(0.0001f));
-        Assert.That(140f * mapping.y + mapping.w, Is.EqualTo(0.8f).Within(0.0001f));
+        Assert.That(-50f * mapping.x + mapping.z, Is.EqualTo(0.2f * xSign).Within(0.0001f));
+        Assert.That(120f * mapping.y + mapping.w, Is.EqualTo(-0.2f * ySign).Within(0.0001f));
+        Assert.That(-40f * mapping.x + mapping.z, Is.EqualTo(1.2f * xSign).Within(0.0001f));
+        Assert.That(140f * mapping.y + mapping.w, Is.EqualTo(0.8f * ySign).Within(0.0001f));
     }
 
     [Test]
@@ -161,6 +167,309 @@ public sealed class GrassPlacementAreaTests
         {
             GrassPlacementArea.CoverageChanged -= handler;
         }
+    }
+
+    [Test]
+    public void DensityAndGroundEditsAdvanceOnlyTheirRequiredCaptureRevisions()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(64f, 128f));
+        GrassDensityAsset density = NewDensity();
+        area.SetDensityAsset(density, false);
+        uint oldSurface = area.SurfaceRevision;
+        uint oldDensity = area.DensityRevision;
+        uint oldGround = area.GroundColorRevision;
+        Bounds reported = default;
+        GrassPlacementChange reportedChanges = GrassPlacementChange.None;
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, changes) =>
+        {
+            if (source == area)
+            {
+                reported = region;
+                reportedChanges = changes;
+            }
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            density.Paint(new Vector2(8.5f / 64f, 48.5f / 64f), Vector2.one * (0.25f / 64f), 1f, 1f, false);
+            Assert.That(area.DensityRevision, Is.GreaterThan(oldDensity), "Queued changes must invalidate caches before their bounds are consumed.");
+            Assert.That(area.GroundColorRevision, Is.GreaterThan(oldGround));
+            Assert.That(area.SurfaceRevision, Is.EqualTo(oldSurface));
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData data), Is.True);
+            Assert.That(area.SurfaceRevision, Is.EqualTo(oldSurface));
+            Assert.That(reportedChanges, Is.EqualTo(GrassPlacementChange.Density | GrassPlacementChange.GroundColor));
+            Assert.That(reported.size.x, Is.EqualTo(2f).Within(0.0001f));
+            Assert.That(reported.size.z, Is.EqualTo(4f).Within(0.0001f));
+            Assert.That(data.WorldBounds, Is.EqualTo(reported));
+            AssertUv(data.WorldToMask, new Vector3(-23.5f, 0f, 33f), 8.5f / 64f, 48.5f / 64f);
+
+            oldDensity = area.DensityRevision;
+            oldGround = area.GroundColorRevision;
+            area.SetGroundColor(new Color(0.2f, 0.6f, 0.3f), 0.8f);
+            Assert.That(area.DensityRevision, Is.EqualTo(oldDensity));
+            Assert.That(area.GroundColorRevision, Is.GreaterThan(oldGround));
+            Assert.That(area.SurfaceRevision, Is.EqualTo(oldSurface));
+            oldGround = area.GroundColorRevision;
+            area.MarkSurfaceDirty();
+            Assert.That(area.SurfaceRevision, Is.GreaterThan(oldSurface));
+            Assert.That(area.DensityRevision, Is.EqualTo(oldDensity));
+            Assert.That(area.GroundColorRevision, Is.EqualTo(oldGround));
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+        }
+    }
+
+    [Test]
+    public void RebindingIdenticalInputsDoesNotInvalidateAndMaskReplacementDoesNotRebuildTheSurface()
+    {
+        Terrain terrain = NewTerrain(Vector3.zero, new Vector3(100f, 10f, 100f));
+        GrassPlacementArea area = NewArea();
+        Texture2D first = NewTexture();
+        area.ConfigureTexture(terrain, first);
+        uint source = area.SourceRevision;
+        uint surface = area.SurfaceRevision;
+        area.ConfigureTexture(terrain, first);
+        Assert.That(area.SourceRevision, Is.EqualTo(source));
+        area.TryGetCaptureData(out _);
+        Assert.That(area.SourceRevision, Is.EqualTo(source));
+
+        uint oldDensity = area.DensityRevision;
+        area.ConfigureTexture(terrain, NewTexture());
+        Assert.That(area.DensityRevision, Is.GreaterThan(oldDensity));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surface));
+        uint beforeWrite = area.DensityRevision;
+        area.MarkCoverageDirty();
+        Assert.That(area.DensityRevision, Is.GreaterThan(beforeWrite));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surface));
+    }
+
+    [Test]
+    public void ASimultaneousSerializedColorEditIsNotRestrictedToAPendingBrushRectangle()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(64f, 64f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        uint surface = area.SurfaceRevision;
+        Bounds reported = default;
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, bounds, changes) =>
+        {
+            if (source == area)
+                reported = bounds;
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            density.Paint(new Vector2(8.5f / 64f, 48.5f / 64f), Vector2.one * (0.25f / 64f), 1f, 1f, true);
+            var serialized = new SerializedObject(area);
+            serialized.FindProperty("groundTint").colorValue = Color.green;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            Assert.That(area.TryGetCaptureData(out _), Is.True);
+            Assert.That(reported.size.x, Is.EqualTo(64f));
+            Assert.That(reported.size.z, Is.EqualTo(64f));
+            Assert.That(area.SurfaceRevision, Is.EqualTo(surface));
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+        }
+    }
+
+    [Test]
+    public void AnExternalMaskCanCropItsDrawWithoutStretchingItsOriginalUvFrame()
+    {
+        Terrain terrain = NewTerrain(new Vector3(10f, 7f, -30f), new Vector3(100f, 20f, 200f));
+        GrassPlacementArea area = NewArea();
+        area.ConfigureTexture(terrain, NewTexture());
+        area.SetTextureCoverageBounds(new Rect(0.2f, 0.6f, 0.1f, 0.2f));
+
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData data), Is.True);
+        Assert.That(data.WorldBounds.min.x, Is.EqualTo(30f).Within(0.0001f));
+        Assert.That(data.WorldBounds.max.x, Is.EqualTo(40f).Within(0.0001f));
+        Assert.That(data.WorldBounds.min.z, Is.EqualTo(90f).Within(0.0001f));
+        Assert.That(data.WorldBounds.max.z, Is.EqualTo(130f).Within(0.0001f));
+        Vector3 firstCorner = data.LocalToWorld.MultiplyPoint3x4(new Vector3(-0.5f, 0f, -0.5f));
+        AssertUv(data.WorldToMask, firstCorner, 0.2f, 0.6f);
+        Assert.That(area.IntersectsCoverage(new Bounds(new Vector3(15f, 10f, -20f), Vector3.one)), Is.False);
+        Assert.That(area.IntersectsCoverage(new Bounds(new Vector3(35f, 10f, 100f), Vector3.one)), Is.True);
+
+        area.SetTextureCoverageBounds(new Rect(float.NaN, 0f, 1f, 1f));
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(data.WorldBounds), Is.False);
+    }
+
+    [Test]
+    public void AFullTerrainAlbedoUsesIndependentUvCoordinatesAndKeepsItsAuthoredStrengthForSparseGrass()
+    {
+        Terrain terrain = NewTerrain(new Vector3(-50f, 5f, 120f), new Vector3(200f, 30f, 100f));
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 20f), terrain);
+        area.transform.position = new Vector3(-20f, 5f, 135f);
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("density").floatValue = 0.1f;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Texture2D albedo = NewTexture();
+        area.SetGroundColorTexture(albedo, true, 0.75f);
+
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData data), Is.True);
+        Assert.That(data.GroundColorTexture, Is.SameAs(albedo));
+        Assert.That(data.GroundColorUsesTerrainBounds, Is.True);
+        Assert.That(data.Density, Is.EqualTo(0.1f));
+        Assert.That(data.GroundColorStrength, Is.EqualTo(0.75f));
+        AssertUv(data.WorldToMask, area.transform.position, 0.5f, 0.5f);
+        AssertUv(data.GroundWorldToMask, area.transform.position, 0.15f, 0.15f);
+        AssertUv(data.GroundWorldToMask, terrain.transform.position, 0f, 0f);
+        AssertUv(data.GroundWorldToMask, new Vector3(150f, 200f, 220f), 1f, 1f);
+
+        uint densityRevision = area.DensityRevision;
+        uint surfaceRevision = area.SurfaceRevision;
+        area.SetGroundColorTexture(albedo, false, 0.75f);
+        Assert.That(area.TryGetCaptureData(out data), Is.True);
+        Assert.That(data.GroundColorUsesTerrainBounds, Is.False);
+        AssertUv(data.GroundWorldToMask, area.transform.position, 0.5f, 0.5f);
+        Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+    }
+
+    [Test]
+    public void DestroyingAnExplicitTerrainDoesNotRebindALocalSpotToAnUnrelatedSurface()
+    {
+        Terrain terrain = NewTerrain(Vector3.zero, new Vector3(100f, 10f, 100f));
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f), terrain);
+        area.transform.position = new Vector3(50f, 0f, 50f);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Object.DestroyImmediate(terrain.gameObject);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(new Bounds(area.transform.position, Vector3.one)), Is.False);
+    }
+
+    [Test]
+    public void AnAreaRegistersWhenASavedSceneIsOpenedAdditively()
+    {
+        Scene originalActive = SceneManager.GetActiveScene();
+        Scene testScene = default;
+        string path = "Assets/GrassPlacementSceneTest_" + Guid.NewGuid().ToString("N") + ".unity";
+        try
+        {
+            testScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            GrassPlacementArea area = NewArea();
+            SceneManager.MoveGameObjectToScene(area.gameObject, testScene);
+            Assert.That(EditorSceneManager.SaveScene(testScene, path), Is.True);
+            Assert.That(EditorSceneManager.CloseScene(testScene, true), Is.True);
+            testScene = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+            GrassPlacementArea loaded = testScene.GetRootGameObjects()[0].GetComponent<GrassPlacementArea>();
+
+            Assert.That(loaded, Is.Not.Null);
+            Assert.That(GrassPlacementArea.ActiveAreas, Does.Contain(loaded),
+                "OnEnable runs before Scene.isLoaded becomes true; registration must still occur during loading.");
+            Assert.That(loaded.TryGetCaptureData(out _), Is.True);
+        }
+        finally
+        {
+            if (originalActive.IsValid() && originalActive.isLoaded)
+                SceneManager.SetActiveScene(originalActive);
+            if (testScene.IsValid() && testScene.isLoaded)
+                EditorSceneManager.CloseScene(testScene, true);
+            AssetDatabase.DeleteAsset(path);
+        }
+    }
+
+    [Test, Category("GrassGPU")]
+    public void GroundCaptureMatchesFinalTerrainAlbedoAtFullStrengthForSurvivingSparseRoots()
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
+            !SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGBHalf) ||
+            !SystemInfo.SupportsTextureFormat(TextureFormat.RGBAHalf))
+            Assert.Ignore("Ground-capture validation requires a graphics device with half-float texture support.");
+        Shader shader = Shader.Find("Hidden/InfiniteGrass/Placement");
+        Assert.That(shader, Is.Not.Null);
+        var material = new Material(shader);
+        assets.Add(material);
+        int pass = material.FindPass("PlacementGroundColor");
+        Assert.That(pass, Is.GreaterThanOrEqualTo(0));
+        ShaderUtil.CompilePass(material, pass, true);
+        Assert.That(ShaderUtil.ShaderHasError(shader), Is.False);
+        var albedo = new Texture2D(2, 2, TextureFormat.RGBAHalf, false, true);
+        assets.Add(albedo);
+        var color = new Color(0.2f, 0.4f, 0.6f, 1f);
+        albedo.SetPixels(new[] { color, color, color, color });
+        albedo.Apply(false, false);
+        var quad = new Mesh
+        {
+            vertices = new[] { new Vector3(-0.5f, 0f, -0.5f), new Vector3(0.5f, 0f, -0.5f),
+                new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f) },
+            triangles = new[] { 0, 2, 1, 2, 3, 1 }
+        };
+        assets.Add(quad);
+        Matrix4x4 projection = Matrix4x4.zero;
+        projection.SetRow(0, new Vector4(2f, 0f, 0f, 0f));
+        projection.SetRow(1, new Vector4(0f, 0f, 2f, 0f));
+        projection.SetRow(2, new Vector4(0f, 0f, 0f, 0.5f));
+        projection.SetRow(3, new Vector4(0f, 0f, 0f, 1f));
+        material.SetMatrix("_GrassCaptureVP", projection);
+        material.SetMatrix("_PlacementWorldToMask", Matrix4x4.Translate(new Vector3(0.5f, 0f, 0.5f)));
+        material.SetMatrix("_PlacementGroundWorldToMask", Matrix4x4.Translate(new Vector3(0.5f, 0f, 0.5f)));
+        material.SetInteger("_PlacementHasTerrain", 0);
+        material.SetInteger("_PlacementShape", (int)GrassPlacementShape.Box);
+        material.SetInteger("_PlacementHasGroundColor", 1);
+        material.SetInteger("_PlacementHasGroundLayer", 0);
+        material.SetTexture("_PlacementGroundColorTexture", albedo);
+        material.SetColor("_PlacementGroundTint", Color.white);
+        material.SetFloat("_PlacementGroundStrength", 0.75f);
+        material.SetFloat("_PlacementEdgeFalloff", 0f);
+        material.SetFloat("_PlacementDensity", 0.1f);
+
+        RenderTexture capture = RenderTexture.GetTemporary(16, 16, 0,
+            RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+        Texture2D readback = new Texture2D(16, 16, TextureFormat.RGBAHalf, false, true);
+        RenderTexture previous = RenderTexture.active;
+        bool previousSRGBWrite = GL.sRGBWrite;
+        var commands = new CommandBuffer();
+        try
+        {
+            GL.sRGBWrite = false;
+            for (int variant = 0; variant < 3; variant++)
+            {
+                material.SetInteger("_PlacementGroundColorUsesTerrainBounds", variant == 0 ? 0 : 1);
+                material.SetFloat("_PlacementDensity", variant == 2 ? 0f : 0.1f);
+                commands.Clear();
+                commands.SetRenderTarget(capture);
+                commands.SetViewport(new Rect(0, 0, 16, 16));
+                commands.ClearRenderTarget(false, true, Color.clear);
+                commands.DrawMesh(quad, Matrix4x4.identity, material, 0, pass);
+                Graphics.ExecuteCommandBuffer(commands);
+                RenderTexture.active = capture;
+                readback.ReadPixels(new Rect(0, 0, 16, 16), 0, 0, false);
+                readback.Apply(false, false);
+                Color captured = readback.GetPixel(8, 8);
+                float expectedAlpha = variant == 0 ? 0.075f : variant == 1 ? 0.75f : 0f;
+                Assert.That(captured.a, Is.EqualTo(expectedAlpha).Within(0.001f));
+                Assert.That(captured.r, Is.EqualTo(color.r * expectedAlpha).Within(0.001f));
+                Assert.That(captured.b, Is.EqualTo(color.b * expectedAlpha).Within(0.001f));
+            }
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            GL.sRGBWrite = previousSRGBWrite;
+            commands.Release();
+            Object.DestroyImmediate(readback);
+            RenderTexture.ReleaseTemporary(capture);
+        }
+    }
+
+    private GrassDensityAsset NewDensity()
+    {
+        GrassDensityAsset value = ScriptableObject.CreateInstance<GrassDensityAsset>();
+        value.Resize(64, 64, false);
+        assets.Add(value);
+        return value;
     }
 
     private GrassPlacementArea NewArea()
