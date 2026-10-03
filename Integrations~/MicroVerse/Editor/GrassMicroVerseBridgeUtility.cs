@@ -316,6 +316,15 @@ public static class GrassMicroVerseBridgeUtility
         if (valid && bridge.BakeTerrainGroundColor)
             valid = TryRefreshGroundBake(bridge, forceGroundBake, recordUndo, markSceneDirty, out color, out message);
 
+        // A synchronous bake observer can delete the authoring object. Its
+        // saved output survives, but there is no remaining placement to commit.
+        if (!bridge || !bridge.PlacementArea)
+        {
+            if (bridge)
+                bridge.SetRefreshResult(false, message);
+            return false;
+        }
+
         GrassPlacementArea area = bridge.PlacementArea;
         Texture desiredDensity = valid ? density : null;
         TerrainLayer desiredLayer = valid ? bridge.GroundLayer : null;
@@ -467,6 +476,12 @@ public static class GrassMicroVerseBridgeUtility
             if (!TerrainGrassAlbedoBaker.TryBake(bridge.Terrain, bridge.GroundBakeResolution,
                 path, out texture, out message))
                 return false;
+            if (!bridge || !bridge.PlacementArea)
+            {
+                texture = null;
+                message = "The grass bridge or placement area was removed during the ground bake.";
+                return false;
+            }
         }
 
         // The baker normalizes separators and Unity resolves paths without case
@@ -513,7 +528,8 @@ public static class GrassMicroVerseBridgeUtility
         AppendFloat(state, data.size.z);
         if (!AppendSavedAsset(state, data, out message) ||
             !AppendSavedAsset(state, material, out message) ||
-            !AppendSavedAsset(state, material.shader, out message))
+            !AppendSavedAsset(state, material.shader, out message) ||
+            !AppendSavedAsset(state, Shader.Find(TerrainGrassAlbedoBaker.BakeShaderName), out message))
             return false;
         state.Append(material.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT") ? '1' : '0').Append('|');
         AppendFloat(state, material.GetFloat("_HeightTransition"));

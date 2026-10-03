@@ -19,7 +19,9 @@ Authored terrain areas sample their assigned TerrainData directly, including hol
 
 Adjacent terrains assign roots through world-space bounds that include the lower edge and exclude the upper edge. This keeps fractional-origin seams from generating duplicate roots or dropping a valid root when normalized texture coordinates round to one.
 
-A positive area mask means **black = no grass, white = full grass**. Missing masks and empty painted assets produce no grass. Overlapping area density uses the maximum coverage, so overlap does not double the population.
+CPU grid bounds include float32 rounding in candidate coordinates. The shader preserves the written root calculation order so compiler reassociation cannot move a candidate beyond that interval. Upgrading from the earlier optimized calculation can shift existing roots by floating-point rounding amounts, especially at large world coordinates; the world-cell seeds are unchanged.
+
+A positive area mask means **black = no grass, white = full grass**. Missing masks and empty painted assets produce no grass. Overlapping area density uses the maximum coverage, so overlap does not double the population. Areas whose computed footprint overflows or collapses at the current coordinate precision stop contributing coverage and recover when usable coordinates are restored.
 
 ### Painting individual spots
 
@@ -29,7 +31,7 @@ Long cursor segments are clipped to the map plus brush overlap before applying t
 
 Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. Small strokes update occupancy counts and upload a bounded pixel rectangle through a reusable staging texture where regional copies are supported. Unsupported copies and full edits use the authoritative whole-map data.
 
-For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers must create and populate their RenderTextures before use. An uncreated or released density texture contributes no grass. Call `MarkCoverageDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path. Destroying an explicitly assigned density asset keeps coverage absent until that binding is deliberately cleared or replaced.
+For external density maps, use a linear 2D texture with a normalized or floating-point red channel. Alpha-only, integer and depth formats contribute no coverage. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers must create and populate their RenderTextures before use. An uncreated or released density texture contributes no grass. Call `MarkCoverageDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path. Destroying an explicitly assigned density asset keeps coverage absent until that binding is deliberately cleared or replaced.
 
 ### Mesh surfaces and legacy scenes
 

@@ -32,8 +32,46 @@ public static class GrassDispatchMath
             x1 <= x0 || z1 <= z0)
             return false;
 
-        range = new GrassGridRange((int)x0, (int)z0, (int)(x1 - x0), (int)(z1 - z0));
+        int firstX = (int)x0, firstZ = (int)z0;
+        int endX = (int)x1, endZ = (int)z1;
+        if (!ExpandForFloatRounding(min.x, max.x, spacing, ref firstX, ref endX) ||
+            !ExpandForFloatRounding(min.z, max.z, spacing, ref firstZ, ref endZ))
+            return false;
+
+        range = new GrassGridRange(firstX, firstZ, endX - firstX, endZ - firstZ);
         return true;
+    }
+
+    private static bool ExpandForFloatRounding(float min, float max, float spacing,
+        ref int first, ref int end)
+    {
+        // The analytic range assumes exact arithmetic. Shader float rounding can
+        // move an adjacent cell's root onto a bound, including a whole group of
+        // integer cells at large coordinates. Positive spacing makes both cell
+        // endpoints monotonic, so the first unreachable neighbor ends each search.
+        while (CandidateEndpoint(first - 1, spacing, true) >= min)
+        {
+            first--;
+            if (first < -MaximumCellCoordinate)
+                return false;
+        }
+        while (CandidateEndpoint(end, spacing, false) <= max)
+        {
+            end++;
+            if (end > MaximumCellCoordinate)
+                return false;
+        }
+        return true;
+    }
+
+    private static float CandidateEndpoint(int cell, float spacing, bool upper)
+    {
+        // Match the compute shader's precise int -> float, jitter addition and
+        // spacing product, with an inclusive half-cell jitter envelope. Promote
+        // each rounded intermediate before the next operation to make both
+        // float32 rounding steps explicit on the CPU too.
+        float jittered = (float)((double)(float)cell + (upper ? 0.5 : -0.5));
+        return (float)((double)jittered * spacing);
     }
 
     public static int FloorDivide(int value, int divisor)

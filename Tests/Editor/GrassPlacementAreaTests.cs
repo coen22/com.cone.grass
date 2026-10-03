@@ -5,6 +5,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
@@ -43,6 +44,63 @@ public sealed class GrassPlacementAreaTests
         AssertUv(data.WorldToMask, new Vector3(100f, 0f, -30f), 0.5f, 0.5f);
         Assert.That(data.WorldBounds.size.x, Is.EqualTo(18f).Within(0.0001f));
         Assert.That(data.WorldBounds.size.z, Is.EqualTo(8f).Within(0.0001f));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void UnrepresentableFiniteFootprintsStopCoverageWithoutPublishingInvalidBoundsAndRecover(bool overflow)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        var regions = new List<Bounds>();
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, changes) =>
+        {
+            if (source == area)
+                regions.Add(region);
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            uint revision = area.SourceRevision, paintRevision = density.Revision;
+            // All assigned values are finite. The first case overflows a corner;
+            // the second loses the complete ten-metre width to float precision.
+            area.transform.position = new Vector3(overflow ? 2e38f : 1e20f, 0f, 0f);
+            var serialized = new SerializedObject(area);
+            serialized.FindProperty("size").vector2Value = new Vector2(overflow ? 3e38f : 10f, 10f);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            Assert.That(area.TryGetCaptureData(out _), Is.False);
+            Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+            Assert.That(area.Paint(area.transform.position, 1f, 1f, 1f, true), Is.False);
+            Assert.That(density.Revision, Is.EqualTo(paintRevision));
+            Assert.That(area.SourceRevision, Is.GreaterThan(revision));
+            Assert.That(regions.Count, Is.EqualTo(1));
+            Assert.That(regions[0], Is.EqualTo(original.WorldBounds),
+                "Only the old valid footprint should be invalidated when computed geometry becomes unusable.");
+            revision = area.SourceRevision;
+            Assert.That(area.TryGetCaptureData(out _), Is.False);
+            Assert.That(area.SourceRevision, Is.EqualTo(revision),
+                "An unchanged invalid frame must not invalidate captures every observation.");
+
+            area.transform.position = Vector3.zero;
+            serialized.Update();
+            serialized.FindProperty("size").vector2Value = new Vector2(10f, 10f);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+            Assert.That(restored.WorldBounds, Is.EqualTo(original.WorldBounds));
+            Assert.That(restored.DensityTexture, Is.SameAs(original.DensityTexture));
+            Assert.That(area.SourceRevision, Is.GreaterThan(revision));
+            Assert.That(regions.Count, Is.EqualTo(2));
+            Assert.That(regions[1], Is.EqualTo(original.WorldBounds));
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+        }
     }
 
     [TestCase(1f, 1f)]
@@ -117,6 +175,95 @@ public sealed class GrassPlacementAreaTests
 
         area.ConfigureTexture(null, texture);
         Assert.That(area.TryGetCaptureData(out _), Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AlphaOnlyExternalDensityStaysEmptyUntilAUsableRedFormatReplacesIt(bool reinitialize)
+    {
+        if (!SystemInfo.SupportsTextureFormat(TextureFormat.Alpha8) || !SystemInfo.SupportsTextureFormat(TextureFormat.R8))
+            Assert.Ignore("This Editor must support constructing both Alpha8 and R8 textures for the format transition.");
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+        var texture = new Texture2D(16, 16, TextureFormat.Alpha8, false, true);
+        assets.Add(texture);
+        texture.LoadRawTextureData(new byte[256]);
+        texture.Apply(false, false);
+        BindLocalTexture(area, texture);
+
+        Assert.That(GrassPlacementDrawData.SupportsDensityFormat(texture), Is.False);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(snapshot.WorldBounds), Is.False);
+        Assert.That(area.DensityTexture, Is.SameAs(texture), "The producer retains the explicitly assigned texture.");
+        snapshot.Shape = GrassPlacementShape.Texture;
+        snapshot.DensityTexture = texture;
+        Assert.That(snapshot.IntersectsCoverage(snapshot.WorldBounds), Is.False);
+        uint densityRevision = area.DensityRevision, groundRevision = area.GroundColorRevision, surfaceRevision = area.SurfaceRevision;
+
+        Texture2D replacement;
+        if (reinitialize)
+        {
+            Assert.That(texture.Reinitialize(16, 16, TextureFormat.R8, false), Is.True);
+            byte[] red = new byte[256];
+            Array.Fill(red, byte.MaxValue);
+            texture.LoadRawTextureData(red);
+            texture.Apply(false, false);
+            replacement = texture;
+        }
+        else
+        {
+            replacement = NewTexture();
+            BindLocalTexture(area, replacement);
+        }
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.DensityTexture, Is.SameAs(replacement));
+        Assert.That(area.DensityRevision, Is.GreaterThan(densityRevision));
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+
+        if (!reinitialize)
+        {
+            area.SetGroundColorTexture(texture, false);
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData color), Is.True);
+            Assert.That(color.GroundColorTexture, Is.SameAs(texture),
+                "The density format contract must not change color-texture readiness.");
+        }
+    }
+
+    [TestCase(GraphicsFormat.R8_UNorm, true)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, true)]
+    [TestCase(GraphicsFormat.R16_SFloat, true)]
+    [TestCase(GraphicsFormat.R8_UInt, false)]
+    [TestCase(GraphicsFormat.R8_SInt, false)]
+    public void DensityFormatClassificationDoesNotAllocateProducerTextureStorage(GraphicsFormat format, bool supported)
+    {
+        // Unity validates descriptor support even when GPU storage is not created.
+        if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render))
+            Assert.Ignore("This Editor cannot construct a RenderTexture descriptor for " + format + ".");
+        var descriptor = new RenderTextureDescriptor(16, 16)
+        {
+            graphicsFormat = format,
+            depthStencilFormat = GraphicsFormat.None,
+            msaaSamples = 1
+        };
+        var texture = new RenderTexture(descriptor);
+        assets.Add(texture);
+        Assert.That(texture.graphicsFormat, Is.EqualTo(format));
+        Assert.That(texture.IsCreated(), Is.False);
+        Assert.That(GrassPlacementDrawData.SupportsDensityFormat(texture), Is.EqualTo(supported));
+        Assert.That(texture.IsCreated(), Is.False);
+    }
+
+    [Test]
+    public void DepthOnlyTextureCannotSupplyDensity()
+    {
+        if (!SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.Depth))
+            Assert.Ignore("This Editor must support constructing depth RenderTextures.");
+        var texture = new RenderTexture(16, 16, 16, RenderTextureFormat.Depth);
+        assets.Add(texture);
+        Assert.That(GrassPlacementDrawData.SupportsDensityFormat(texture), Is.False);
+        Assert.That(texture.IsCreated(), Is.False);
     }
 
     [Test]

@@ -142,6 +142,35 @@ public sealed class GrassGpuGenerationTests
         AssertGuards(roots, 0, 117);
     }
 
+    [TestCase(290, 6, true, 29.05000114440918f)]
+    [TestCase(-95, 602, true, -9.449999809265137f)]
+    [TestCase(163, 483, false, 16.25f)]
+    [TestCase(-44, -253, false, -4.450000286102295f)]
+    [TestCase(8388610, 3, true, 838861f)]
+    public void PreciseGpuRootOnAWorldBoundRetainsItsGridCell(
+        int cellX, int cellZ, bool minimum, float expectedX)
+    {
+        const float spacing = 0.1f;
+        shader.SetFloat("_Spacing", spacing);
+        shader.SetVector("_CameraPosition", new Vector4(cellX * spacing, 0f, cellZ * spacing, 0f));
+        shader.SetVector("_CenterPos", new Vector4(cellX * spacing, cellZ * spacing, 0f, 0f));
+        Generate(cellX, cellZ, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[] { 1, 0, 0, 0 }));
+        Vector4 root = ReadPositions()[offsets[0]];
+        Assert.That(root.x, Is.EqualTo(expectedX),
+            "Root arithmetic must retain the written jitter-add then spacing-product order. " +
+            "The former optimized order moved cell (8388610,3) to X=838861.125.");
+
+        Bounds bounds = new Bounds(new Vector3(root.x + (minimum ? 0.5f : -0.5f), 0f, root.z),
+            new Vector3(1f, 0f, 1f));
+        Assert.That(minimum ? bounds.min.x : bounds.max.x, Is.EqualTo(root.x));
+        Assert.That(GrassDispatchMath.TryGetGridRange(bounds, spacing, out GrassGridRange range), Is.True);
+        Assert.That(cellX, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
+        Assert.That(cellZ, Is.GreaterThanOrEqualTo(range.MinZ).And.LessThan(range.MaxZ));
+        AssertArguments(1, 0, 0);
+        AssertGuards(ReadPositions(), 0, 1);
+    }
+
     [TestCase(0)]
     [TestCase(1)]
     [TestCase(2)]

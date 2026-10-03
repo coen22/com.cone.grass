@@ -1643,14 +1643,18 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         3, argumentStride) { name = "Grass Indirect Arguments" };
                 }
                 owner.GetLodCapacity(LodCapacities, LodOffsets);
+                uploadArguments |= UpdateArgumentData(meshes);
+                if (uploadArguments)
+                    Arguments.SetData(argumentData);
+                return changed;
+            }
+
+            private bool UpdateArgumentData(Mesh[] meshes)
+            {
+                bool changed = false;
                 for (int lod = 0; lod < 3; lod++)
                 {
-                    if (argumentMeshes[lod] != meshes[lod])
-                    {
-                        argumentMeshes[lod] = meshes[lod];
-                        uploadArguments = true;
-                    }
-                    argumentData[lod] = new GraphicsBuffer.IndirectDrawIndexedArgs
+                    var next = new GraphicsBuffer.IndirectDrawIndexedArgs
                     {
                         indexCountPerInstance = meshes[lod].GetIndexCount(0),
                         instanceCount = 0,
@@ -1658,9 +1662,16 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         baseVertexIndex = meshes[lod].GetBaseVertex(0),
                         startInstance = 0
                     };
+                    // Public cache accessors expose mutable Mesh instances.
+                    // Topology can change while the mesh reference stays stable.
+                    GraphicsBuffer.IndirectDrawIndexedArgs previous = argumentData[lod];
+                    changed |= argumentMeshes[lod] != meshes[lod] ||
+                        previous.indexCountPerInstance != next.indexCountPerInstance ||
+                        previous.startIndex != next.startIndex ||
+                        previous.baseVertexIndex != next.baseVertexIndex;
+                    argumentMeshes[lod] = meshes[lod];
+                    argumentData[lod] = next;
                 }
-                if (uploadArguments)
-                    Arguments.SetData(argumentData);
                 return changed;
             }
 

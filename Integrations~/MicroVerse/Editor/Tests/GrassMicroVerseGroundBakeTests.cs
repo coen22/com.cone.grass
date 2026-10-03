@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 /// <summary>Exercises saved native TerrainLit bakes through the optional bridge's public editor API.</summary>
@@ -20,6 +25,7 @@ public sealed class GrassMicroVerseGroundBakeTests
     private GrassMicroVerseTestMaskTarget target;
     private GrassMicroVerseBridge bridge;
     private int bakeCount;
+    private Scene savedScene;
 
     [SetUp]
     public void SetUp()
@@ -101,6 +107,9 @@ public sealed class GrassMicroVerseGroundBakeTests
     public void TearDown()
     {
         TerrainGrassAlbedoBaker.Baked -= OnBaked;
+        if (savedScene.IsValid() && savedScene.isLoaded)
+            EditorSceneManager.CloseScene(savedScene, true);
+        savedScene = default;
         for (int i = owned.Count - 1; i >= 0; i--)
             if (owned[i] && !AssetDatabase.Contains(owned[i]))
                 Object.DestroyImmediate(owned[i]);
@@ -129,6 +138,42 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
         Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
         AssertColor(output.GetPixel(32, 32), Color.red);
+    }
+
+    [Test]
+    public void LegacyBakeKeyWithoutCaptureShaderFailsPreflightAndRebuildsAfterCacheReset()
+    {
+        Texture2D output = Refresh();
+        string currentSourceKey = bridge.GroundBakeSourceKey;
+        string legacySourceKey = LegacySourceKeyWithoutBakeShader();
+        string outputKey = bridge.GroundBakeOutputKey;
+        string guid = AssetDatabase.AssetPathToGUID(outputPath);
+        Hash128 sourceHash = AssetDatabase.GetAssetDependencyHash(diffusePath);
+        Color[] sourcePixels = diffuse.GetPixels();
+        bridge.SetBakedGroundColor(output, outputPath, legacySourceKey, outputKey);
+        GrassMicroVerseBridgeUtility.ClearCaches();
+        uint revision = bridge.PlacementArea.SourceRevision;
+
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.False);
+        StringAssert.Contains("stale", message);
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(legacySourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(outputKey));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(density));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(output));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Build preflight must not repair the old record.");
+        Assert.That(bakeCount, Is.EqualTo(1));
+
+        Assert.That(Refresh(), Is.SameAs(output));
+        Assert.That(bakeCount, Is.EqualTo(2), "A new session must not reuse an output whose key omitted the capture shader.");
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(currentSourceKey).And.Not.EqualTo(legacySourceKey));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
+        Assert.That(AssetDatabase.GetAssetDependencyHash(diffusePath), Is.EqualTo(sourceHash));
+        Assert.That(diffuse.GetPixels(), Is.EqualTo(sourcePixels));
+        Assert.That(EditorUtility.IsDirty(diffuse), Is.False);
+        AssertColor(output.GetPixel(32, 32), Color.red);
+        Refresh();
+        Assert.That(bakeCount, Is.EqualTo(2), "The corrected saved key must settle after one replacement bake.");
     }
 
     [Test]
@@ -267,6 +312,100 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(bakeCount, Is.EqualTo(2));
         Assert.That(Refresh(), Is.SameAs(original));
         Assert.That(bakeCount, Is.EqualTo(2), "Ordinary refresh must resume after the callback returns.");
+    }
+
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public void RefreshIterationSurvivesBakeObserversDeletingCurrentAndLaterOwners(bool saveScene, bool childBridges)
+    {
+        // Keep the shared Terrain alive when a callback removes a bridge owner.
+        Object.DestroyImmediate(bridge);
+        var candidates = new GrassMicroVerseBridge[3];
+        GameObject group = childBridges ? Own(new GameObject("Bridge group")) : null;
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            GameObject owner = Own(new GameObject("Bake consumer " + i));
+            if (group)
+                owner.transform.SetParent(group.transform);
+            candidates[i] = AddBridge(owner, 64, true);
+            var serialized = new SerializedObject(candidates[i]);
+            serialized.FindProperty("groundBakeAssetPath").stringValue = folder + "/Consumer" + i + ".asset";
+            serialized.FindProperty("autoRefresh").boolValue = !saveScene;
+            serialized.FindProperty("pollWhileEditing").boolValue = false;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+        if (saveScene)
+        {
+            savedScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            SceneManager.MoveGameObjectToScene(terrain.gameObject, savedScene);
+            if (group)
+                SceneManager.MoveGameObjectToScene(group, savedScene);
+            else
+                foreach (GrassMicroVerseBridge candidate in candidates)
+                    SceneManager.MoveGameObjectToScene(candidate.gameObject, savedScene);
+        }
+
+        bool removed = false;
+        GrassMicroVerseBridge survivor = null;
+        Action<Terrain, Texture2D> removeOwners = (source, output) =>
+        {
+            if (source != terrain || removed)
+                return;
+            removed = true;
+            GrassMicroVerseBridge current = null, later = null;
+            string path = AssetDatabase.GetAssetPath(output);
+            foreach (GrassMicroVerseBridge candidate in candidates)
+            {
+                if (candidate.GroundBakeAssetPath == path)
+                    current = candidate;
+                else if (!later)
+                    later = candidate;
+                else
+                    survivor = candidate;
+            }
+            Assert.That(current, Is.Not.Null);
+            Assert.That(later, Is.Not.Null);
+            Assert.That(survivor, Is.Not.Null);
+            Object.DestroyImmediate(current.gameObject);
+            Object.DestroyImmediate(later.gameObject);
+        };
+        TerrainGrassAlbedoBaker.Baked += removeOwners;
+        try
+        {
+            if (saveScene)
+                Assert.That(EditorSceneManager.SaveScene(savedScene, folder + "/Consumers.unity"), Is.True);
+            else
+            {
+                // Invoke the real update handler once, without relying on a
+                // wall-clock debounce or an unrelated editor repaint sequence.
+                Type watcher = typeof(GrassMicroVerseBridgeWatcher);
+                FieldInfo debounce = watcher.GetField("refreshAfter", BindingFlags.Static | BindingFlags.NonPublic);
+                double previousDebounce = (double)debounce.GetValue(null);
+                try
+                {
+                    debounce.SetValue(null, -1d);
+                    MethodInfo update = watcher.GetMethod("Update", BindingFlags.Static | BindingFlags.NonPublic);
+                    Assert.DoesNotThrow(() => update.Invoke(null, null));
+                }
+                finally
+                {
+                    debounce.SetValue(null, previousDebounce);
+                }
+            }
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= removeOwners;
+        }
+
+        Assert.That(removed, Is.True, "The regression must cross a real synchronous Baked callback.");
+        Assert.That(bakeCount, Is.EqualTo(2), "The deleted queued owner must be skipped, and the surviving owner must finish.");
+        Assert.That(survivor, Is.Not.Null);
+        Assert.That(survivor.LastRefreshSucceeded, Is.True, survivor.LastRefreshMessage);
+        Assert.That(survivor.PlacementArea.DensityTexture, Is.SameAs(density));
+        Assert.That(survivor.PlacementArea.GroundColorTexture, Is.SameAs(survivor.BakedGroundColor));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(survivor, out string message), Is.True, message);
     }
 
     [Test]
@@ -418,6 +557,43 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(bridge.PlacementArea.TryGetCaptureData(out _), Is.True);
         Assert.That(bridge.BakedGroundColor, Is.Not.Null);
         return bridge.BakedGroundColor;
+    }
+
+    // Reconstruct the shipped v1 record format before the capture shader was
+    // included. This models an upgraded project without modifying source assets
+    // or relying on a new shader import changing unrelated Unity dirty counters.
+    private string LegacySourceKeyWithoutBakeShader()
+    {
+        var state = new StringBuilder();
+        state.Append("1|").Append(bridge.GroundBakeResolution.ToString(CultureInfo.InvariantCulture)).Append('|');
+        state.Append(((int)QualitySettings.activeColorSpace).ToString(CultureInfo.InvariantCulture)).Append('|');
+        Value(data.size.x); Value(data.size.z);
+        Asset(data); Asset(terrain.materialTemplate); Asset(terrain.materialTemplate.shader);
+        state.Append(terrain.materialTemplate.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT") ? '1' : '0').Append('|');
+        Value(terrain.materialTemplate.GetFloat("_HeightTransition"));
+        foreach (TerrainLayer source in data.terrainLayers)
+        {
+            Asset(source); Asset(source.diffuseTexture); Asset(source.maskMapTexture);
+            Value(source.tileSize.x); Value(source.tileSize.y);
+            Value(source.tileOffset.x); Value(source.tileOffset.y);
+            Vector(source.diffuseRemapMin); Vector(source.diffuseRemapMax);
+            Vector(source.maskMapRemapMin); Vector(source.maskMapRemapMax);
+        }
+        return Hash128.Compute(state.ToString()).ToString();
+
+        void Value(float value) => state.Append(value.ToString("R", CultureInfo.InvariantCulture)).Append('|');
+        void Vector(Vector4 value) { Value(value.x); Value(value.y); Value(value.z); Value(value.w); }
+        void Asset(Object asset)
+        {
+            if (!asset)
+            {
+                state.Append("null|");
+                return;
+            }
+            Assert.That(AssetDatabase.TryGetGUIDAndLocalFileIdentifier(asset, out string assetGuid, out long localId), Is.True);
+            state.Append(assetGuid).Append(':').Append(localId.ToString(CultureInfo.InvariantCulture)).Append(':');
+            state.Append(AssetDatabase.GetAssetDependencyHash(AssetDatabase.GetAssetPath(asset))).Append('|');
+        }
     }
 
     private void SetDiffuse(Color color)

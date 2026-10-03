@@ -55,9 +55,16 @@ public static class GrassMicroVerseBridgeWatcher
         // cached and clean builds. Never invoke MicroVerse generation here.
         foreach (GameObject root in scene.GetRootGameObjects())
         {
+            if (!root)
+                continue;
             foreach (GrassMicroVerseBridge bridge in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
             {
-                if (bridge.enabled && !GrassMicroVerseBridgeUtility.Refresh(bridge))
+                // An earlier Baked callback may delete a later root/component
+                // from these snapshots, or the bridge currently refreshing.
+                if (!bridge || !bridge.enabled)
+                    continue;
+                bool resolved = GrassMicroVerseBridgeUtility.Refresh(bridge);
+                if (bridge && !resolved)
                     Debug.LogWarning("Unresolved grass output while saving: " + bridge.LastRefreshMessage, bridge);
             }
         }
@@ -103,6 +110,8 @@ public static class GrassMicroVerseBridgeWatcher
             string previousMessage = bridge.LastRefreshMessage;
             bool previousSuccess = bridge.LastRefreshSucceeded;
             GrassMicroVerseBridgeUtility.Refresh(bridge, false, true, false);
+            if (!bridge || !bridge.PlacementArea)
+                continue;
             nextPoll[bridge] = now + bridge.PollInterval;
             refreshed |= previousRevision != bridge.PlacementArea.SourceRevision ||
                 previousMessage != bridge.LastRefreshMessage || previousSuccess != bridge.LastRefreshSucceeded;
