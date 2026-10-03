@@ -64,9 +64,17 @@ def main():
     root = args.repo.resolve()
     output = args.output.resolve()
     marker = output / ".grass-validation-project"
+    sample_source = root / "Integrations~/MicroVerse"
+    template_source = root / "Tools~/UnityProject"
+    # These three roots are required by the generated build harness. A partial
+    # checkout must not be mistaken for deleted templates and erase scripts
+    # whose GUIDs are still referenced by the existing validation scene.
+    for source in (sample_source, template_source / "Editor", template_source / "Runtime"):
+        if not source.is_dir():
+            parser.error(f"required validation template directory is missing: {source}")
     if output == root or output in root.parents:
         parser.error("output cannot replace the repository or its parent")
-    for source in (root / "Integrations~/MicroVerse", root / "Tools~/UnityProject"):
+    for source in (sample_source, template_source):
         source = source.resolve()
         if output == source or source in output.parents:
             parser.error("output cannot be inside a copied source directory")
@@ -102,9 +110,9 @@ def main():
     (output / "Packages/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (output / "ProjectSettings/ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity}\n")
     sample = output / "Assets/MicroVerseMaskBridge"
-    synchronize_templates(root / "Integrations~/MicroVerse", sample)
+    synchronize_templates(sample_source, sample)
     for name in ("Editor", "Runtime"):
-        source = root / "Tools~/UnityProject" / name
+        source = template_source / name
         destination = output / "Assets" / ("Editor" if name == "Editor" else "ValidationRuntime")
         synchronize_templates(source, destination)
     print(f"Created {output} for Unity {args.unity}, URP {args.urp}.")
