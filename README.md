@@ -1,89 +1,151 @@
-# UnityURP-InfiniteGrass
-Fully Procedural and Dynamic Grass for Unity URP. This repository is structured as a Unity Package (UPM).
+# Infinite Grass for Unity URP
 
-It meant to be a fast to implement grass system that doesn't need any baking or having any static environemnt.</br>
-Just enable it, give it the LayerMask of the objects where you want it to be, and everything gets drawn procedurally.
+Procedural, GPU-generated grass with explicit placement, editable density maps, geometric LOD, terrain color matching, and optional screen-space contact shadows.
 
-### Preview Video
-Tested on RTX 3060: https://youtu.be/NwVtPIxUuCY
+**2.0 preview:** this branch targets **Unity 6.6 / URP 17.6**. Unity 6.7 is a separate validation target. The new rendering path has source and mathematical checks plus authored EditMode tests, but has **not yet been imported, built, or visually profiled in Unity**. See [validation and known limits](Documentation~/Validation.md) before adopting it in a production project.
 
-### How to Use
-Install this repository as a Git package through the Unity Package Manager then add the "GrassDataRendererFeature" to your URP Renderer.</br>
-From there choose the LayerMask of your Terrain mesh.</br>
-Assign the Material and the ComputeShader (included in the package).</br></br>
-![image](https://github.com/user-attachments/assets/c673ac00-ec45-4300-847a-7854c105efff)
+## Install and set up
 
-Next, in your scene, make an empty object and add the "InfiniteGrassRenderer" script to it.</br>
-Assign the Grass Material (included in the package) and play with the settings until you get what you want.</br></br>
-![image](https://github.com/user-attachments/assets/cd034441-e707-45ac-88bc-c103c21d3713)
+1. In Unity 6.6, install this Git package through Package Manager. For this implementation branch, use:
+   `https://github.com/coen22/com.cone.grass.git#codex/grass-urp6-placement-contact-shadows`
+2. Use a URP renderer with RenderGraph enabled. Add **Grass Data Renderer Feature** to its Renderer Features.
+3. Assign `GrassPositionsCompute.compute` and the included `GrassHeightMapMat` to the feature. The height layer remains relevant to the legacy mesh surface path and unassigned mesh-surface fallback.
+4. Add one **Infinite Grass Renderer** component to the scene and assign the included grass blade material, or a copy of it.
+5. Leave **Placement Mode** at **Authored Areas**, add **Cone > Grass > Placement Area** to a GameObject, and assign its supporting **Terrain**.
+6. Choose **Circle** or **Box**, set its size, density, and edge falloff, and position it where grass should grow. Rotating around Y and scaling X/Z change the patch.
+7. To match the ground, assign the same **TerrainLayer** used below the grass and raise **Ground Color Strength**. The renderer provides overall blend strength and normalized blend height.
 
-# Features
-### Fully Procedural:
-You don't need to have a HeightMap or use the Unity Terrain, you can put grass on anything just by changing the LayerMask of it.</br>
-Also it doesn't require generating a big buffer of positions of the whole world, it generates just the necessary amout of positions around the camera so the Memory isn't a big concern.</br></br>
-![Image Sequence_002_0000](https://github.com/user-attachments/assets/1ef15340-b6bd-45e2-a17c-22448ebb8732)
+Authored terrain areas sample their assigned TerrainData directly, including holes. They do not need a grass layer on the Terrain. Areas remain constrained to their own footprint, even when a supporting Terrain is assigned. Enable **Use Terrain Bounds** only for a map intended to cover the entire terrain.
 
-### Frustum Culling and Smooth Density Falloff:
-Grass density now fades out smoothly from the camera position to the draw
-distance. Each cell uses a stable random threshold so blades disappear only
-once as you move, preventing flickering in the distance and giving a natural
-transition. Use the **Density Falloff Exponent** parameter on the
-`InfiniteGrassRenderer` component to control how gradual the fade is.</br></br>
-![image](https://github.com/user-attachments/assets/0ae48893-7149-47f1-a846-949183c8e9d9)
+A positive area mask means **black = no grass, white = full grass**. Missing masks and empty painted assets produce no grass. Overlapping area density uses the maximum coverage, so overlap does not double the population.
 
-### Dynamic Color Modifier:
-It allows you to modify the color of the grass blades using any object or texture you want.</br>
-To make you own color modifier, create a new material from "InfiniteGrass/Modifiers/GrassColoringShader", give the material a texture and a color.</br>
-Finally, add a quad mesh to your scene and apply the material to it, you can then place the object wherever you want with any scale or rotation like a Decal.</br>
-There is no problem also in using Particle Systems with that shader like the waves in the preview video.</br></br>
-![Image Sequence_003_0000](https://github.com/user-attachments/assets/c1d1bef9-d3d2-4689-b8f1-3ebd2f0f75ae)
+### Painting individual spots
 
-### Dynamic Mask and Density:
-Just like the color modifier, just make a material from "InfiniteGrass/Modifiers/GrassMaskShader" and apply it to a quad or any other mesh.</br>
-Just note that the usual meaning of "mask" here isn't what it's used, White means the grass will fully be cutout, Black means full density.</br>
-You can also instead of fully cutting out the grass make the density decrease by making the material "Opacity" property lower.</br>
-(The Red Channel of the VertexColor of your meshes also occludes the grass).</br></br>
-![Image Sequence_004_0000](https://github.com/user-attachments/assets/8e0fd3b1-f24f-44ed-994a-d8989242ac0d)
+Select a Placement Area and create a persistent density asset in its inspector. Use the Scene brush to paint, hold **Shift** to erase temporarily, or select erase mode. Radius, strength, and hardness control the brush. Each stroke supports Undo/Redo; changes are saved with the asset.
 
-### Dynamic Slope:
-By "Slope" I mean the inclination of the grass blade.</br>
-It's just a simple modifier like others, just make a material and apply it to a quad, but this time the color will describe the direction where the grass blade will be directed to.</br>
-Red controls how much the grass is inclined to the X axis (0: it will go to the -x, 1: it will go to the x, 0.5: it will stay upward).</br>
-Green controls how much the grass is inclined to the Z axis (0: it will go to the -z, 1: it will go to the z, 0.5: it will stay upward).</br>
-There is no need to use the blue channel cause the grass can't be inclined to the Y axis (it just mean it's upward).</br>
-This is usefull if you want to make Custom Wind effects, Explosions, Stepping on grass ...</br>
-There is an example of each of these in the Sample Scene.</br></br>
-![Untitled-2](https://github.com/user-attachments/assets/17bacc32-a0c8-4479-a7a0-0e5ab7627c91)</br>
-![Untitled-3](https://github.com/user-attachments/assets/2039ce7d-0d3f-44df-aef9-023f2bc67a9f)
+Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. It is not dependent on a texture being CPU-readable at runtime.
 
-### Wind System:
-Wind from texture, similar to the "Dynamic Slope" but just applied to the whole grass field.</br></br>
-![image](https://github.com/user-attachments/assets/fea2e411-ed77-45cb-87d9-c170cae28fe9)
+For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; the producer must call `MarkDirty()` when its contents change without changing its texture reference.
 
-### Stylized Billboard Grass:
-The grass blades are always (atleast trying) to look to the camera from all angles.</br>
-The material includes a lot of parameters to customize the look. Increasing
-**Expand Distant Grass Width** helps the thin distant blades blend more smoothly
-before they fade out.</br></br>
-![image](https://github.com/user-attachments/assets/ca5d7ff4-063a-49a3-bebb-c8bc92162576)
+### Mesh surfaces and legacy scenes
 
-## Performance Optimizations  <!-- NEW -->
+**Legacy Surface Layer** retains the broad layer-driven workflow. Select the mesh surface layer on the renderer feature. Mesh height capture stores world Y and uses vertex-color red as fractional surface eligibility. Color/mask/slope modifiers remain available.
 
-| Tip                                                                                                                      | Why it helps                                                                                           |
-|--------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
-| **Update the height/mask/ color/ slope textures only when the camera has moved farther than `Texture Update Threshold`** | Skips the four raster passes on frames where nothing in view has changed.                              |
-| **Dispatch the compute shader at half-rate (e.g. every second frame) on high-end GPUs**                                  | The grass position buffer often stays valid for two frames without artefacts, halving compute cost.    |
-| **Quantise the camera-space centre to the grass cell size**                                                              | Ensures cache-friendly reuse of generated cells and avoids frequent buffer resets.                     |
-| **Use `UNITY_VERTEX_OUTPUT_STEREO` only when XR is enabled**                                                             | Removes the extra instancing overhead for mono rendering.                                              |
-| **Pack the height and mask into a single `R16G16` texture**                                                              | Reduces tile memory pressure compared with two separate resources.                                     |
-| **Early-out in the fragment shader when the blade normal faces away from the light by more than 120 °**                  | Saves ALU on back-lit blades that will be alpha-faded anyway.                                          |
-| **Switch distant blades to an unlit material variant once they cross the half draw-distance**                            | Removes per-pixel lighting for the majority of on-screen grass while keeping near blades fully shaded. |
-| **Use `MaterialPropertyBlock` to push per-camera wind parameters**                                                       | Avoids creating material instances and keeps SRP batching intact.                                      |
-| **Batch `GraphicsBuffer.CopyCounterValue` calls together**                                                               | Minimises command-buffer stalls caused by counter queries.                                             |
-| **Enable Hi-Z culling in the compute shader (sample the depth pyramid before appending a position)**                     | Prevents blades that are fully occluded by terrain or large objects from ever being generated.         |
-| **Strip shader variants that keep unused colour or slope channels**                                                      | Shrinks build size and slashes shader warm-up time at launch.                                          |
+The included old Sample Scene explicitly selects legacy mode. Existing user scenes should choose legacy mode during migration, or add Placement Areas and select their supporting surfaces. New renderers default to authored areas.
 
-## Visual Optimizations
+For an authored mesh patch, assign its **Paint Surface** collider with an associated Renderer. That explicit Renderer is captured independently of the layer mask. Patches without an assigned surface use the feature's height-layer fallback.
 
-- Use an alpha value to fade out distant blades instead of fully cutting them out.
-- Nearby grass should blend smoothly into the terrain texture.
+Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after changing a cached mesh surface, or disable **Cache Surface Data** while it moves. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new modifier renderers so the cached capture inventory includes them.
+
+## MicroVerse spline workflow
+
+Install the **MicroVerse Mask Bridge** sample from Package Manager. The sample adds no mandatory MicroVerse assembly dependency and contains no proprietary MicroVerse code.
+
+1. Create a MicroVerse **Spline Area** for the grass region.
+2. Use that same spline area and compatible filters/falloff for a **Texture Stamp**, painting the desired grass TerrainLayer.
+3. Use the same region for a **positive Mask Stamp**, writing density to a saved **MaskTarget**.
+4. Add a **Grass MicroVerse Bridge** and its adjacent Placement Area for each affected Terrain.
+5. In the bridge inspector, choose the MaskTarget asset, the explicit generated texture name for that Terrain, and the same TerrainLayer.
+6. Refresh the saved mask and save the scene. Spline edits then update through asset changes and optional editor polling. For a clean standalone build, resolve and save all mappings first.
+
+The bridge rebinds uniquely named texture subassets after replacement, rejects ambiguous/missing/sRGB outputs, and clears stale coverage on failure. It never guesses which tile belongs to a terrain.
+
+This first integration consumes **saved mask outputs**. Native MicroVerse generation-complete/cancellation hooks require verification against the installed MicroVerse version and are not implemented. The editor poll is eventually consistent; it cannot identify a native generation transaction. See the [sample guide](Integrations~/MicroVerse/README.md) for refresh, build, and test details.
+
+## Terrain and blade blending
+
+The ground capture samples unlit albedo using the selected TerrainLayer's world tiling, tile offset, and URP diffuse remap scale. Blades blend their lower color and diffuse response toward that ground color. Color capture uses premultiplied coverage, then decodes it before shading to avoid dark fringes along filtered area edges.
+
+**Ground Blend Height** is a fraction of blade height; the root transition remains consistent between geometry LODs. The optional material setting **Use Ground Normal** reconstructs a normal from the cached world-height map and helps align root lighting on slopes. It costs extra height samples and is off by default.
+
+A single TerrainLayer does not reproduce a mixture of several terrain layers or an arbitrary custom terrain material. For those areas, supply a density-aligned **Ground Color Texture** containing the final blended **albedo**, with no baked direct lighting or shadows. That texture overrides the selected layer. A native full-terrain-material albedo baker is not included.
+
+The MicroVerse Texture Stamp remains visible as distant blades thin out. Keep its boundary and the positive density mask aligned; changing only one stamp's filters or falloff creates a visible mismatch.
+
+## URP contact shadows
+
+Enable **Contact Shadows > Enabled** on Infinite Grass Renderer. The effect supports contacts between indirect grass and visible opaque scene surfaces using the main directional light.
+
+| Setting | Initial value | Purpose |
+|---|---:|---|
+| Strength | 0.35 | Amount of contact darkening |
+| Ray length | 0.75 m | Maximum local search length |
+| Steps | 8 | Quality/cost of the depth search |
+| Bias | 0.03 m | Reduces self-intersection |
+| Thickness | 0.15 m | Tolerance around sampled depth |
+| Maximum distance | 50 m | Limits contacts to nearby receivers |
+
+The feature requests scene depth and draws a dedicated grass depth/coverage pass with matching deformation. Contact evaluation reads those depths and multiplies the existing camera color attachment through fixed-function blending. It preserves MSAA color samples and alpha, and does not sample the color attachment it writes. Disabled contacts schedule no contact passes or intermediates.
+
+This is a **custom screen-space approximation**. Unity's [pipeline comparison](https://docs.unity3d.com/6000.6/Documentation/Manual/render-pipelines-feature-comparison.html) lists built-in contact shadows for HDRP, not URP. Off-screen and hidden casters are unavailable. Only the nearest grass depth is stored, so fractional/MSAA silhouettes are approximate. The final color multiplication also attenuates ambient/emissive contributions. It supplements normal main-light shadow reception; it does not add grass to the directional light's shadow atlas.
+
+## Reducing aliasing
+
+The new path combines several controls:
+
+- Stable world-space seeds for roots, density decisions, and LOD selection.
+- Fractional population coverage near density transitions.
+- Real geometry LOD with a stable transition band.
+- A projected **Minimum Pixel Width**, with proportional coverage compensation so widening thin blades does not simply make the field denser.
+- Analytic blade-edge coverage.
+- **Alpha to Coverage** enabled only when the actual camera target uses MSAA; deterministic coverage discard otherwise.
+- A distance range that fades narrow specular highlights.
+- Shared deformation and coverage for color and contact depth.
+
+Start by checking 4x MSAA, a one-pixel minimum width, and restrained distant width expansion in the target scene. Compare camera pans and wind motion with contacts both on and off. Unity documents that [AlphaToMask requires MSAA](https://docs.unity3d.com/6000.6/Documentation/Manual/writing-shader-alpha-to-mask.html); enabling it on a single-sample target has platform-dependent results.
+
+**TAA motion vectors are not implemented.** The custom indirect draw and wind deformation need a proper previous-frame motion-vector path before complete TAA support can be claimed. Camera-only vectors cannot describe animated blades. FXAA/SMAA may help the final image but do not replace stable geometry and coverage.
+
+## Rendering and performance changes
+
+Position buffers, per-LOD indirect arguments, counters, and capture targets belong to individual camera resources and persist between frames. Buffer capacity changes rebuild resources deliberately; optional count previews use asynchronous readback.
+
+At the default five subdivisions, the new meshes use:
+
+| LOD | Vertices per blade | Triangles per blade |
+|---|---:|---:|
+| Near | 13 | 11 |
+| Middle | 7 | 5 |
+| Far | 3 | 1 |
+
+The old near mesh duplicated row vertices and used 23 vertices. Its distance deformation retained all 11 triangles. The new near mesh shares rows; middle/far draws use separate meshes and independent GPU queues.
+
+Generation checks dispatch boundaries, surface/area coverage, distance density, and a conservative frustum radius before writing bounded queues. Distance density remains full only to **Full Density Distance**, then fades toward **Draw Distance**. Overflow is safely dropped and available in diagnostics. Tune queue weights/capacity if diagnostics show overflow.
+
+Static placement and height captures reuse data until their mapping or source revision changes. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
+
+These are structural reductions, **not measured frame-rate claims**. The richer fragment lighting, extra ground samples, and enabled contact shadows also cost GPU time. Profile the target scene at equal visual coverage. GPU Resident Drawer does not automatically optimize these custom indirect draws.
+
+## Migration notes
+
+- Package baseline changes from the inconsistent Unity 2021.3/URP 17.1 declaration to Unity 6.6/URP 17.6.
+- This is a `2.0.0-preview.1` API preview.
+- New components use **Authored Areas**. Set **Legacy Surface Layer** explicitly for previous layer-based scenes.
+- `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot.
+- `ArgsBuffer` and the synchronous debug `Buffer` fields are removed. The renderer feature owns per-camera resources. Use `VisibleGrassCount` and `OverflowGrassCount` for asynchronous diagnostics.
+- `GetGrassMeshCache()` remains a near-mesh compatibility accessor; `GetLodMeshes()` returns the three shared meshes.
+- Custom capture shaders should use `_GrassCaptureVP` and put their capture `LightMode` tag and name on the actual pass.
+- Custom blade shaders need the `GrassForward` pass and `_GrassInstanceOffset`; contact support additionally needs the `GrassContactDepth` contract.
+- Main-light and scene ambient-probe SH lighting are the default; the draw explicitly supplies its SH coefficients and does not sample local light probes per grass root. Optional additional-light shading targets Forward+ clustered lighting; ordinary Forward per-object light indices are unavailable to this indirect draw.
+- The intended initial camera target is single-view Game/Scene base cameras. Overlay, reflection, preview, and XR cameras are excluded. Deferred, camera stacking variants, TAA, and additional graphics APIs require explicit validation.
+
+## Implementation tracking
+
+| Issue | Workstream |
+|---|---|
+| [#27](https://github.com/coen22/com.cone.grass/issues/27) | GPU lifetime, compute safety, RenderGraph dependencies |
+| [#28](https://github.com/coen22/com.cone.grass/issues/28) | Generation, capture memory, geometric LOD, profiling |
+| [#29](https://github.com/coen22/com.cone.grass/issues/29) | Unity 6.6 baseline and 6.7 validation |
+| [#30](https://github.com/coen22/com.cone.grass/issues/30) | Authored placement and painting |
+| [#31](https://github.com/coen22/com.cone.grass/issues/31) | MicroVerse spline masks and terrain textures |
+| [#32](https://github.com/coen22/com.cone.grass/issues/32) | Grass/scene contact shadows |
+| [#33](https://github.com/coen22/com.cone.grass/issues/33) | Terrain/root blending |
+| [#34](https://github.com/coen22/com.cone.grass/issues/34) | Aliasing and temporal stability |
+
+Issues stay open until their Unity acceptance checks pass. See [validation](Documentation~/Validation.md) and the [MicroVerse guide](Integrations~/MicroVerse/README.md).
+
+## Original demo
+
+The [original preview video](https://youtu.be/NwVtPIxUuCY) shows the earlier renderer and interaction effects. It is not a benchmark or visual validation of this preview branch.
+
+Original package author: Youssef Afella. See [LICENSE](LICENSE).

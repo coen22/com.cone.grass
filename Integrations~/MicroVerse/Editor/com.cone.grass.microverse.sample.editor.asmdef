@@ -1,0 +1,11 @@
+{
+  "name": "com.cone.grass.microverse.sample.editor",
+  "references": [
+    "com.cone.grass",
+    "com.cone.grass.microverse.sample"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

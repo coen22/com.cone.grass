@@ -1,205 +1,308 @@
 using System;
-using System.Linq;
 using UnityEngine;
-using UnityEngine.Serialization;
+using UnityEngine.Rendering;
 
+public enum GrassPlacementMode
+{
+    AuthoredAreas = 0,
+    LegacySurfaceLayer = 1
+}
+
+/// <summary>Scene settings and shared blade meshes. The renderer feature owns camera GPU resources.</summary>
 [ExecuteAlways]
+[DisallowMultipleComponent]
 public class InfiniteGrassRenderer : MonoBehaviour
 {
-    public static InfiniteGrassRenderer Instance;
-    private static readonly int CenterPos = Shader.PropertyToID("_CenterPos");
-    private static readonly int DrawDistance = Shader.PropertyToID("_DrawDistance");
-    private static readonly int SubdivisionDistance = Shader.PropertyToID("_SubdivisionDistance");
-    private static readonly int SubdivisionHeightBoost = Shader.PropertyToID("_SubdivisionHeightBoost");
-    private static readonly int SubdivisionBumpWidth = Shader.PropertyToID("_SubdivisionBumpWidth");
-    private static readonly int TextureUpdateThreshold = Shader.PropertyToID("_TextureUpdateThreshold");
-    private static readonly int MaxSubdivision = Shader.PropertyToID("_MaxSubdivision");
-    private static readonly int FullDensityDistanceID = Shader.PropertyToID("_FullDensityDistance");
-    private static readonly int DensityFalloffExponentID = Shader.PropertyToID("_DensityFalloffExponent");
+    public static InfiniteGrassRenderer Instance { get; private set; }
 
-    [Header("Internal")]
+    [Header("Rendering")]
     public Material grassMaterial;
-    public ComputeBuffer ArgsBuffer;
-    
-    /// <summary>
-    /// Just a temp buffer to preview the visible grass count
-    /// </summary>
-    public ComputeBuffer Buffer;
+    [Tooltip("Authored Areas requires explicit Grass Placement Area components. Legacy mode uses the feature's height layer.")]
+    public GrassPlacementMode placementMode = GrassPlacementMode.AuthoredAreas;
+    public bool renderInSceneView = true;
 
-    [Header("Grass Properties")]
-    [Range(0.01f, 0.1f)] public float spacing = 0.1f;//Spacing between blades, Please don't make it too low
-    public float drawDistance = 300;
-    public float subdivisionDistance = 100;//Distance where grass mesh subdivisions fade out
-    public float fullDensityDistance = 30;//Distance around the camera kept at full density
-    [Tooltip("Controls how quickly grass fades with distance (higher is steeper)")]
-    public float densityFalloffExponent = 4f;
+    [Header("Population")]
+    [Min(0.01f)] public float spacing = 0.1f;
+    [Min(1f)] public float drawDistance = 300f;
+    [Min(0f)] public float fullDensityDistance = 30f;
+    [Min(0.1f)] public float densityFalloffExponent = 4f;
+    [Range(0f, 0.25f)] public float densityTransition = 0.05f;
 
-    [Header("Subdivision Height Bump")]
-    [Tooltip("Extra height applied near the Subdivision Distance")] public float subdivisionHeightBoost;
-    [Tooltip("Width of the height bump around the Subdivision Distance")] public float subdivisionBumpWidth = 20f;
-    public int grassMeshSubdivision = 5;//How many sections you will have in your grass blade mesh, 0 will give a triangle, having more sections will make the wind animation and the curvature looks better
-    public float textureUpdateThreshold = 10.0f;//The distance that the camera should move before we update the "Data Textures"
+    [Header("Geometry LOD")]
+    [Range(0, 8)] public int grassMeshSubdivision = 5;
+    [Min(0.01f)] public float nearLodDistance = 30f;
+    [Tooltip("Start of the far, single-triangle LOD.")]
+    public float subdivisionDistance = 100f;
+    [Min(0f)] public float lodTransitionWidth = 10f;
+    public float subdivisionHeightBoost;
+    [Min(0.01f)] public float subdivisionBumpWidth = 20f;
+    [Tooltip("Conservative world-space radius around a root for frustum culling. Increase for tall/wide, strongly bent grass.")]
+    [Min(0.1f)] public float cullingPadding = 2f;
 
-    [Header("Max Buffer Count (Millions)")]
-    public float maxBufferCount = 2;//The number we gonna use to initialize the positions buffer
-    //Don't make it too high cause that gonna impact performance, usually 2 - 3 should be enough unless you are using a crazy spacing
-    //Also don't make it too low cause it's gonna negativly impact the performance
+    [Header("Data Capture")]
+    [Tooltip("Power-of-two capture resolution. Higher values improve small boundaries at greater memory and capture cost.")]
+    public int captureResolution = 1024;
+    [Min(0.1f)] public float textureUpdateThreshold = 10f;
+    [Tooltip("Stable world-space minimum/maximum Y used by the top-down mesh capture.")]
+    public Vector2 captureHeightRange = new Vector2(-100f, 1000f);
+    public bool cacheSurfaceData = true;
+    [Tooltip("Keep enabled for moving mask/color/slope modifiers. Static scenes can disable it and call RefreshGrassData after edits.")]
+    public bool updateModifiersEveryFrame = true;
 
-    [Header("Debug (Enabling this will make the performance drop a lot)")]
+    [Header("GPU Capacity")]
+    [Tooltip("Total capacity across all three LOD queues, in millions. Overflow is dropped safely and exposed in diagnostics.")]
+    [Range(0.01f, 16f)] public float maxBufferCount = 2f;
+    public Vector3 lodCapacityWeights = new Vector3(0.35f, 0.45f, 0.2f);
+
+    [Header("Ground Blending")]
+    [Range(0f, 1f)] public float groundBlendStrength = 0.8f;
+    [Tooltip("Fraction of the blade height that blends toward the authored ground albedo.")]
+    [Range(0.001f, 1f)] public float groundBlendHeight = 0.25f;
+
+    [Header("Aliasing")]
+    [Tooltip("Uses alpha-to-coverage only when the camera's actual color target is multisampled.")]
+    public bool alphaToCoverage = true;
+    [Range(0f, 3f)] public float minimumPixelWidth = 1f;
+    public Vector2 specularFadeRange = new Vector2(30f, 100f);
+
+    [Header("Optional Contact Shadows")]
+    public GrassContactShadows.Settings contactShadows = new GrassContactShadows.Settings();
+
+    [Header("Diagnostics")]
+    [Tooltip("Periodically reads counts asynchronously. Counts may lag behind the rendered frame.")]
     public bool previewVisibleGrassCount;
-    
-    private Mesh _cachedGrassMesh;
-    
-    [HideInInspector] public Bounds cameraBounds;
 
-    private void OnValidate()
+    [NonSerialized] public Bounds cameraBounds;
+    public uint VisibleGrassCount { get; internal set; }
+    public uint OverflowGrassCount { get; internal set; }
+    public uint Revision { get; private set; }
+    public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Finite(maxBufferCount, 2f) * 1000000f), 3, 16000000);
+
+    private Mesh[] meshes;
+    private int cachedSubdivision = -1;
+    private GUIStyle diagnosticStyle;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
     {
-        UpdateMaterial();
+        Instance = null;
     }
 
     private void OnEnable()
     {
+        if (!IsSceneInstance())
+            return;
+        if (Instance != null && Instance != this)
+        {
+            Debug.LogWarning("Only one enabled Infinite Grass Renderer can own the scene settings.", this);
+            enabled = false;
+            return;
+        }
+
         Instance = this;
-        UpdateMaterial();
+        ValidateSettings();
+        RefreshGrassData();
+    }
+
+    private void OnValidate()
+    {
+        ValidateSettings();
+        RefreshGrassData();
     }
 
     private void OnDisable()
     {
-        Instance = null;
-
-        ArgsBuffer?.Release();
-        Buffer?.Release();
+        if (Instance == this)
+            Instance = null;
+        ReleaseMeshes();
     }
 
-    private void UpdateMaterial()
+    private void OnDestroy()
     {
-        if (spacing <= 0 || !grassMaterial) 
-            return;
-        
-        grassMaterial.SetFloat(DrawDistance, drawDistance);
-        grassMaterial.SetFloat(SubdivisionDistance, subdivisionDistance);
-        grassMaterial.SetFloat(SubdivisionHeightBoost, subdivisionHeightBoost);
-        grassMaterial.SetFloat(SubdivisionBumpWidth, subdivisionBumpWidth);
-        grassMaterial.SetFloat(TextureUpdateThreshold, textureUpdateThreshold);
-        grassMaterial.SetFloat(MaxSubdivision, grassMeshSubdivision);
-        grassMaterial.SetFloat(FullDensityDistanceID, fullDensityDistance);
-        grassMaterial.SetFloat(DensityFalloffExponentID, densityFalloffExponent);
+        if (Instance == this)
+            Instance = null;
+        ReleaseMeshes();
     }
 
-#if DEBUG
+    // Restore the singleton when both scene and domain reload are disabled in Enter Play Mode.
+    private void Update()
+    {
+        if (Instance == null && isActiveAndEnabled && IsSceneInstance())
+            Instance = this;
+    }
+
+    private bool IsSceneInstance()
+    {
+        if (!gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
+            return false;
+#if UNITY_EDITOR
+        if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
+            return false;
+#endif
+        return true;
+    }
+
+    [ContextMenu("Refresh Grass Data")]
+    public void RefreshGrassData()
+    {
+        unchecked { Revision++; }
+    }
+
+    public void MarkDirty()
+    {
+        RefreshGrassData();
+    }
+
+    public void GetLodCapacity(int[] capacities, int[] offsets)
+    {
+        if (capacities == null || capacities.Length < 4 || offsets == null || offsets.Length < 4)
+            throw new ArgumentException("LOD capacity and offset arrays must contain at least four entries.");
+
+        float near = Mathf.Max(0.01f, Finite(lodCapacityWeights.x, 0.35f));
+        float middle = Mathf.Max(0.01f, Finite(lodCapacityWeights.y, 0.45f));
+        float far = Mathf.Max(0.01f, Finite(lodCapacityWeights.z, 0.2f));
+        float total = near + middle + far;
+        int capacity = Capacity;
+        capacities[0] = Mathf.Clamp(Mathf.FloorToInt(capacity * near / total), 1, capacity - 2);
+        capacities[1] = Mathf.Clamp(Mathf.FloorToInt(capacity * middle / total), 1, capacity - capacities[0] - 1);
+        capacities[2] = capacity - capacities[0] - capacities[1];
+        capacities[3] = 0;
+        offsets[0] = 0;
+        offsets[1] = capacities[0];
+        offsets[2] = capacities[0] + capacities[1];
+        offsets[3] = 0;
+    }
+
+    /// <summary>Compatibility accessor for the highest detail mesh.</summary>
+    public Mesh GetGrassMeshCache()
+    {
+        return GetLodMeshes()[0];
+    }
+
+    public Mesh[] GetLodMeshes()
+    {
+        int subdivisions = Mathf.Clamp(grassMeshSubdivision, 0, 8);
+        if (meshes != null && cachedSubdivision == subdivisions && meshes[0] && meshes[1] && meshes[2])
+            return meshes;
+
+        ReleaseMeshes();
+        meshes = new[]
+        {
+            CreateBladeMesh(subdivisions),
+            CreateBladeMesh(Mathf.Min(subdivisions, 2)),
+            CreateBladeMesh(0)
+        };
+        cachedSubdivision = subdivisions;
+        return meshes;
+    }
+
+    /// <summary>Shares each rectangular row's two vertices; UV.y is the true normalized blade height.</summary>
+    public static Mesh CreateBladeMesh(int subdivisions)
+    {
+        subdivisions = Mathf.Clamp(subdivisions, 0, 8);
+        int rows = subdivisions + 1;
+        var vertices = new Vector3[rows * 2 + 1];
+        var uv = new Vector2[vertices.Length];
+        var indices = new int[(subdivisions * 2 + 1) * 3];
+
+        for (int row = 0; row < rows; row++)
+        {
+            float height = row / (float)rows;
+            vertices[row * 2] = new Vector3(-0.25f, height, 0f);
+            vertices[row * 2 + 1] = new Vector3(0.25f, height, 0f);
+            uv[row * 2] = new Vector2(0f, height);
+            uv[row * 2 + 1] = new Vector2(1f, height);
+        }
+
+        for (int row = 0; row < subdivisions; row++)
+        {
+            int lowerLeft = row * 2;
+            int upperLeft = lowerLeft + 2;
+            int index = row * 6;
+            indices[index] = lowerLeft;
+            indices[index + 1] = upperLeft + 1;
+            indices[index + 2] = lowerLeft + 1;
+            indices[index + 3] = lowerLeft;
+            indices[index + 4] = upperLeft;
+            indices[index + 5] = upperLeft + 1;
+        }
+
+        int tip = vertices.Length - 1;
+        vertices[tip] = new Vector3(0f, 1f, 0f);
+        uv[tip] = new Vector2(0.5f, 1f);
+        int last = indices.Length - 3;
+        indices[last] = (rows - 1) * 2;
+        indices[last + 1] = tip;
+        indices[last + 2] = (rows - 1) * 2 + 1;
+
+        var mesh = new Mesh
+        {
+            name = "Grass blade (" + subdivisions + " subdivisions)",
+            hideFlags = HideFlags.HideAndDontSave,
+            vertices = vertices,
+            uv = uv,
+            triangles = indices
+        };
+        mesh.RecalculateBounds();
+        mesh.UploadMeshData(false);
+        return mesh;
+    }
+
+    private void ReleaseMeshes()
+    {
+        if (meshes != null)
+        {
+            foreach (Mesh mesh in meshes)
+                CoreUtils.Destroy(mesh);
+            meshes = null;
+        }
+        cachedSubdivision = -1;
+    }
+
+    private void ValidateSettings()
+    {
+        spacing = Mathf.Clamp(Finite(spacing, 0.1f), 0.01f, 10f);
+        drawDistance = Mathf.Clamp(Finite(drawDistance, 300f), 1f, 10000f);
+        fullDensityDistance = Mathf.Clamp(Finite(fullDensityDistance, 30f), 0f, drawDistance - 0.001f);
+        densityFalloffExponent = Mathf.Clamp(Finite(densityFalloffExponent, 4f), 0.1f, 16f);
+        densityTransition = Mathf.Clamp(Finite(densityTransition, 0.05f), 0f, 0.25f);
+        grassMeshSubdivision = Mathf.Clamp(grassMeshSubdivision, 0, 8);
+        nearLodDistance = Mathf.Clamp(Finite(nearLodDistance, 30f), 0.01f, drawDistance);
+        subdivisionDistance = Mathf.Clamp(Finite(subdivisionDistance, 100f), nearLodDistance, drawDistance);
+        lodTransitionWidth = Mathf.Clamp(Finite(lodTransitionWidth, 10f), 0f, subdivisionDistance);
+        subdivisionHeightBoost = Mathf.Clamp(Finite(subdivisionHeightBoost, 0f), -0.95f, 10f);
+        subdivisionBumpWidth = Mathf.Max(0.01f, Finite(subdivisionBumpWidth, 20f));
+        cullingPadding = Mathf.Max(0.1f, Finite(cullingPadding, 2f));
+        textureUpdateThreshold = Mathf.Clamp(Finite(textureUpdateThreshold, 10f), 0.1f, drawDistance);
+        captureResolution = Mathf.ClosestPowerOfTwo(Mathf.Clamp(captureResolution, 128, 2048));
+        captureHeightRange.x = Finite(captureHeightRange.x, -100f);
+        captureHeightRange.y = Mathf.Max(captureHeightRange.x + 1f, Finite(captureHeightRange.y, 1000f));
+        maxBufferCount = Mathf.Clamp(Finite(maxBufferCount, 2f), 0.01f, 16f);
+        lodCapacityWeights.x = Mathf.Clamp(Finite(lodCapacityWeights.x, 0.35f), 0.01f, 100f);
+        lodCapacityWeights.y = Mathf.Clamp(Finite(lodCapacityWeights.y, 0.45f), 0.01f, 100f);
+        lodCapacityWeights.z = Mathf.Clamp(Finite(lodCapacityWeights.z, 0.2f), 0.01f, 100f);
+        groundBlendStrength = Mathf.Clamp01(Finite(groundBlendStrength, 0.8f));
+        groundBlendHeight = Mathf.Clamp(Finite(groundBlendHeight, 0.25f), 0.001f, 1f);
+        minimumPixelWidth = Mathf.Clamp(Finite(minimumPixelWidth, 1f), 0f, 3f);
+        specularFadeRange.x = Mathf.Max(0f, Finite(specularFadeRange.x, 30f));
+        specularFadeRange.y = Mathf.Max(specularFadeRange.x + 0.01f, Finite(specularFadeRange.y, 100f));
+        if (contactShadows == null)
+            contactShadows = new GrassContactShadows.Settings();
+    }
+
+    private static float Finite(float value, float fallback)
+    {
+        return float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
+    }
+
     private void OnGUI()
     {
-        if (previewVisibleGrassCount)
-        {
-            GUI.contentColor = Color.black;
-            var style = new GUIStyle();
-            style.fontSize = 25;
-
-            var count = new uint[1];
-            Buffer.GetData(count);//Reading back data from GPU
-
-            if (cameraBounds == default(Bounds) || cameraBounds.size == Vector3.zero)
-            {
-                cameraBounds = CalculateCameraBounds(Camera.main);
-            }
-            
-            //Recalculating the GridSize used for dispatching
-            Vector2Int gridSize = new Vector2Int(Mathf.CeilToInt(cameraBounds.size.x / spacing), Mathf.CeilToInt(cameraBounds.size.z / spacing));
-
-            GUI.Label(new Rect(50, 50, 400, 200), "Dispatch Size : " + gridSize.x + "x" + gridSize.y + " = " + (gridSize.x * gridSize.y), style);
-            GUI.Label(new Rect(50, 80, 400, 200), "Visible Grass Count : " + count[0], style);
-        }
+        if (!previewVisibleGrassCount || Instance != this)
+            return;
+        if (diagnosticStyle == null)
+            diagnosticStyle = new GUIStyle(GUI.skin.label) { fontSize = 18 };
+        GUI.Label(new Rect(24f, 24f, 600f, 60f),
+            "Grass: " + VisibleGrassCount.ToString("N0") + " drawn; " +
+            OverflowGrassCount.ToString("N0") + " over capacity (async)", diagnosticStyle);
     }
-#endif
-
-    private int _oldSubdivision = -1;
-    public Mesh GetGrassMeshCache() //Code to generate the grass blade mesh based on the subdivision value
-    {
-        if (!_cachedGrassMesh || _oldSubdivision != grassMeshSubdivision)//Dont update unless its necessary
-        {
-            _cachedGrassMesh = new Mesh();
-
-            Vector3[] vertices = new Vector3[3 + 4 * grassMeshSubdivision];//Total number of vertices
-            int[] triangles = new int[(1 + 2 * grassMeshSubdivision) * 3];//(Total number of faces) * 3
-
-            for (int i = 0; i < grassMeshSubdivision; i++)
-            {
-                float y1 = (float)i / (grassMeshSubdivision + 1);
-                float y2 = (float)(i + 1) / (grassMeshSubdivision + 1);
-
-                Vector3 bottomLeft = new Vector3(-0.25f, y1);
-                Vector3 bottomRight = new Vector3(0.25f, y1);
-                Vector3 topLeft = new Vector3(-0.25f, y2);
-                Vector3 topRight = new Vector3(0.25f, y2);
-
-                int bottomLeftIndex = i * 4;
-                int bottomRightIndex = i * 4 + 1;
-                int topLeftIndex = i * 4 + 2;
-                int topRightIndex = i * 4 + 3;
-
-                vertices[bottomLeftIndex] = bottomLeft;
-                vertices[bottomRightIndex] = bottomRight;
-                vertices[topLeftIndex] = topLeft;
-                vertices[topRightIndex] = topRight;
-
-                //First Face
-                triangles[i * 6] = bottomLeftIndex;
-                triangles[i * 6 + 1] = topRightIndex;
-                triangles[i * 6 + 2] = bottomRightIndex;
-                //Second Face
-                triangles[i * 6 + 3] = bottomLeftIndex;
-                triangles[i * 6 + 4] = topLeftIndex;
-                triangles[i * 6 + 5] = topRightIndex;
-            }
-
-            //Finally the last triangle on top
-            vertices[grassMeshSubdivision * 4] = new Vector3(-0.25f, (float)grassMeshSubdivision / (grassMeshSubdivision + 1));
-            vertices[grassMeshSubdivision * 4 + 1] = new Vector3(0, 1);
-            vertices[grassMeshSubdivision * 4 + 2] = new Vector3(0.25f, (float)grassMeshSubdivision / (grassMeshSubdivision + 1));
-
-            triangles[grassMeshSubdivision * 6] = grassMeshSubdivision * 4;
-            triangles[grassMeshSubdivision * 6 + 1] = grassMeshSubdivision * 4 + 1;
-            triangles[grassMeshSubdivision * 6 + 2] = grassMeshSubdivision * 4 + 2;
-
-            _cachedGrassMesh.SetVertices(vertices);
-            _cachedGrassMesh.SetTriangles(triangles, 0);
-
-            _oldSubdivision = grassMeshSubdivision;
-        }
-        
-        return _cachedGrassMesh;
-    }
-
-    private Bounds CalculateCameraBounds(Camera camera)
-    {
-        Vector3 ntopLeft = camera.ViewportToWorldPoint(new Vector3(0, 1, camera.nearClipPlane));
-        Vector3 ntopRight = camera.ViewportToWorldPoint(new Vector3(1, 1, camera.nearClipPlane));
-        Vector3 nbottomLeft = camera.ViewportToWorldPoint(new Vector3(0, 0, camera.nearClipPlane));
-        Vector3 nbottomRight = camera.ViewportToWorldPoint(new Vector3(1, 0, camera.nearClipPlane));
-
-        Vector3 ftopLeft = camera.ViewportToWorldPoint(new Vector3(0, 1, drawDistance));
-        Vector3 ftopRight = camera.ViewportToWorldPoint(new Vector3(1, 1, drawDistance));
-        Vector3 fbottomLeft = camera.ViewportToWorldPoint(new Vector3(0, 0, drawDistance));
-        Vector3 fbottomRight = camera.ViewportToWorldPoint(new Vector3(1, 0, drawDistance));
-
-        float[] xValues = new float[] { ftopLeft.x, ftopRight.x, ntopLeft.x, ntopRight.x, fbottomLeft.x, fbottomRight.x, nbottomLeft.x, nbottomRight.x };
-        float startX = xValues.Max();
-        float endX = xValues.Min();
-
-        float[] yValues = new float[] { ftopLeft.y, ftopRight.y, ntopLeft.y, ntopRight.y, fbottomLeft.y, fbottomRight.y, nbottomLeft.y, nbottomRight.y };
-        float startY = yValues.Max();
-        float endY = yValues.Min();
-
-        float[] zValues = new float[] { ftopLeft.z, ftopRight.z, ntopLeft.z, ntopRight.z, fbottomLeft.z, fbottomRight.z, nbottomLeft.z, nbottomRight.z };
-        float startZ = zValues.Max();
-        float endZ = zValues.Min();
-
-        Vector3 center = new Vector3((startX + endX) / 2, (startY + endY) / 2, (startZ + endZ) / 2);
-        Vector3 size = new Vector3(Mathf.Abs(startX - endX), Mathf.Abs(startY - endY), Mathf.Abs(startZ - endZ));
-
-        Bounds bounds = new Bounds(center, size);
-        bounds.Expand(1);
-        return bounds;
-    }
-
 }

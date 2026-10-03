@@ -1,20 +1,25 @@
 {
   "name": "com.cone.grass",
-  "version": "1.0.0",
+  "version": "2.0.0-preview.1",
   "displayName": "Infinite Grass",
-  "description": "Fully Procedural and Dynamic Grass for Unity URP.",
-  "unity": "2021.3",
+  "description": "GPU procedural grass for Unity 6.6 URP with authored density areas, geometric LOD, ground blending, and optional contact shadows.",
+  "unity": "6000.6",
   "author": {
     "name": "Youssef Afella"
   },
   "dependencies": {
-    "com.unity.render-pipelines.universal": "17.1.0"
+    "com.unity.render-pipelines.universal": "17.6.0"
   },
   "samples": [
     {
       "displayName": "Sample Scene",
       "description": "Demonstrates usage of the Infinite Grass renderer.",
       "path": "Samples~/SampleScene"
+    },
+    {
+      "displayName": "MicroVerse Mask Bridge",
+      "description": "Connects saved MicroVerse mask outputs to authored grass areas and matching terrain colors.",
+      "path": "Integrations~/MicroVerse"
     }
   ]
 }

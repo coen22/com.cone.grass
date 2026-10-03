@@ -3,71 +3,41 @@ Shader "InfiniteGrass/Modifiers/GrassSteppedTrailShader"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
-        _Strength ("Strength", Range(0, 1)) = 0.85
+        _Strength ("Strength", Range(0,1)) = 0.85
     }
     SubShader
     {
-        Tags {
-            "Queue" = "Transparent" 
-            "IgnoreProjector" = "True"
-            "RenderType" = "Transparent" 
-            "LightMode" = "GrassSlope"
-        }
-
-        ZWrite Off
-        Blend SrcAlpha OneMinusSrcAlpha
-        Cull Off
-
+        Tags { "RenderPipeline"="UniversalPipeline" "RenderType"="Transparent" "Queue"="Transparent" }
         Pass
         {
-            CGPROGRAM
-            #pragma vertex vert
-            #pragma fragment frag
-
-            #include "UnityCG.cginc"
-
-            struct appdata
+            Name "GrassSlope"
+            Tags { "LightMode"="GrassSlope" }
+            ZWrite Off
+            ZTest Always
+            Cull Off
+            Blend One OneMinusSrcAlpha
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex GrassCaptureVertex
+            #pragma fragment Fragment
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                float _Strength;
+            CBUFFER_END
+            #include "GrassCaptureCommon.hlsl"
+            half4 Fragment(GrassCaptureVaryings input) : SV_Target
             {
-                float4 vertex : POSITION;
-                float4 tangent : TANGENT;
-                float4 color : COLOR;
-                float2 uv : TEXCOORD0;
-            };
-
-            struct v2f
-            {
-                float2 uv : TEXCOORD0;
-                float4 vertex : SV_POSITION;
-                float4 tangent : TANGENT;
-                float4 color : COLOR;
-            };
-
-            sampler2D _MainTex;
-            float4 _MainTex_ST;
-            float _Strength;
-
-            v2f vert (appdata v)
-            {
-                v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-                o.tangent = v.tangent;
-                o.color = v.color;
-                return o;
+                half4 source = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
+                float2 direction = -input.tangentWS.xz;
+                float directionLength = length(direction);
+                direction = directionLength > 0.0001 ? direction / directionLength : float2(0,0);
+                half strength = saturate(source.r * source.a * input.color.a * _Strength);
+                return half4((direction * 0.5 + 0.5) * strength, 0, strength);
             }
-
-            fixed4 frag (v2f i) : SV_Target
-            {
-                fixed4 col = tex2D(_MainTex, i.uv);
-
-                float3 trailForward = -i.tangent.xyz;
-
-                float2 encodeToSlope = float2(trailForward.x, trailForward.z) * 0.5 + 0.5;
-                float strength = col.r * col.a * i.color.a * _Strength;
-
-                return float4(encodeToSlope, 0, strength);
-            }
-            ENDCG
+            ENDHLSL
         }
     }
 }
