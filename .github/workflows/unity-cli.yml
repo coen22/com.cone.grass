@@ -1,0 +1,65 @@
+name: Unity CLI availability probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/unity-cli.yml'
+      - 'Tools~/probe_unity_cli.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unity-cli-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    name: Launch official Unity 6.6 CLI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install the verified official Editor archive
+        env:
+          GRASS_EDITOR_DIRECTORY: ${{ runner.temp }}/grass-unity-6000.6.0f1
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, tarfile, urllib.request
+          from pathlib import Path
+          destination = Path(os.environ['GRASS_EDITOR_DIRECTORY'])
+          destination.mkdir(parents=True, exist_ok=True)
+          archive = destination / 'editor.tar.xz'
+          url = 'https://download.unity3d.com/download_unity/f7f8ed4d1e24/LinuxEditorInstaller/Unity-6000.6.0f1.tar.xz'
+          expected = 'cb4b3cf15c9006469b7b6156e47d5ed557a49c149e171b54ae8d1b22c89cb7fe'
+          digest = hashlib.sha256()
+          with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as output:
+              while chunk := response.read(8 * 1024 * 1024):
+                  output.write(chunk)
+                  digest.update(chunk)
+          if archive.stat().st_size != 4167231268 or digest.hexdigest() != expected:
+              raise SystemExit('Official Editor archive size or SHA-256 mismatch.')
+          with tarfile.open(archive, 'r:xz') as package:
+              package.extractall(destination, filter='data')
+          archive.unlink()
+          print('Installed official Unity 6000.6.0f1; verified archive SHA-256:', expected)
+          PY
+      - name: Generate the package test project
+        run: python3 Tools~/create_validation_project.py
+      - name: Attempt actual EditMode execution through the Editor CLI
+        env:
+          GRASS_EDITOR_DIRECTORY: ${{ runner.temp }}/grass-unity-6000.6.0f1
+        run: python3 Tools~/probe_unity_cli.py --editor "$GRASS_EDITOR_DIRECTORY/Editor/Unity" --project Validation~/Project --output artifacts/unity-cli
+      - name: Upload CLI outcome, startup log and any test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unity-cli-attempt
+          path: artifacts/unity-cli
+          if-no-files-found: warn
