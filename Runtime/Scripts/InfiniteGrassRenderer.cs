@@ -77,7 +77,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public uint VisibleGrassCount { get; internal set; }
     public uint OverflowGrassCount { get; internal set; }
     public uint Revision { get; private set; }
-    public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Finite(maxBufferCount, 2f) * 1000000f), 3, 16000000);
+    public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
     public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
     private Mesh[] meshes;
@@ -173,13 +173,16 @@ public class InfiniteGrassRenderer : MonoBehaviour
         if (capacities == null || capacities.Length < 4 || offsets == null || offsets.Length < 4)
             throw new ArgumentException("LOD capacity and offset arrays must contain at least four entries.");
 
-        float near = Mathf.Max(0.01f, Finite(lodCapacityWeights.x, 0.35f));
-        float middle = Mathf.Max(0.01f, Finite(lodCapacityWeights.y, 0.45f));
-        float far = Mathf.Max(0.01f, Finite(lodCapacityWeights.z, 0.2f));
-        float total = near + middle + far;
+        // Public fields can change after OnValidate/OnEnable. Float arithmetic
+        // can overflow even when every supplied weight is finite. Widen before
+        // adding or multiplying, then convert only the bounded final shares.
+        double near = Math.Max(0.01f, Finite(lodCapacityWeights.x, 0.35f));
+        double middle = Math.Max(0.01f, Finite(lodCapacityWeights.y, 0.45f));
+        double far = Math.Max(0.01f, Finite(lodCapacityWeights.z, 0.2f));
+        double total = near + middle + far;
         int capacity = Capacity;
-        capacities[0] = Mathf.Clamp(Mathf.FloorToInt(capacity * near / total), 1, capacity - 2);
-        capacities[1] = Mathf.Clamp(Mathf.FloorToInt(capacity * middle / total), 1, capacity - capacities[0] - 1);
+        capacities[0] = Mathf.Clamp(Mathf.FloorToInt((float)(capacity * near / total)), 1, capacity - 2);
+        capacities[1] = Mathf.Clamp(Mathf.FloorToInt((float)(capacity * middle / total)), 1, capacity - capacities[0] - 1);
         capacities[2] = capacity - capacities[0] - capacities[1];
         capacities[3] = 0;
         offsets[0] = 0;

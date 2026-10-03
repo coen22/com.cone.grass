@@ -10,7 +10,7 @@ This document separates implemented source changes from results that require a U
 |---|---|
 | Repository source and shader contracts reviewed | Performed |
 | Package and assembly-definition JSON, shader source links | Checked locally and in GitHub Actions |
-| C# 9 syntax, editor/player and 6.6/6.7 conditional branches | Automated in GitHub Actions; consult the PR checks for the exact commit |
+| C# 9 syntax, 6.6/6.7 Editor, Release player and Checked player branches | Six configurations automated in GitHub Actions; consult the PR checks for the exact commit |
 | New source metadata and whitespace | Checked locally |
 | HLSL compilation against pinned public URP 17.6 headers | 102/102 DXC invocations passed locally: DXIL and SPIR-V; separate CI job added |
 | Density, grid boundaries, Terrain decoding, LOD geometry, premultiplied edge math, projection/depth round trips | Mathematical/source checks performed |
@@ -92,9 +92,21 @@ Unity -batchmode -nographics -quit -buildTarget StandaloneLinux64 -projectPath /
 
 `BuildCurrent` creates a clean development player and then rebuilds it incrementally without changing the scene or its assets. Both must succeed. It saves `Builds/build-results.json` and the executable under `Builds/<target>/` inside the generated project. Selecting the target on the command line lets Unity reload its platform configuration before the build method executes. Windows and macOS standalone targets are also accepted when installed and selected by the host Editor.
 
+Both builds explicitly use **Managed Code Variant > Checked**, and the previous variant is restored afterward. In Unity 6.6, [managed-code diagnostics are independent of the Development Build option](https://docs.unity.com/en-us/engine/6000.6/manual/upgrade-guides/upgrade-guide-unity66): the default Release variant omits RenderGraph validation and profiling instrumentation even from a development player. The build also enables the pipeline's RenderGraph validity setting. The report records these settings and their restoration, and the running probe requires `UNITY_ENABLE_CHECKS`, `UNITY_INCLUDE_INSTRUMENTATION` and `RenderGraphGlobalSettings.enableValidityChecks` to be active.
+
+Validate the current build attempt and its output with:
+
+```sh
+python3 Tools~/report_build_results.py /path/to/project/Builds
+```
+
+The build command starts a new attempt record before setup and marks it complete only after both builds and managed-code variant restoration succeed. It preserves each build's executable under `Builds/Evidence/<attemptId>/<kind>/` before the next build can replace the shared output. The reporter verifies the ordered build results, target and diagnostic settings, executable sizes and SHA-256 hashes, and the final incremental executable. A missing, incomplete or inconsistent report fails. These snapshots establish executable build evidence; full player data remains in the normal output directory, and player execution requires the separate probe below.
+
 Launch the built player with `-grassSmoke -grassSmokeOutput /path/to/results/player` to run its opt-in rendering probe. A normal launch leaves the generated scene available for inspection. Do not use `-nographics` for this player probe.
 
-The required stages cover grass off/on, a camera pan with varying wind, contacts, render scales 0.75/1.25, requested 2x/4x/8x MSAA, an empty mask, no sources and restored coverage. All required stages keep camera AA **None**, post-processing off and motion history **Off**. The pan records actual camera displacement; the setup checks the generated wind texture, strength and scroll. A validation-only renderer feature observes the same color/depth attachments after the grass draw, recording allocated RenderTexture sample counts or explicit imported-target metadata for direct output. It does not redirect the camera into a probe texture.
+The fourteen required stages cover grass off/on, wind at a fixed camera, a camera pan, a contact off/on pair, render scales 0.75/1.25, requested 2x/4x/8x MSAA, an empty mask, no sources and restored coverage. All required stages keep camera AA **None**, post-processing off and motion history **Off**. The pan records actual camera displacement; wind must change rendered pixels at the same camera pose. Contacts use a fixed camera with wind frozen and must produce darkening without brightening other pixels beyond the comparison tolerance. Empty masks and absent sources must restore the grass-disabled image as well as report zero counts.
+
+A validation-only renderer feature observes the same color/depth attachments after the grass draw. It records allocated RenderTexture sample counts or explicit imported-target metadata for direct output, plus active viewport dimensions and the camera's scaled dimensions. Render-scale stages require the executed viewports to match the requested scale; a larger reused allocation is acceptable only when its active viewport is correct. The observer does not redirect the camera into a probe texture.
 
 The probe records device details, asynchronous counts, frame identities, attachment formats/dimensions/sample counts, logs and PNG captures. Missing required capabilities, stale or incompatible attachments, timeouts, rendering errors, unexpected counts or overflow fail the run. A requested MSAA count that the device cannot support is recorded as **unsupported**, with its observed fallback count; it does not become a passing observation for the requested count.
 
@@ -105,7 +117,7 @@ python3 Tools~/report_player_results.py /path/to/results/player
 python3 Tools~/report_player_results.py /path/to/results/player --require-msaa 2 4 8
 ```
 
-The second command requires successful observations at all three sample counts. The reporter checks the complete baseline, stage chronology, decoded captures and the grass off/on image difference. It rejects absent, stale, contradictory or malformed evidence. Rebuild the player after changing the probe; older result formats do not establish this baseline.
+The second command requires successful observations at all three sample counts. The reporter checks the complete baseline, stage chronology, decoded captures, and the actual grass, wind, contact and empty-state image differences. Each launch writes an incomplete current-attempt record before setup, so an interrupted or failed launch cannot retain a previous passing result. It rejects absent, stale, contradictory or malformed evidence. Rebuild the player after changing the probe; older result formats do not establish this baseline.
 
 Add `-grassSmokeMotion` only for the optional final motion stage, and use `--require-motion` when reporting that additional run. The baseline remains present and independent of that stage. This is functional rendering evidence: observing attachment samples and a changing grass image does not certify A2C image quality, contact-shadow quality, motion-vector values, native MicroVerse generation or performance gains. Inspect the captures and perform the detailed comparisons below.
 
@@ -165,11 +177,13 @@ The projection models one captured mesh height at each XZ position. Ground color
 
 ## RenderGraph and GPU safety
 
+- Use a Checked or Debug managed-code variant and enable the pipeline's RenderGraph validity checks when inspecting runtime resource hazards. A Development Build using Release does not include these checks in Unity 6.6, and diagnostic compilation alone does not enable the separate validity setting.
 - Position and argument resources are imported once per camera graph; capture inputs and draw/compute dependencies are visible in the graph.
-- Verify no capture read/write hazard, unbound compute texture, undeclared material texture, or indirect argument validation warning.
+- Verify no capture read/write hazard, unbound compute texture, undeclared material texture, or indirect argument validation warning. Include modifier `_MainTex` overrides set through renderer-wide and per-material property blocks, then replace and remove those overrides.
 - Verify integer grid, source flags, LOD offsets, and cascade count are uploaded as integers.
 - Test zero dispatches after previously drawing grass: counts and all three indirect instance counts become zero.
 - Force a small buffer capacity. Writes remain in bounds; counts are clamped and overflow is reported asynchronously.
+- Change capacity and LOD weights from scripts after initialization, including very large finite values. Capacity remains bounded and all three positive queues partition it exactly. Assign an incompatible blade material and confirm that camera resources release before URP depth or motion inputs are requested.
 - A source/camera grid above the 67,108,864-candidate budget (64 × 1024²) must skip generation and issue the explicit warning. It must not silently choose a moving subset or wrap counters.
 - Confirm argument layout/stride on every target API. The CPU probes the platform-provided typed layout instead of assuming the instance-count byte offset.
 - Confirm no repeated large GPU or managed-array allocations at steady state. Large capacity reductions shrink the position buffer; bounded idle terrain/camera caches release their maps. Check repeated optional motion-mode changes release history, including removal of the material/compute prerequisite and unsupported camera changes.

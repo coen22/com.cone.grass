@@ -251,6 +251,56 @@ public sealed class TerrainGrassAlbedoBakerTests
         }
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ReentrantBakeCannotOverwriteAnAliasedOrMovedOutput(bool moveOutput)
+    {
+        SetLayers(new[] { Layer(Color.green, true) }, new[] { 1f });
+        string requestedPath = moveOutput ? folder + "/Moved.asset" :
+            outputPath.Replace("Albedo.asset", "ALBEDO.ASSET").Replace('/', '\\');
+        bool attempted = false, nestedSucceeded = true;
+        string nestedError = null, moveError = null, originalGuid = null;
+        Texture2D nestedTexture = null;
+        Action<Terrain, Texture2D> observer = (source, output) =>
+        {
+            // Keep the regression bounded even without the reentrancy guard.
+            if (source != terrain || attempted)
+                return;
+            attempted = true;
+            originalGuid = AssetDatabase.AssetPathToGUID(outputPath);
+            if (moveOutput)
+                moveError = AssetDatabase.MoveAsset(outputPath, requestedPath);
+            nestedSucceeded = TerrainGrassAlbedoBaker.TryBake(terrain, 32, requestedPath,
+                out nestedTexture, out nestedError);
+        };
+        TerrainGrassAlbedoBaker.Baked += observer;
+        Texture2D first;
+        try
+        {
+            first = Bake();
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= observer;
+        }
+
+        Assert.That(attempted, Is.True);
+        if (moveOutput)
+            Assert.That(moveError, Is.Empty);
+        Assert.That(nestedSucceeded, Is.False);
+        Assert.That(nestedTexture, Is.Null);
+        StringAssert.Contains("already owns this output", nestedError);
+        Assert.That(first.width, Is.EqualTo(16), "A callback cannot resize the output before the original caller receives it.");
+        AssertColor(first.GetPixel(8, 8), Color.green, 0.015f);
+        string actualPath = AssetDatabase.GetAssetPath(first);
+        Assert.That(AssetDatabase.AssetPathToGUID(actualPath), Is.EqualTo(originalGuid));
+
+        Assert.That(TerrainGrassAlbedoBaker.TryBake(terrain, 32, actualPath,
+            out Texture2D later, out string error), Is.True, error);
+        Assert.That(later, Is.SameAs(first));
+        Assert.That(later.width, Is.EqualTo(32), "Output ownership must be released after notifications finish.");
+    }
+
     [Test]
     public void UnsupportedMaterialsAndSourceOverwriteAreRejected()
     {

@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import struct
 import sys
 import zlib
@@ -16,18 +17,20 @@ import zlib
 BASELINE = {
     "01-grass-off": ("Unchecked", 1, 1.0, False),
     "02-grass-on": ("Positive", 1, 1.0, False),
-    "03-camera-pan-no-aa": ("Positive", 1, 1.0, False),
-    "04-contacts-no-aa": ("Positive", 1, 1.0, True),
-    "05-render-scale-below-no-aa": ("Positive", 1, 0.75, True),
-    "06-render-scale-above-no-aa": ("Positive", 1, 1.25, True),
-    "07-msaa2": ("Positive", 2, 1.0, True),
-    "08-msaa4": ("Positive", 4, 1.0, True),
-    "09-msaa8": ("Positive", 8, 1.0, True),
-    "10-black-mask": ("Zero", 1, 1.0, True),
-    "11-no-sources": ("Zero", 1, 1.0, True),
-    "12-restored": ("Positive", 1, 1.0, True),
+    "03-wind-no-aa": ("Positive", 1, 1.0, False),
+    "04-camera-pan-no-aa": ("Positive", 1, 1.0, False),
+    "05-contacts-off-no-aa": ("Positive", 1, 1.0, False),
+    "06-contacts-on-no-aa": ("Positive", 1, 1.0, True),
+    "07-render-scale-below-no-aa": ("Positive", 1, 0.75, True),
+    "08-render-scale-above-no-aa": ("Positive", 1, 1.25, True),
+    "09-msaa2": ("Positive", 2, 1.0, True),
+    "10-msaa4": ("Positive", 4, 1.0, True),
+    "11-msaa8": ("Positive", 8, 1.0, True),
+    "12-black-mask": ("Zero", 1, 1.0, True),
+    "13-no-sources": ("Zero", 1, 1.0, True),
+    "14-restored": ("Positive", 1, 1.0, True),
 }
-MOTION = "13-optional-motion"
+MOTION = "15-optional-motion"
 SAMPLES = {1, 2, 4, 8}
 SAMPLE_EVIDENCE = {"allocated RenderTexture", "imported target metadata"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -122,20 +125,41 @@ def check_png(path, width, height):
     raise ValueError("screenshot PNG is incomplete")
 
 
-def compare_grass_images(before, after, width, height):
-    """Match the probe's RGB threshold and GUI-excluding, bottom-origin ROI."""
+def compare_image_pixels(before, after, width, height, threshold):
+    """Match the probe's RGB deltas and GUI-excluding, bottom-origin ROI."""
     before_channels, before_pixels = before
     after_channels, after_pixels = after
-    compared = changed = 0
+    compared = changed = darkened = brightened = 0
     for y in range(height // 4, min(height * 3 // 4, height - 96)):
         # Unity GetPixels32 rows start at the bottom; PNG rows start at the top.
         row = (height - 1 - y) * width
         for x in range(width // 4, width * 3 // 4):
             a, b = (row + x) * before_channels, (row + x) * after_channels
             compared += 1
-            if max(abs(before_pixels[a + channel] - after_pixels[b + channel]) for channel in range(3)) > 8:
+            delta = [after_pixels[b + channel] - before_pixels[a + channel] for channel in range(3)]
+            if max(abs(value) for value in delta) > threshold:
                 changed += 1
-    return compared, changed
+            if -min(delta) > threshold:
+                darkened += 1
+            if max(delta) > threshold:
+                brightened += 1
+    return compared, changed, darkened, brightened
+
+
+def compare_grass_images(before, after, width, height):
+    return compare_image_pixels(before, after, width, height, 8)[:2]
+
+
+def valid_pose(stage):
+    return all(isinstance(stage.get(field), dict) and
+               all(finite_number(stage[field].get(axis)) for axis in axes)
+               for field, axes in (("cameraPosition", "xyz"), ("cameraRotation", "xyzw")))
+
+
+def same_pose(left, right):
+    return valid_pose(left) and valid_pose(right) and all(
+        abs(left[field][axis] - right[field][axis]) < 0.000001
+        for field, axes in (("cameraPosition", "xyz"), ("cameraRotation", "xyzw")) for axis in axes)
 
 
 def check_report(path, required_msaa, require_motion):
@@ -151,7 +175,10 @@ def check_report(path, required_msaa, require_motion):
             raise ValueError("report root must be an object")
     except (OSError, ValueError) as error:
         return [str(error)], observations
-    require(report.get("schemaVersion") == 2, "expected smoke evidence schemaVersion 2")
+    require(report.get("schemaVersion") == 3, "expected smoke evidence schemaVersion 3")
+    require(report.get("status") == "passed", "player did not write a passed terminal outcome")
+    require(isinstance(report.get("attemptId"), str) and re.fullmatch(r"[0-9a-f]{32}", report["attemptId"]),
+            "missing current-attempt identity")
     require(report.get("passed") is True, "player did not report a successful completed run")
     require(not report.get("failure"), "player recorded a failure: " + str(report.get("failure", "")))
     for field in ("unityVersion", "startedUtc", "completedUtc", "graphicsApi", "graphicsDevice"):
@@ -159,6 +186,9 @@ def check_report(path, required_msaa, require_motion):
     require(report.get("graphicsApi") != "Null", "a Null graphics device cannot verify rendering")
     for field in ("supportsCompute", "supportsIndirectArguments", "supportsAsyncReadback"):
         require(report.get(field) is True, "required graphics capability was absent: " + field)
+    for field in ("checksEnabled", "instrumentationEnabled"):
+        require(report.get(field) is True, "diagnostic player was compiled without " + field)
+    require(report.get("renderGraphValidityChecks") is True, "RenderGraph validity checks were disabled in Graphics settings")
     require(type(report.get("errorCount")) is int and report["errorCount"] == 0,
             "Unity errors, assertions or exceptions were recorded")
     changed, compared = report.get("changedGrassPixels"), report.get("comparedPixels")
@@ -194,7 +224,7 @@ def check_report(path, required_msaa, require_motion):
     require(observed_order == expected_order, "stages were missing, duplicated or executed out of order")
     unsupported, successful_msaa = 0, set()
     image_paths = set()
-    grass_images = {}
+    compared_images = {}
     previous_capture = None
     for name, stage in stages.items():
         if name not in BASELINE and name != MOTION:
@@ -207,13 +237,18 @@ def check_report(path, required_msaa, require_motion):
                 prefix + "no-AA/MSAA baseline cannot depend on motion history")
         require(stage.get("contactsRequested") is contacts, prefix + "unexpected contact-shadow setting")
         require(stage.get("postProcessingRequested") is False, prefix + "baseline post processing must be disabled")
+        expected_wind = 0 if name in ("05-contacts-off-no-aa", "06-contacts-on-no-aa") else report.get("windStrength")
+        require(finite_number(stage.get("windStrength")) and finite_number(expected_wind) and
+                abs(stage["windStrength"] - expected_wind) < 0.000001,
+                prefix + "wind strength does not match the controlled stage")
+        require(valid_pose(stage), prefix + "missing finite camera pose")
         require(stage.get("cameraTargetsScreen") is True, prefix + "camera must use normal screen output")
         require(type(stage.get("requestedMsaa")) is int and stage["requestedMsaa"] == requested,
                 prefix + "incorrect requested MSAA count")
         actual_scale = stage.get("requestedRenderScale")
         require(finite_number(actual_scale) and abs(actual_scale - scale) < 0.001,
                 prefix + "incorrect requested render scale")
-        pan = optional or name == "03-camera-pan-no-aa"
+        pan = optional or name == "04-camera-pan-no-aa"
         require(stage.get("cameraPanRequested") is pan, prefix + "camera-pan coverage does not match the stage")
         travel = stage.get("maximumCameraDisplacement")
         require(finite_number(travel) and travel >= (0.08 if pan else 0),
@@ -250,6 +285,22 @@ def check_report(path, required_msaa, require_motion):
         heights = (sample.get("colorHeight"), sample.get("depthHeight"))
         require(all(integer(value, 1) for value in widths + heights) and
                 widths[0] == widths[1] and heights[0] == heights[1], prefix + "incompatible attachment dimensions")
+        camera_width, camera_height = sample.get("cameraWidth"), sample.get("cameraHeight")
+        camera_dimensions_valid = (integer(camera_width, 1) and integer(camera_height, 1) and
+                                   camera_width <= MAXIMUM_SCREENSHOT_PIXELS and camera_height <= MAXIMUM_SCREENSHOT_PIXELS and
+                                   camera_width * camera_height <= MAXIMUM_SCREENSHOT_PIXELS)
+        require(camera_dimensions_valid, prefix + "missing camera output dimensions")
+        require(finite_number(sample.get("cameraRenderScale")) and abs(sample["cameraRenderScale"] - scale) < 0.00001,
+                prefix + "camera did not adopt the requested render scale")
+        if camera_dimensions_valid:
+            scaled_width, scaled_height = max(1, int(camera_width * scale)), max(1, int(camera_height * scale))
+            for field in ("cameraScaled", "cameraDescriptor", "colorViewport", "depthViewport"):
+                require(type(sample.get(field + "Width")) is int and type(sample.get(field + "Height")) is int and
+                        sample[field + "Width"] == scaled_width and sample[field + "Height"] == scaled_height,
+                        prefix + field + " does not match the requested render scale")
+            require(all(integer(value, 1) for value in widths + heights) and
+                    min(widths) >= scaled_width and min(heights) >= scaled_height,
+                    prefix + "the allocated attachments cannot contain the scaled viewport")
         for channel in ("color", "depth"):
             require(isinstance(sample.get(channel + "Evidence"), str) and sample[channel + "Evidence"] in SAMPLE_EVIDENCE,
                     prefix + "missing " + channel + " sample provenance")
@@ -271,6 +322,7 @@ def check_report(path, required_msaa, require_motion):
         width, height = stage.get("imageWidth"), stage.get("imageHeight")
         dimensions_valid = integer(width, 320) and integer(height, 240) and width * height <= MAXIMUM_SCREENSHOT_PIXELS
         require(dimensions_valid, prefix + "invalid screenshot dimensions")
+        require((width, height) == (camera_width, camera_height), prefix + "capture does not match the full-screen camera output")
         screenshot = stage.get("screenshot")
         if not isinstance(screenshot, str) or not screenshot or Path(screenshot).name != screenshot:
             errors.append(prefix + "screenshot must be a local filename")
@@ -282,18 +334,39 @@ def check_report(path, required_msaa, require_motion):
             if dimensions_valid and not image_path.is_symlink():
                 try:
                     pixels = check_png(image_path, width, height)
-                    if name in ("01-grass-off", "02-grass-on"):
-                        grass_images[name] = (width, height, pixels)
+                    if name in ("01-grass-off", "02-grass-on", "03-wind-no-aa", "05-contacts-off-no-aa",
+                                "06-contacts-on-no-aa", "12-black-mask", "13-no-sources"):
+                        compared_images[name] = (width, height, pixels)
                 except (OSError, ValueError) as error:
                     errors.append(prefix + str(error))
-    if len(grass_images) == 2:
-        off, on = grass_images["01-grass-off"], grass_images["02-grass-on"]
-        require(off[:2] == on[:2], "no-AA grass off/on capture dimensions differ")
-        if off[:2] == on[:2]:
-            actual_compared, actual_changed = compare_grass_images(off[2], on[2], off[0], off[1])
-            require(actual_compared == compared and actual_changed == changed,
-                    "no-AA grass off/on pixel counts disagree with the decoded captures")
-            require(actual_changed >= 32, "decoded no-AA captures show no measurable grass off/on image difference")
+    pairs = (
+        ("01-grass-off", "02-grass-on", 8, "changedGrassPixels", 32, "grass off/on"),
+        ("02-grass-on", "03-wind-no-aa", 8, "changedWindPixels", 8, "wind"),
+        ("05-contacts-off-no-aa", "06-contacts-on-no-aa", 2, "darkenedContactPixels", 8, "contact off/on"),
+        ("01-grass-off", "12-black-mask", 2, "changedBlackMaskPixels", 0, "black mask"),
+        ("01-grass-off", "13-no-sources", 2, "changedNoSourcesPixels", 0, "no sources"),
+    )
+    for before_name, after_name, threshold, field, minimum, label in pairs:
+        if before_name not in compared_images or after_name not in compared_images:
+            continue
+        before, after = compared_images[before_name], compared_images[after_name]
+        require(before[:2] == after[:2], "no-AA " + label + " capture dimensions differ")
+        require(same_pose(stages[before_name], stages[after_name]), "no-AA " + label + " comparison did not hold the camera fixed")
+        if before[:2] == after[:2]:
+            actual_compared, actual_changed, darkened, brightened = compare_image_pixels(
+                before[2], after[2], before[0], before[1], threshold)
+            observed = darkened if field == "darkenedContactPixels" else actual_changed
+            require(actual_compared == compared and type(report.get(field)) is int and observed == report[field],
+                    "no-AA " + label + " pixel counts disagree with the decoded captures")
+            if minimum:
+                require(observed >= minimum, "decoded no-AA captures show no measurable " + label + " image difference")
+            else:
+                require(observed == 0, "decoded no-AA " + label + " capture did not restore the grass-disabled image")
+            if field == "darkenedContactPixels":
+                require(type(report.get("brightenedContactPixels")) is int and brightened == report["brightenedContactPixels"],
+                        "contact brightening count disagrees with the decoded captures")
+                require(brightened == 0, "multiplicative contact blend unexpectedly brightened the controlled image")
+            observations.append(f"- {label}: {observed} pixels {'darkened' if field == 'darkenedContactPixels' else 'changed'} in the fixed-camera ROI.")
     require(type(report.get("unsupportedMsaaStages")) is int and report["unsupportedMsaaStages"] == unsupported,
             "unsupported stage total does not match observations")
     require(report.get("msaaCoverageComplete") is (unsupported == 0), "MSAA completeness flag does not match observations")

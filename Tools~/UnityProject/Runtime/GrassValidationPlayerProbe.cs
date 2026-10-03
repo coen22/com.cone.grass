@@ -18,6 +18,16 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
     private const double RunTimeoutSeconds = 120.0;
     private const int MaximumScreenshotPixels = 4 * 1024 * 1024;
     private const int MaximumLogEntries = 16;
+#if UNITY_ENABLE_CHECKS
+    private const bool ChecksEnabled = true;
+#else
+    private const bool ChecksEnabled = false;
+#endif
+#if UNITY_INCLUDE_INSTRUMENTATION
+    private const bool InstrumentationEnabled = true;
+#else
+    private const bool InstrumentationEnabled = false;
+#endif
     private readonly WaitForEndOfFrame endOfFrame = new WaitForEndOfFrame();
     private SmokeReport report;
     private string outputDirectory;
@@ -28,6 +38,7 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
     private bool originalPostProcessing, originalAllowMsaa;
     private int originalMsaa;
     private float originalScale;
+    private float originalWindStrength;
     private GrassMotionVectors.Mode originalMotion;
     private AntialiasingMode originalAntialiasing;
     private UniversalAdditionalCameraData additionalCameraData;
@@ -40,6 +51,7 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
     private Texture originalGroundColor;
     private Rect originalCoverageBounds;
     private Color32[] baselinePixels;
+    private Color32[] windPixels, contactPixels;
     private int baselineWidth, baselineHeight;
     private AttachmentObservation attachments;
 
@@ -65,7 +77,8 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
             optionalMotionRequested = includeMotion,
             supportsCompute = SystemInfo.supportsComputeShaders,
             supportsIndirectArguments = SystemInfo.supportsIndirectArgumentsBuffer,
-            supportsAsyncReadback = SystemInfo.supportsAsyncGPUReadback
+            supportsAsyncReadback = SystemInfo.supportsAsyncGPUReadback,
+            checksEnabled = ChecksEnabled, instrumentationEnabled = InstrumentationEnabled
         };
         running = true;
         Application.logMessageReceived += OnLog;
@@ -74,6 +87,9 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
         {
             outputDirectory = Path.GetFullPath(OutputArgument(arguments));
             Directory.CreateDirectory(outputDirectory);
+            // Invalidate a previous successful run before any scene/device check.
+            // A terminated process must leave an incomplete current attempt.
+            WriteReport();
             ValidateSceneAndDevice();
             SaveState();
             // The required image and attachment checks must stand on their own
@@ -126,29 +142,35 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
                 settings.enabled = true;
                 settings.RefreshGrassData();
             }),
-            new Stage("03-camera-pan-no-aa", CountExpectation.Positive, 1, () => animateCamera = true),
-            new Stage("04-contacts-no-aa", CountExpectation.Positive, 1, () =>
+            new Stage("03-wind-no-aa", CountExpectation.Positive, 1, () => { }),
+            new Stage("04-camera-pan-no-aa", CountExpectation.Positive, 1, () => animateCamera = true),
+            new Stage("05-contacts-off-no-aa", CountExpectation.Positive, 1, () =>
             {
                 animateCamera = false;
                 targetCamera.transform.position = originalCameraPosition;
-                settings.contactShadows.enabled = true;
+                settings.grassMaterial.SetFloat("_WindStrength", 0f);
             }),
-            new Stage("05-render-scale-below-no-aa", CountExpectation.Positive, 1, () => pipeline.renderScale = 0.75f),
-            new Stage("06-render-scale-above-no-aa", CountExpectation.Positive, 1, () => pipeline.renderScale = 1.25f),
-            new Stage("07-msaa2", CountExpectation.Positive, 2, () => pipeline.renderScale = 1f),
-            new Stage("08-msaa4", CountExpectation.Positive, 4, () => pipeline.renderScale = 1f),
-            new Stage("09-msaa8", CountExpectation.Positive, 8, () => pipeline.renderScale = 1f),
-            new Stage("10-black-mask", CountExpectation.Zero, 1, () =>
+            new Stage("06-contacts-on-no-aa", CountExpectation.Positive, 1, () => settings.contactShadows.enabled = true),
+            new Stage("07-render-scale-below-no-aa", CountExpectation.Positive, 1, () =>
+            {
+                settings.grassMaterial.SetFloat("_WindStrength", originalWindStrength);
+                pipeline.renderScale = 0.75f;
+            }),
+            new Stage("08-render-scale-above-no-aa", CountExpectation.Positive, 1, () => pipeline.renderScale = 1.25f),
+            new Stage("09-msaa2", CountExpectation.Positive, 2, () => pipeline.renderScale = 1f),
+            new Stage("10-msaa4", CountExpectation.Positive, 4, () => pipeline.renderScale = 1f),
+            new Stage("11-msaa8", CountExpectation.Positive, 8, () => pipeline.renderScale = 1f),
+            new Stage("12-black-mask", CountExpectation.Zero, 1, () =>
                 area.ConfigureTexture(originalTerrain, Texture2D.blackTexture, originalGroundLayer, originalGroundColor)),
-            new Stage("11-no-sources", CountExpectation.Zero, 1, () => area.enabled = false),
-            new Stage("12-restored", CountExpectation.Positive, 1, () =>
+            new Stage("13-no-sources", CountExpectation.Zero, 1, () => area.enabled = false),
+            new Stage("14-restored", CountExpectation.Positive, 1, () =>
             {
                 RestoreCoverage();
                 area.enabled = true;
             })
         };
         if (includeMotion)
-            stages.Add(new Stage("13-optional-motion", CountExpectation.Positive, 1, () =>
+            stages.Add(new Stage("15-optional-motion", CountExpectation.Positive, 1, () =>
             {
                 settings.motionVectors.mode = GrassMotionVectors.Mode.Always;
                 animateCamera = true;
@@ -237,6 +259,9 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
                 observation.postProcessingRequested = additionalCameraData.renderPostProcessing;
                 observation.cameraPanRequested = animateCamera;
                 observation.maximumCameraDisplacement = maximumStageCameraDisplacement;
+                observation.windStrength = settings.grassMaterial.GetFloat("_WindStrength");
+                observation.cameraPosition = targetCamera.transform.position;
+                observation.cameraRotation = targetCamera.transform.rotation;
                 observation.motionModeRequested = settings.motionVectors.mode.ToString();
                 observation.cameraTargetsScreen = true;
                 observation.capturedFrame = Time.frameCount;
@@ -248,7 +273,8 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
                     additionalCameraData.renderPostProcessing ||
                     (!stage.Optional && settings.motionVectors.mode != GrassMotionVectors.Mode.Off))
                     throw new InvalidOperationException("Baseline checks require camera antialiasing None, post processing off and motion history off.");
-                bool unsupported = VerifyAttachments(attachments, stage.Samples);
+                bool unsupported = VerifyAttachments(attachments, stage.Samples, pipeline.renderScale,
+                    targetCamera.pixelWidth, targetCamera.pixelHeight);
                 if (animateCamera && maximumStageCameraDisplacement < 0.08f)
                     throw new InvalidOperationException("The camera-pan stage did not observe sufficient camera travel while rendering.");
                 if (!CountMatches(stage.Count))
@@ -276,12 +302,21 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
         Finish(report.errorCount == 0, report.errorCount == 0 ? null : "Unity reported rendering errors.");
     }
 
-    private static bool VerifyAttachments(AttachmentObservation sample, int requested)
+    private static bool VerifyAttachments(AttachmentObservation sample, int requested, float scale, int width, int height)
     {
         if (sample.colorSamples < 1 || sample.colorSamples != sample.depthSamples ||
             sample.colorWidth < 1 || sample.colorHeight < 1 ||
             sample.colorWidth != sample.depthWidth || sample.colorHeight != sample.depthHeight)
             throw new InvalidOperationException("The grass color/depth attachments have incompatible dimensions or sample counts.");
+        int scaledWidth = Mathf.Max(1, (int)(width * scale));
+        int scaledHeight = Mathf.Max(1, (int)(height * scale));
+        if (sample.cameraWidth != width || sample.cameraHeight != height ||
+            Mathf.Abs(sample.cameraRenderScale - scale) > 0.00001f ||
+            sample.cameraScaledWidth != scaledWidth || sample.cameraScaledHeight != scaledHeight ||
+            sample.cameraDescriptorWidth != scaledWidth || sample.cameraDescriptorHeight != scaledHeight ||
+            sample.colorViewportWidth != scaledWidth || sample.colorViewportHeight != scaledHeight ||
+            sample.depthViewportWidth != scaledWidth || sample.depthViewportHeight != scaledHeight)
+            throw new InvalidOperationException("The executed camera/attachment viewports do not match the requested render scale.");
         if (sample.hardwareSupportedMsaa < 1 || sample.hardwareSupportedMsaa > requested ||
             (sample.hardwareSupportedMsaa & (sample.hardwareSupportedMsaa - 1)) != 0)
             throw new InvalidOperationException("The device returned an invalid supported MSAA count.");
@@ -291,22 +326,13 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
         return sample.hardwareSupportedMsaa < requested;
     }
 
-    public void RecordAttachments(int stage, int frame, int requested, int supported, int descriptorSamples,
-        int colorSamples, int depthSamples, int colorWidth, int colorHeight, int depthWidth, int depthHeight,
-        string colorFormat, string depthFormat, string colorEvidence, string depthEvidence, bool backbuffer, string antialiasing)
+    public void RecordAttachments(int stage, AttachmentObservation observation)
     {
         // Ignore any callback recorded for an earlier stage. Values are published
         // only by the executed raster pass, never by a requested URP asset setting.
-        if (!IsRunning || stage != ActiveStage)
+        if (!IsRunning || stage != ActiveStage || observation == null)
             return;
-        attachments = new AttachmentObservation
-        {
-            frame = frame, requestedMsaa = requested, hardwareSupportedMsaa = supported,
-            cameraDescriptorSamples = descriptorSamples, colorSamples = colorSamples, depthSamples = depthSamples,
-            colorWidth = colorWidth, colorHeight = colorHeight, depthWidth = depthWidth, depthHeight = depthHeight,
-            colorFormat = colorFormat, depthFormat = depthFormat, colorEvidence = colorEvidence,
-            depthEvidence = depthEvidence, backbuffer = backbuffer, antialiasing = antialiasing
-        };
+        attachments = observation;
     }
 
     private bool CountMatches(CountExpectation expectation)
@@ -317,12 +343,20 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
 
     private void ValidateSceneAndDevice()
     {
+        if (!ChecksEnabled || !InstrumentationEnabled)
+            throw new InvalidOperationException("The diagnostic smoke player requires the Checked managed code variant with checks and instrumentation enabled.");
+        var renderGraph = GraphicsSettings.GetRenderPipelineSettings<RenderGraphGlobalSettings>();
+        report.renderGraphValidityChecks = renderGraph != null && renderGraph.enableValidityChecks;
+        if (!report.renderGraphValidityChecks)
+            throw new InvalidOperationException("RenderGraph validity checks must also be enabled in Graphics settings.");
         if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !report.supportsCompute ||
             !report.supportsIndirectArguments || !report.supportsAsyncReadback || !SystemInfo.supportsInstancing)
             throw new InvalidOperationException("Smoke checks require a real graphics device with compute, indirect draws, instancing, and async GPU readback. Do not use -nographics.");
         if (!settings || !area || !pipeline || !targetCamera || !targetCamera.isActiveAndEnabled ||
             targetCamera.targetTexture != null || targetCamera.stereoEnabled || targetCamera.targetDisplay != 0)
             throw new InvalidOperationException("Assign the generated settings, mask area, URP asset, and active single-view screen camera.");
+        if (targetCamera.rect != new Rect(0f, 0f, 1f, 1f) || targetCamera.allowDynamicResolution)
+            throw new InvalidOperationException("Smoke comparisons require a full-screen camera with dynamic resolution disabled.");
         if (GraphicsSettings.currentRenderPipeline != pipeline ||
             !targetCamera.TryGetComponent(out additionalCameraData) ||
             additionalCameraData.renderType != CameraRenderType.Base || !(additionalCameraData.scriptableRenderer is UniversalRenderer))
@@ -385,25 +419,40 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
             }
             else if (observation.name == "02-grass-on")
             {
-                if (baselinePixels == null || image.width != baselineWidth || image.height != baselineHeight)
-                    throw new InvalidOperationException("Off/on images must have the same dimensions.");
-                // Keep async diagnostics enabled. Exclude their top-left GUI and
-                // the window edges from the independent grass image comparison.
-                int maxY = Math.Min(image.height * 3 / 4, image.height - 96);
-                for (int y = image.height / 4; y < maxY; y++)
-                for (int x = image.width / 4; x < image.width * 3 / 4; x++)
-                {
-                    int index = y * image.width + x;
-                    Color32 before = baselinePixels[index], after = pixels[index];
-                    int difference = Math.Max(Math.Abs(before.r - after.r),
-                        Math.Max(Math.Abs(before.g - after.g), Math.Abs(before.b - after.b)));
-                    report.comparedPixels++;
-                    if (difference > 8)
-                        report.changedGrassPixels++;
-                }
+                ImageDifference difference = ComparePixels(baselinePixels, pixels, image.width, image.height, 8);
+                report.comparedPixels = difference.compared;
+                report.changedGrassPixels = difference.changed;
                 if (report.changedGrassPixels < 32)
                     throw new InvalidOperationException("Positive GPU counts did not produce a measurable off/on grass image difference.");
-                baselinePixels = null;
+                windPixels = pixels;
+            }
+            else if (observation.name == "03-wind-no-aa")
+            {
+                report.changedWindPixels = ComparePixels(windPixels, pixels, image.width, image.height, 8).changed;
+                windPixels = null;
+                if (report.changedWindPixels < 8)
+                    throw new InvalidOperationException("The fixed-camera wind stage produced no measurable blade motion.");
+            }
+            else if (observation.name == "05-contacts-off-no-aa")
+                contactPixels = pixels;
+            else if (observation.name == "06-contacts-on-no-aa")
+            {
+                ImageDifference difference = ComparePixels(contactPixels, pixels, image.width, image.height, 2);
+                report.darkenedContactPixels = difference.darkened;
+                report.brightenedContactPixels = difference.brightened;
+                contactPixels = null;
+                if (report.darkenedContactPixels < 8)
+                    throw new InvalidOperationException("Enabling contacts with fixed camera and frozen wind produced no measurable darkening.");
+                if (report.brightenedContactPixels != 0)
+                    throw new InvalidOperationException("The multiplicative contact blend unexpectedly brightened the controlled image.");
+            }
+            else if (observation.name == "12-black-mask" || observation.name == "13-no-sources")
+            {
+                int changed = ComparePixels(baselinePixels, pixels, image.width, image.height, 2).changed;
+                if (observation.name == "12-black-mask") report.changedBlackMaskPixels = changed;
+                else report.changedNoSourcesPixels = changed;
+                if (changed != 0)
+                    throw new InvalidOperationException("Zero grass counts did not restore the grass-disabled image.");
             }
         }
         finally
@@ -411,6 +460,33 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
             if (image)
                 Destroy(image);
         }
+    }
+
+    private ImageDifference ComparePixels(Color32[] before, Color32[] after, int width, int height, int threshold)
+    {
+        if (before == null || width != baselineWidth || height != baselineHeight || before.Length != after.Length)
+            throw new InvalidOperationException("Controlled image comparisons must have the same dimensions.");
+        var result = new ImageDifference();
+        // Exclude diagnostics GUI and window edges. GetPixels32 starts at the
+        // bottom; the external reporter translates this same ROI to PNG rows.
+        for (int y = height / 4; y < Math.Min(height * 3 / 4, height - 96); y++)
+        for (int x = width / 4; x < width * 3 / 4; x++)
+        {
+            int index = y * width + x;
+            int r = after[index].r - before[index].r;
+            int g = after[index].g - before[index].g;
+            int b = after[index].b - before[index].b;
+            result.compared++;
+            if (Math.Max(Math.Abs(r), Math.Max(Math.Abs(g), Math.Abs(b))) > threshold) result.changed++;
+            if (Math.Max(-r, Math.Max(-g, -b)) > threshold) result.darkened++;
+            if (Math.Max(r, Math.Max(g, b)) > threshold) result.brightened++;
+        }
+        return result;
+    }
+
+    private struct ImageDifference
+    {
+        public int compared, changed, darkened, brightened;
     }
 
     private void SaveState()
@@ -421,6 +497,7 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
         originalContacts = settings.contactShadows.enabled;
         originalMotion = settings.motionVectors.mode;
         originalScale = pipeline.renderScale;
+        originalWindStrength = settings.grassMaterial.GetFloat("_WindStrength");
         originalMsaa = pipeline.msaaSampleCount;
         originalAntialiasing = additionalCameraData.antialiasing;
         originalPostProcessing = additionalCameraData.renderPostProcessing;
@@ -464,6 +541,7 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
                 settings.enabled = originalSettingsEnabled;
                 pipeline.renderScale = originalScale;
                 pipeline.msaaSampleCount = originalMsaa;
+                settings.grassMaterial.SetFloat("_WindStrength", originalWindStrength);
                 additionalCameraData.antialiasing = originalAntialiasing;
                 additionalCameraData.renderPostProcessing = originalPostProcessing;
                 targetCamera.allowMSAA = originalAllowMsaa;
@@ -482,7 +560,8 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
             if (string.IsNullOrEmpty(outputDirectory))
                 outputDirectory = Path.Combine(Application.persistentDataPath, "GrassValidation");
             Directory.CreateDirectory(outputDirectory);
-            File.WriteAllText(Path.Combine(outputDirectory, "grass-smoke-results.json"), JsonUtility.ToJson(report, true));
+            report.status = report.passed ? "passed" : "failed";
+            WriteReport();
         }
         catch (Exception error)
         {
@@ -490,10 +569,17 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
             Debug.LogError("Could not write grass smoke results: " + error.Message);
         }
         baselinePixels = null;
+        windPixels = null;
+        contactPixels = null;
         Debug.Log("Grass smoke " + (report.passed ? "passed" : "failed") + ": " + outputDirectory +
             (report.passed ? "" : "\n" + report.failure));
         if (!Application.isEditor)
             Application.Quit(report.passed ? 0 : 2);
+    }
+
+    private void WriteReport()
+    {
+        File.WriteAllText(Path.Combine(outputDirectory, "grass-smoke-results.json"), JsonUtility.ToJson(report, true));
     }
 
     private void OnCameraRendered(ScriptableRenderContext context, Camera camera)
@@ -558,13 +644,16 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
     [Serializable]
     private sealed class SmokeReport
     {
-        public int schemaVersion = 2;
-        public string scope = "Standalone no-AA/MSAA baseline with executed color/depth attachment observations; optional motion coverage is separate. No frame-rate or analytical image-quality claim.";
-        public string limitations = "Counts are asynchronous diagnostics without per-sample timestamps. Attachment samples come from allocated RenderTextures or imported target metadata when there is no RenderTexture. Contact/motion settings and captures do not certify shadow quality, alpha-to-coverage behavior or vector values. The saved mask is synthetic; proprietary MicroVerse execution is outside this run.";
+        public int schemaVersion = 3;
+        public string status = "running", attemptId = Guid.NewGuid().ToString("N");
+        public string scope = "Checked standalone no-AA/MSAA baseline with executed attachment samples/viewports and controlled grass, wind, contact and empty-coverage image comparisons; optional motion coverage is separate.";
+        public string limitations = "Counts are asynchronous diagnostics without per-sample timestamps. Imported targets use their declared metadata when no RenderTexture exists. Functional pixel changes do not certify shadow quality, alpha-to-coverage silhouettes, temporal vector values or performance. The saved mask is synthetic; proprietary MicroVerse execution is outside this run.";
         public string unityVersion, startedUtc, completedUtc, graphicsApi, graphicsDevice, failure;
         public bool passed, supportsCompute, supportsIndirectArguments, supportsAsyncReadback;
+        public bool checksEnabled, instrumentationEnabled, renderGraphValidityChecks;
         public bool optionalMotionRequested, msaaCoverageComplete, windTextureVaries;
         public int cameraFrames, errorCount, warningCount, comparedPixels, changedGrassPixels, unsupportedMsaaStages;
+        public int changedWindPixels, darkenedContactPixels, brightenedContactPixels, changedBlackMaskPixels, changedNoSourcesPixels;
         public int windTextureWidth, windTextureHeight;
         public float windStrength, windScrollSpeed;
         public double seconds;
@@ -580,16 +669,21 @@ public sealed class GrassValidationPlayerProbe : MonoBehaviour
         public bool passed, cameraTargetsScreen, contactsRequested, postProcessingRequested, cameraPanRequested, optional;
         public uint visibleGrass, overflowGrass;
         public int cameraFrames, imageWidth, imageHeight, requestedMsaa, activationFrame, capturedFrame;
-        public float requestedRenderScale, maximumCameraDisplacement;
+        public float requestedRenderScale, maximumCameraDisplacement, windStrength;
+        public Vector3 cameraPosition;
+        public Quaternion cameraRotation;
         public double seconds;
         public AttachmentObservation attachments;
     }
 
     [Serializable]
-    private sealed class AttachmentObservation
+    public sealed class AttachmentObservation
     {
         public int frame, requestedMsaa, hardwareSupportedMsaa, cameraDescriptorSamples, colorSamples, depthSamples;
         public int colorWidth, colorHeight, depthWidth, depthHeight;
+        public int colorViewportWidth, colorViewportHeight, depthViewportWidth, depthViewportHeight;
+        public int cameraWidth, cameraHeight, cameraScaledWidth, cameraScaledHeight, cameraDescriptorWidth, cameraDescriptorHeight;
+        public float cameraRenderScale;
         public string colorFormat, depthFormat, colorEvidence, depthEvidence, antialiasing;
         public bool backbuffer;
     }

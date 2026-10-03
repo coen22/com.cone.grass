@@ -1,5 +1,7 @@
+using System;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Rendering;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -45,7 +47,39 @@ public static class GrassValidationProjectBootstrap
             QualitySettings.renderPipeline = pipeline;
         if (PlayerSettings.colorSpace != ColorSpace.Linear)
             PlayerSettings.colorSpace = ColorSpace.Linear;
+        EnsureGlobalSettings(folder);
+        // Checked code still honors this independent project setting. Query
+        // the configured pipeline explicitly, including before its first frame.
+        if (!EditorGraphicsSettings.TryGetRenderPipelineSettingsForPipeline<RenderGraphGlobalSettings, UniversalRenderPipeline>(out var renderGraph))
+            throw new InvalidOperationException("The validation pipeline has no RenderGraph Graphics settings.");
+        renderGraph.enableValidityChecks = true;
         AssetDatabase.SaveAssets();
         Debug.Log("Grass validation project configured with native URP. GPU tests still require a graphics device.");
+    }
+
+    private static void EnsureGlobalSettings(string folder)
+    {
+        if (EditorGraphicsSettings.GetRenderPipelineGlobalSettingsAsset<UniversalRenderPipeline>() != null)
+            return;
+        // A fresh headless Editor has not necessarily created a pipeline yet.
+        // Use Core's public asset factory to populate and initialize settings.
+        // URP 17.6 keeps its concrete global-settings type internal, so discover
+        // the asset type through the public Editor TypeCache without calling
+        // internal constructors or initialization methods.
+        string path = folder + "/GrassValidationGlobalSettings.asset";
+        RenderPipelineGlobalSettings globalSettings = AssetDatabase.LoadAssetAtPath<RenderPipelineGlobalSettings>(path);
+        if (!globalSettings)
+        {
+            foreach (Type candidate in TypeCache.GetTypesDerivedFrom<RenderPipelineGlobalSettings>())
+            {
+                if (candidate.FullName != "UnityEngine.Rendering.Universal.UniversalRenderPipelineGlobalSettings")
+                    continue;
+                globalSettings = RenderPipelineGlobalSettingsUtils.Create(candidate, path);
+                break;
+            }
+        }
+        if (!globalSettings)
+            throw new InvalidOperationException("Could not create the validation pipeline's global settings asset.");
+        EditorGraphicsSettings.SetRenderPipelineGlobalSettingsAsset<UniversalRenderPipeline>(globalSettings);
     }
 }

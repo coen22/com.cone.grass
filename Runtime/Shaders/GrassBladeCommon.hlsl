@@ -223,12 +223,17 @@ void EvaluateGrassRow(GrassRootData root, GrassViewParameters view, float height
 {
     height = saturate(height);
     float3 bladeDirection = GrassDirectionAtHeight(root, height);
-    float3 rightTangent = cross(bladeDirection, view.cameraForward);
+    center = root.pivot + bladeDirection * height * root.height;
+    center.xz += height * height * root.curvature;
+    // Perspective rays vary across the image. Facing every blade along the
+    // camera's central ray can backface-cull visible roots behind the camera in
+    // world XZ when looking down. Orthographic rays remain parallel instead.
+    float3 viewDirection = view.projection.z > 0.5
+        ? view.cameraForward : SafeNormalize(center - view.cameraPosition);
+    float3 rightTangent = cross(bladeDirection, viewDirection);
     if (dot(rightTangent, rightTangent) < 0.00001)
         rightTangent = view.cameraRight;
     rightTangent = SafeNormalize(rightTangent);
-    center = root.pivot + bladeDirection * height * root.height;
-    center.xz += height * height * root.curvature;
     halfSpan = rightTangent * 0.25 * root.width * (1.0 - height);
 }
 

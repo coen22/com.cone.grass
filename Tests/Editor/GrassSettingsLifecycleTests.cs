@@ -117,6 +117,76 @@ public sealed class GrassSettingsLifecycleTests
 }
 
 [NonParallelizable]
+public sealed class GrassPopulationSettingsTests
+{
+    [TestCase(0f, 3)]
+    [TestCase(-float.MaxValue, 3)]
+    [TestCase(2f, 2000000)]
+    [TestCase(16f, 16000000)]
+    [TestCase(2147.48364f, 16000000)]
+    [TestCase(10000f, 16000000)]
+    [TestCase(float.MaxValue, 16000000)]
+    [TestCase(float.NaN, 2000000)]
+    [TestCase(float.PositiveInfinity, 2000000)]
+    [TestCase(float.NegativeInfinity, 2000000)]
+    public void ScriptedCapacityRequestsAreBoundedBeforeIntegerConversion(float millions, int expected)
+    {
+        var gameObject = new GameObject("Grass capacity settings");
+        gameObject.SetActive(false);
+        try
+        {
+            var settings = gameObject.AddComponent<InfiniteGrassRenderer>();
+            // Runtime assignments do not pass through OnValidate or OnEnable.
+            settings.maxBufferCount = millions;
+            Assert.That(settings.Capacity, Is.EqualTo(expected));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameObject);
+        }
+    }
+
+    [TestCase(2f, 0.35f, 0.45f, 0.2f, 700000, 900000, 400000)]
+    [TestCase(16f, 0.35f, 0.45f, 0.2f, 5600000, 7200000, 3200000)]
+    [TestCase(16f, float.MaxValue, float.MaxValue, float.MaxValue, 5333333, 5333333, 5333334)]
+    [TestCase(16f, 1e32f, 1f, 1f, 15999998, 1, 1)]
+    [TestCase(16f, 1f, 1e32f, 1f, 1, 15999998, 1)]
+    [TestCase(16f, 1f, 1f, 1e32f, 1, 1, 15999998)]
+    [TestCase(float.MaxValue, float.MaxValue, 1f, 1f, 15999998, 1, 1)]
+    [TestCase(2f, float.NaN, float.PositiveInfinity, float.NegativeInfinity, 700000, 900000, 400000)]
+    [TestCase(0f, float.MaxValue, float.MaxValue, float.MaxValue, 1, 1, 1)]
+    public void ScriptedLodWeightsKeepPositiveContiguousPartitions(float millions, float near, float middle,
+        float far, int expectedNear, int expectedMiddle, int expectedFar)
+    {
+        var gameObject = new GameObject("Grass LOD capacity settings");
+        gameObject.SetActive(false);
+        try
+        {
+            var settings = gameObject.AddComponent<InfiniteGrassRenderer>();
+            settings.maxBufferCount = millions;
+            settings.lodCapacityWeights = new Vector3(near, middle, far);
+            int[] capacities = { -1, -1, -1, -1 };
+            int[] offsets = { -1, -1, -1, -1 };
+
+            settings.GetLodCapacity(capacities, offsets);
+
+            Assert.That(capacities, Is.EqualTo(new[] { expectedNear, expectedMiddle, expectedFar, 0 }));
+            Assert.That(offsets, Is.EqualTo(new[] { 0, expectedNear, expectedNear + expectedMiddle, 0 }));
+            Assert.That(capacities[0] + capacities[1] + capacities[2], Is.EqualTo(settings.Capacity));
+            for (int lod = 0; lod < 3; lod++)
+            {
+                Assert.That(capacities[lod], Is.GreaterThan(0));
+                Assert.That(offsets[lod] + capacities[lod], Is.LessThanOrEqualTo(settings.Capacity));
+            }
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameObject);
+        }
+    }
+}
+
+[NonParallelizable]
 public sealed class GrassRendererLifecycleTests
 {
     [TestCase(true)]
@@ -139,6 +209,52 @@ public sealed class GrassRendererLifecycleTests
             Assert.That(fixture.Histories.Count, Is.Zero);
             foreach (object state in fixture.CameraStates)
                 Assert.That(GetField(state, "Disposed"), Is.True);
+        }
+    }
+
+    [Test]
+    public void IncompatibleBladeMaterialReleasesAllCamerasAndWarnsOnceUntilRecovery()
+    {
+        using (var fixture = new RendererFixture())
+        {
+            Shader shader = Shader.Find("InfiniteGrass/Modifiers/GrassMaskShader");
+            Assert.That(shader, Is.Not.Null);
+            var incompatible = new Material(shader);
+            try
+            {
+                Assert.That(incompatible.FindPass("GrassForward"), Is.LessThan(0));
+                fixture.Owner.grassMaterial = incompatible;
+                const string warning = "The grass material needs the GrassForward pass from the package blade shader.";
+
+                LogAssert.Expect(LogType.Warning, warning);
+                ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
+                ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
+
+                Assert.That(fixture.States.Count, Is.Zero);
+                Assert.That(fixture.Histories.Count, Is.Zero);
+                foreach (object state in fixture.CameraStates)
+                    Assert.That(GetField(state, "Disposed"), Is.True);
+                LogAssert.NoUnexpectedReceived();
+
+                fixture.Owner.grassMaterial = AssetDatabase.LoadAssetAtPath<Material>(
+                    "Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat");
+                Assert.That(fixture.Owner.grassMaterial, Is.Not.Null);
+                Assert.That(fixture.Owner.grassMaterial.FindPass("GrassForward"), Is.GreaterThanOrEqualTo(0));
+                // This fixture has no compute shader; a valid material exits at
+                // that next prerequisite without constructing a graph or buffers.
+                ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
+
+                fixture.Owner.grassMaterial = incompatible;
+                LogAssert.Expect(LogType.Warning, warning);
+                ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
+                Assert.That(fixture.States.Count, Is.Zero,
+                    "An incompatible material must never reach camera allocation.");
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                Object.DestroyImmediate(incompatible);
+            }
         }
     }
 
@@ -228,6 +344,80 @@ public sealed class GrassRendererLifecycleTests
                     Object.DestroyImmediate(camera.gameObject);
             if (previous)
                 previous.enabled = previousEnabled;
+        }
+    }
+}
+
+[NonParallelizable]
+public sealed class GrassCaptureTextureTests
+{
+    [Test]
+    public void CaptureDeclarationsIncludeRendererAndMaterialTextureOverridesWithoutStaleEntries()
+    {
+        Shader shader = Shader.Find("InfiniteGrass/Modifiers/GrassMaskShader");
+        Assert.That(shader, Is.Not.Null);
+        var material = new Material(shader);
+        var gameObject = new GameObject("Grass capture texture overrides");
+        var external = new RenderTexture(4, 4, 0);
+        try
+        {
+            Renderer renderer = gameObject.AddComponent<MeshRenderer>();
+            renderer.sharedMaterials = new[] { material, material };
+            int mainTexture = Shader.PropertyToID("_MainTex");
+            material.SetTexture(mainTexture, Texture2D.whiteTexture);
+            var block = new MaterialPropertyBlock();
+            block.SetTexture(mainTexture, external);
+            renderer.SetPropertyBlock(block);
+            block.SetTexture(mainTexture, Texture2D.blackTexture);
+            renderer.SetPropertyBlock(block, 1);
+
+            var scratch = new MaterialPropertyBlock();
+            var textures = new Texture[3];
+            Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+            var collect = (Func<Renderer, Material, int, MaterialPropertyBlock, Texture[], int>)passType.GetMethod(
+                "CollectCaptureTextures", BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(
+                typeof(Func<Renderer, Material, int, MaterialPropertyBlock, Texture[], int>));
+
+            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(3));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external, Texture2D.blackTexture }),
+                "DrawRenderer may read a render texture supplied only through a property block.");
+            Assert.That(collect(renderer, material, 0, scratch, textures), Is.EqualTo(2));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external, null }),
+                "Another material index must not retain a previous override in reused scratch storage.");
+
+            block.SetTexture(mainTexture, external);
+            renderer.SetPropertyBlock(block, 1);
+            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(2),
+                "The same physical texture in both override scopes needs only one declaration.");
+            Assert.That(textures[2], Is.Null);
+
+            block.SetTexture(mainTexture, Texture2D.grayTexture);
+            renderer.SetPropertyBlock(block);
+            renderer.SetPropertyBlock(null, 1);
+            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(2));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, Texture2D.grayTexture, null }));
+
+            renderer.SetPropertyBlock(null);
+            material.SetTexture(mainTexture, Texture2D.blackTexture);
+            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(1));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.blackTexture, null, null }),
+                "Removed overrides and replaced material textures must not remain in the next pass's dependencies.");
+
+            Shader heightShader = Shader.Find("InfiniteGrass/GrassHeightMapShader");
+            Assert.That(heightShader, Is.Not.Null);
+            material.shader = heightShader;
+            block.SetTexture(mainTexture, external);
+            renderer.SetPropertyBlock(block);
+            Assert.That(material.HasProperty(mainTexture), Is.False);
+            Assert.That(collect(renderer, material, 1, scratch, textures), Is.Zero);
+            Assert.That(textures, Is.EqualTo(new Texture[3]),
+                "The height override material does not sample the renderer's modifier texture.");
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameObject);
+            Object.DestroyImmediate(material);
+            Object.DestroyImmediate(external);
         }
     }
 }

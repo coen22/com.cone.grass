@@ -228,6 +228,95 @@ public sealed class GrassMicroVerseGroundBakeTests
     }
 
     [Test]
+    public void ReentrantRefreshDoesNotClearOrRebindTheCommittedPlacement()
+    {
+        Texture2D original = Refresh();
+        bool attempted = false, nestedSucceeded = true, keptBinding = false, keptRevision = false;
+        string nestedMessage = null;
+        Action<Terrain, Texture2D> observer = (source, output) =>
+        {
+            // An integration can observe a bake and request a bridge refresh.
+            // Keep this regression bounded on versions without the guard.
+            if (source != terrain || attempted)
+                return;
+            attempted = true;
+            uint revision = bridge.PlacementArea.SourceRevision;
+            nestedSucceeded = GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, true, true);
+            nestedMessage = bridge.LastRefreshMessage;
+            keptBinding = bridge.PlacementArea.DensityTexture == density &&
+                bridge.PlacementArea.GroundColorTexture == original;
+            keptRevision = bridge.PlacementArea.SourceRevision == revision;
+        };
+        TerrainGrassAlbedoBaker.Baked += observer;
+        try
+        {
+            Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true),
+                Is.True, bridge.LastRefreshMessage);
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= observer;
+        }
+
+        Assert.That(attempted, Is.True);
+        Assert.That(nestedSucceeded, Is.False);
+        StringAssert.Contains("already refreshing", nestedMessage);
+        Assert.That(keptBinding, Is.True);
+        Assert.That(keptRevision, Is.True, "A rejected nested refresh must not invalidate or clear the original placement.");
+        Assert.That(bridge.LastRefreshSucceeded, Is.True);
+        Assert.That(bakeCount, Is.EqualTo(2));
+        Assert.That(Refresh(), Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(2), "Ordinary refresh must resume after the callback returns.");
+    }
+
+    [Test]
+    public void RefreshingAnotherBridgeDuringASharedBakePreservesItsCommittedPlacement()
+    {
+        Texture2D original = Refresh();
+        GameObject otherObject = Own(new GameObject("Shared ground-bake consumer"));
+        GrassMicroVerseBridge other = AddBridge(otherObject, 64, true);
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(other, false, false, false), Is.True, other.LastRefreshMessage);
+        Assert.That(other.AutoRefresh, Is.False);
+        int previousBakes = bakeCount;
+        bool attempted = false, nestedSucceeded = true, keptBinding = false, keptRevision = false;
+        string nestedMessage = null;
+        Action<Terrain, Texture2D> observer = (source, output) =>
+        {
+            if (source != terrain || attempted)
+                return;
+            attempted = true;
+            uint revision = other.PlacementArea.SourceRevision;
+            nestedSucceeded = GrassMicroVerseBridgeUtility.Refresh(other, false, false, true, true);
+            nestedMessage = other.LastRefreshMessage;
+            keptBinding = other.PlacementArea.DensityTexture == density &&
+                other.PlacementArea.GroundColorTexture == original;
+            keptRevision = other.PlacementArea.SourceRevision == revision;
+        };
+        TerrainGrassAlbedoBaker.Baked += observer;
+        try
+        {
+            Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true),
+                Is.True, bridge.LastRefreshMessage);
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= observer;
+        }
+
+        Assert.That(attempted, Is.True);
+        Assert.That(nestedSucceeded, Is.False);
+        StringAssert.Contains("still being baked", nestedMessage);
+        Assert.That(keptBinding, Is.True);
+        Assert.That(keptRevision, Is.True);
+        Assert.That(other.PlacementArea.DensityTexture, Is.SameAs(density),
+            "A shared-output observer with Auto Refresh disabled must not be left with cleared coverage.");
+        Assert.That(other.PlacementArea.GroundColorTexture, Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(previousBakes + 1));
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(other, false, false, false), Is.True, other.LastRefreshMessage);
+        Assert.That(other.LastRefreshSucceeded, Is.True);
+    }
+
+    [Test]
     public void SharedTerrainOutputAtAnotherResolutionClearsConflictingCoverage()
     {
         Texture2D original = Refresh();

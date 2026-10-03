@@ -38,9 +38,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             grassPass?.ReleaseCameras();
             return;
         }
+        if (grassPass == null || !grassPass.TryGetForwardPass(owner, out _))
+            return;
 
         Camera camera = renderingData.cameraData.camera;
-        if (grassPass == null || !(renderer is UniversalRenderer) || camera == null || camera.stereoEnabled ||
+        if (!(renderer is UniversalRenderer) || camera == null || camera.stereoEnabled ||
             renderingData.cameraData.renderType != CameraRenderType.Base ||
             (camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) ||
             (camera.cameraType == CameraType.SceneView && !owner.renderInSceneView))
@@ -194,6 +196,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private Mesh captureQuad;
         private bool missingPlacementWarning;
         private bool missingHeightWarning;
+        private bool missingForwardWarning;
         private bool disposed;
 
         public GrassDataPass(LayerMask layer, Material height, ComputeShader shader)
@@ -232,7 +235,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
             if (disposed)
                 return;
-            if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial || !kernelsValid)
+            if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial)
+            {
+                ReleaseCameras();
+                return;
+            }
+            if (!TryGetForwardPass(owner, out int forwardPass))
+                return;
+            if (!kernelsValid)
             {
                 ReleaseCameras();
                 return;
@@ -280,16 +290,6 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
             bool materialChanged = state.UpdateMaterial(owner,
                 graph.GetRenderTargetInfo(resources.activeColorTexture).msaaSamples > 1);
-            int forwardPass = state.BladeMaterial.FindPass("GrassForward");
-            if (forwardPass < 0)
-            {
-                if (!state.WarnedMaterial)
-                {
-                    Debug.LogWarning("The grass material needs the GrassForward pass from the package blade shader.", owner);
-                    state.WarnedMaterial = true;
-                }
-                return;
-            }
 
             float spacing = Mathf.Max(0.001f, FiniteOr(owner.spacing, 0.1f));
             float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f));
@@ -503,6 +503,23 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             if (!requested)
                 motion.Release(camera);
             return requested;
+        }
+
+        public bool TryGetForwardPass(InfiniteGrassRenderer owner, out int forwardPass)
+        {
+            forwardPass = owner.grassMaterial ? owner.grassMaterial.FindPass("GrassForward") : -1;
+            if (forwardPass >= 0)
+            {
+                missingForwardWarning = false;
+                return true;
+            }
+            if (!missingForwardWarning)
+                Debug.LogWarning("The grass material needs the GrassForward pass from the package blade shader.", owner);
+            missingForwardWarning = true;
+            // Invalid materials cannot use any camera buffers or capture maps.
+            // Reject them before allocation or requesting URP depth/motion work.
+            ReleaseCameras();
+            return false;
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode) => InvalidateInventory();
@@ -876,10 +893,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 pass.Clear = clear;
                 for (int i = 0; i < draws.Count; i++)
                 {
-                    Material material = draws[i].Material;
-                    Texture input = material && material.HasProperty(Id.MainTexture) ? material.GetTexture(Id.MainTexture) : null;
-                    if (input)
-                        builder.UseTexture(ImportTexture(graph, state, input), AccessFlags.Read);
+                    RendererDraw draw = draws[i];
+                    int textureCount = CollectCaptureTextures(draw.Renderer, draw.Material, draw.Submesh,
+                        state.CaptureProperties, state.CaptureTextures);
+                    for (int texture = 0; texture < textureCount; texture++)
+                        builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
                 }
                 builder.SetRenderAttachment(target, 0, AccessFlags.Write);
                 if (pass.HasDepth)
@@ -899,6 +917,37 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     }
                 });
             }
+        }
+
+        private static int CollectCaptureTextures(Renderer renderer, Material material, int materialIndex,
+            MaterialPropertyBlock properties, Texture[] textures)
+        {
+            Array.Clear(textures, 0, textures.Length);
+            if (!material || !material.HasProperty(Id.MainTexture))
+                return 0;
+            int count = 0;
+            AddCaptureTexture(material.GetTexture(Id.MainTexture), textures, ref count);
+            if (renderer && renderer.HasPropertyBlock())
+            {
+                // DrawRenderer consumes renderer and per-material overrides.
+                // Declare both scopes conservatively, including overrides that
+                // replace a material texture with an externally rendered map.
+                renderer.GetPropertyBlock(properties);
+                AddCaptureTexture(properties.GetTexture(Id.MainTexture), textures, ref count);
+                renderer.GetPropertyBlock(properties, materialIndex);
+                AddCaptureTexture(properties.GetTexture(Id.MainTexture), textures, ref count);
+            }
+            return count;
+        }
+
+        private static void AddCaptureTexture(Texture texture, Texture[] textures, ref int count)
+        {
+            if (!texture)
+                return;
+            for (int i = 0; i < count; i++)
+                if (textures[i] == texture)
+                    return;
+            textures[count++] = texture;
         }
 
         private void BuildPlacementCapture(RenderGraph graph, CameraState state, TextureHandle density,
@@ -1448,7 +1497,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public InfiniteGrassRenderer Owner;
             public uint OwnerRevision, InventoryRevision;
             public ulong GroundVersion, NextGroundVersion, SurfaceVersion, NextSurfaceVersion;
-            public bool CacheValid, WarnedBudget, WarnedMaterial, WarnedBufferLimit, Disposed;
+            public bool CacheValid, WarnedBudget, WarnedBufferLimit, Disposed;
             public Vector2 Center;
             public Vector2 CaptureRange;
             public float CaptureExtent, MotionSpacing;
@@ -1466,6 +1515,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly Plane[] Planes = new Plane[6];
             public readonly Vector4[] Frustum = new Vector4[6];
             public readonly MaterialPropertyBlock[] DrawProperties = { new MaterialPropertyBlock(), new MaterialPropertyBlock(), new MaterialPropertyBlock() };
+            public readonly MaterialPropertyBlock CaptureProperties = new MaterialPropertyBlock();
+            public readonly Texture[] CaptureTextures = new Texture[3];
             public readonly TextureHandle[] VertexTextures = new TextureHandle[5];
             public Renderer[] CaptureRenderers;
             public IReadOnlyList<Renderer> ModifierRenderers;
@@ -1563,7 +1614,6 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     CoreUtils.Destroy(BladeMaterial);
                     BladeMaterial = new Material(owner.grassMaterial) { hideFlags = HideFlags.HideAndDontSave };
                     sourceMaterial = owner.grassMaterial;
-                    WarnedMaterial = false;
                 }
                 BladeMaterial.CopyPropertiesFromMaterial(owner.grassMaterial);
                 BladeMaterial.enableInstancing = true;

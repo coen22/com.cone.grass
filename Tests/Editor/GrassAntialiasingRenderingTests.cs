@@ -98,8 +98,30 @@ public sealed class GrassAntialiasingRenderingTests
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
     }
 
+    [TestCase(0)]
+    [TestCase(2)]
+    [TestCase(5)]
+    public void DownwardPerspectiveViewKeepsVisibleBladesOnBothSidesOfTheCamera(int subdivisions)
+    {
+        Matrix4x4 cameraToWorld = Matrix4x4.TRS(new Vector3(0f, 4f, 0f),
+            Quaternion.Euler(80f, 0f, 0f), Vector3.one);
+        Color[] inFront = Render(subdivisions, 4, 1f, 32f, 0f,
+            rootPosition: new Vector3(0f, 0f, 1f), cameraToWorld: cameraToWorld, perspective: true);
+        Color[] behind = Render(subdivisions, 4, 1f, 32f, 0f,
+            rootPosition: new Vector3(0f, 0f, -1f), cameraToWorld: cameraToWorld, perspective: true);
+
+        // Both one-unit blades are fully inside the 60-degree view. The rear
+        // root is behind the camera only in world XZ, not in its viewing volume.
+        // A central-ray billboard points its winding away from this camera and
+        // loses that blade to Cull Back despite its substantial projected area.
+        Assert.That(CoveredArea(inFront), Is.GreaterThan(16f), "The forward root is the camera/projection positive control.");
+        Assert.That(CoveredArea(behind), Is.GreaterThan(16f),
+            "Perspective blades must face their own viewing ray, including visible roots behind the camera in world XZ.");
+    }
+
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
-        float minimumPixelWidth, float time = 0f)
+        float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
+        Matrix4x4? cameraToWorld = null, bool perspective = false)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -127,7 +149,8 @@ public sealed class GrassAntialiasingRenderingTests
             Assert.That(resolved.Create(), Is.True);
             readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
 
-            positions.SetData(new[] { new Vector4(0f, -0.5f, 2f, coverage) });
+            Vector3 root = rootPosition ?? new Vector3(0f, -0.5f, 2f);
+            positions.SetData(new[] { new Vector4(root.x, root.y, root.z, coverage) });
             // The shipped mesh's full base width is half of _GrassWidth. An
             // orthographic two-unit viewport gives Size/2 pixels per world unit.
             material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size);
@@ -155,8 +178,11 @@ public sealed class GrassAntialiasingRenderingTests
             properties.SetVector("_GrassSHBb", Vector4.zero);
             properties.SetVector("_GrassSHC", Vector4.zero);
 
-            Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
-            Matrix4x4 projection = GL.GetGPUProjectionMatrix(Matrix4x4.Ortho(-1f, 1f, -1f, 1f, 0.1f, 10f), true);
+            Matrix4x4 cameraWorld = cameraToWorld ?? Matrix4x4.identity;
+            Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) * cameraWorld.inverse;
+            Matrix4x4 projection = GL.GetGPUProjectionMatrix(perspective
+                ? Matrix4x4.Perspective(60f, 1f, 0.1f, 10f)
+                : Matrix4x4.Ortho(-1f, 1f, -1f, 1f, 0.1f, 10f), true);
             string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
             var previousMatrices = new Matrix4x4[matrixNames.Length];
             for (int index = 0; index < matrixNames.Length; index++)
@@ -168,8 +194,8 @@ public sealed class GrassAntialiasingRenderingTests
             };
             Vector4[] vectors =
             {
-                Vector4.zero, new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
-                new Vector4(2f, 2f, 0f, 1f), new Vector4(1f, 0.1f, 10f, 0.1f),
+                cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
+                new Vector4(2f, 2f, 0f, perspective ? 0f : 1f), new Vector4(1f, 0.1f, 10f, 0.1f),
                 Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
                 new Vector4(time / 20f, time, time * 2f, time * 3f),
                 new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
