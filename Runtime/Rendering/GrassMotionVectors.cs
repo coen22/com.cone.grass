@@ -72,8 +72,11 @@ public sealed class GrassMotionVectors : IDisposable
     private int storeKernel;
     private bool warnedResources;
     private bool warnedCapacity;
+    private bool warnedSnapshotFormat;
     private bool disposed;
-    private GraphicsFormat snapshotFormat;
+    private bool unormSnapshotsSupported;
+    private bool rg32SnapshotsSupported;
+    private bool rgba32SnapshotsSupported;
 
     /// <summary>
     /// URP does not expose its complete motion-consumer summary publicly. Auto
@@ -163,6 +166,9 @@ public sealed class GrassMotionVectors : IDisposable
             Release(camera);
             return;
         }
+        if (!TryGetSnapshotFormats(camera, slope, wind, out GraphicsFormat slopeFormat,
+                out GraphicsFormat windFormat))
+            return;
 
         if (!cameras.TryGetValue(camera, out CameraHistory history))
         {
@@ -180,7 +186,7 @@ public sealed class GrassMotionVectors : IDisposable
             Release(camera);
             return;
         }
-        history.EnsureAllocation(capacity, slope, wind, snapshotFormat);
+        history.EnsureAllocation(capacity, slope, wind, slopeFormat, windFormat);
         int frameNumber = Time.frameCount;
         bool newFrame = history.RenderedFrame != frameNumber;
         // A repeat uses the same previous snapshot and hash as the first render.
@@ -385,16 +391,15 @@ public sealed class GrassMotionVectors : IDisposable
             return true;
         historyShader = Resources.Load<ComputeShader>("InfiniteGrassMotionHistory");
         Shader shader = Resources.Load<Shader>("InfiniteGrassMotionCopy");
-        snapshotFormat = SupportsSnapshotFormat(GraphicsFormat.R16G16B16A16_SFloat)
-            ? GraphicsFormat.R16G16B16A16_SFloat
-            : SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat)
-                ? GraphicsFormat.R32G32B32A32_SFloat : GraphicsFormat.None;
+        unormSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm);
+        rg32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat);
+        rgba32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat);
         if (!historyShader || !shader || !shader.isSupported || !historyShader.HasKernel("ClearHistory") ||
             !historyShader.HasKernel("BuildHistory") || !historyShader.HasKernel("CaptureCounts") || !historyShader.HasKernel("StoreRoots") ||
-            snapshotFormat == GraphicsFormat.None)
+            !(unormSnapshotsSupported || rg32SnapshotsSupported || rgba32SnapshotsSupported))
         {
             if (!warnedResources)
-                Debug.LogWarning("Grass motion vectors require the InfiniteGrassMotionHistory compute shader, InfiniteGrassMotionCopy shader, and renderable floating-point textures supporting linear sampling.");
+                Debug.LogWarning("Grass motion vectors require the InfiniteGrassMotionHistory compute shader, InfiniteGrassMotionCopy shader, and renderable snapshot textures supporting linear sampling.");
             warnedResources = true;
             return false;
         }
@@ -410,6 +415,36 @@ public sealed class GrassMotionVectors : IDisposable
         SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render) &&
         SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Sample) &&
         SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Linear);
+
+    private bool TryGetSnapshotFormats(Camera camera, Texture slope, Texture wind,
+        out GraphicsFormat slopeFormat, out GraphicsFormat windFormat)
+    {
+        slopeFormat = SelectSnapshotFormat(slope.graphicsFormat, false,
+            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported);
+        windFormat = SelectSnapshotFormat(wind.graphicsFormat, true,
+            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported);
+        if (slopeFormat != GraphicsFormat.None && windFormat != GraphicsFormat.None)
+            return true;
+        if (!warnedSnapshotFormat)
+            Debug.LogWarning("Grass motion history cannot preserve these deformation textures on this device. It requires matching linear RGBA8 UNorm or 32-bit floating-point snapshot formats supporting rendering and linear sampling.");
+        warnedSnapshotFormat = true;
+        Release(camera);
+        return false;
+    }
+
+    private static GraphicsFormat SelectSnapshotFormat(GraphicsFormat sourceFormat, bool wind,
+        bool unormSupported, bool rg32Supported, bool rgba32Supported)
+    {
+        // A matching linear UNorm copy preserves its source texels. Other inputs
+        // retain their sampled float values, including compressed and sRGB wind.
+        // Half storage changes even ordinary 8-bit UNorm values and creates
+        // motion on stationary blades. Wind needs only its two sampled channels.
+        if (sourceFormat == GraphicsFormat.R8G8B8A8_UNorm && unormSupported)
+            return GraphicsFormat.R8G8B8A8_UNorm;
+        if (wind && rg32Supported)
+            return GraphicsFormat.R32G32_SFloat;
+        return rgba32Supported ? GraphicsFormat.R32G32B32A32_SFloat : GraphicsFormat.None;
+    }
 
     public void ResetHistory(Camera camera)
     {
@@ -496,7 +531,8 @@ public sealed class GrassMotionVectors : IDisposable
         public int LatestIndex;
         public bool PreviousValid;
 
-        public bool EnsureAllocation(int capacity, Texture slope, Texture wind, GraphicsFormat format)
+        public bool EnsureAllocation(int capacity, Texture slope, Texture wind,
+            GraphicsFormat slopeFormat, GraphicsFormat windFormat)
         {
             int size = HistoryTableSize(capacity);
             bool changed = Keys == null || !Keys.IsValid() || Keys.count != size;
@@ -512,7 +548,7 @@ public sealed class GrassMotionVectors : IDisposable
                 changed = true;
             }
             for (int i = 0; i < Snapshots.Length; i++)
-                changed |= Snapshots[i].EnsureAllocation(capacity, slope, wind, format);
+                changed |= Snapshots[i].EnsureAllocation(capacity, slope, wind, slopeFormat, windFormat);
             if (changed)
                 ResetHistory();
             return changed;
@@ -551,7 +587,8 @@ public sealed class GrassMotionVectors : IDisposable
         public readonly int[] Offsets = new int[4];
         public readonly int[] Capacities = new int[4];
 
-        public bool EnsureAllocation(int capacity, Texture slope, Texture wind, GraphicsFormat format)
+        public bool EnsureAllocation(int capacity, Texture slope, Texture wind,
+            GraphicsFormat slopeFormat, GraphicsFormat windFormat)
         {
             bool changed = Roots == null || !Roots.IsValid() || Roots.count != capacity;
             if (changed)
@@ -565,8 +602,8 @@ public sealed class GrassMotionVectors : IDisposable
                 Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 3, sizeof(uint));
                 changed = true;
             }
-            changed |= AllocateTexture(ref Slope, slope, format, "Grass Interaction History");
-            changed |= AllocateTexture(ref Wind, wind, format, "Grass Wind History");
+            changed |= AllocateTexture(ref Slope, slope, slopeFormat, "Grass Interaction History");
+            changed |= AllocateTexture(ref Wind, wind, windFormat, "Grass Wind History");
             return changed;
         }
 
