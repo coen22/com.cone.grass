@@ -339,8 +339,8 @@ half GrassFragmentCoverageWithMode(float2 shapeCoordinates, float instanceCovera
     float coverage = saturate(instanceCoverage * edgeCoverage);
     clip(coverage - 0.00001);
 
-    // Color exports this fraction to A2C. The single-sample contact pass stores
-    // it beside raw depth, so a partly covered blade is not a solid occluder.
+    // The single-sample contact pass stores this analytic silhouette estimate
+    // beside raw depth, so a partly covered blade is not a solid occluder.
     if (alphaToCoverage)
         return coverage;
 
@@ -357,6 +357,21 @@ half GrassFragmentCoverageWithMode(float2 shapeCoordinates, float instanceCovera
 half GrassFragmentCoverage(float2 shapeCoordinates, float instanceCoverage, uint seed)
 {
     return GrassFragmentCoverageWithMode(shapeCoordinates, instanceCoverage, seed, _GrassAlphaToCoverage > 0.5);
+}
+
+half GrassForwardCoverage(float2 shapeCoordinates, float instanceCoverage, uint seed)
+{
+    if (_GrassAlphaToCoverage > 0.5)
+    {
+        // The tapered mesh is the blade silhouette. Hardware MSAA already
+        // covers its geometric edges; A2C is ANDed with that sample mask.
+        // Export only density/width compensation here. Applying the analytic
+        // edge fraction as well would attenuate the same silhouette twice.
+        half coverage = saturate(instanceCoverage);
+        clip(coverage - 0.00001);
+        return coverage;
+    }
+    return GrassFragmentCoverageWithMode(shapeCoordinates, instanceCoverage, seed, false);
 }
 
 #endif

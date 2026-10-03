@@ -32,20 +32,22 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
     {
         grassPass?.PruneCameras();
         InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-        if (!owner || !owner.IsReadyForRendering)
+        if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial || !computeShader ||
+            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer)
         {
             grassPass?.ReleaseCameras();
             return;
         }
 
         Camera camera = renderingData.cameraData.camera;
-        if (grassPass == null || !(renderer is UniversalRenderer) || !owner.grassMaterial || !computeShader ||
-            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer ||
-            camera == null || camera.stereoEnabled ||
+        if (grassPass == null || !(renderer is UniversalRenderer) || camera == null || camera.stereoEnabled ||
             renderingData.cameraData.renderType != CameraRenderType.Base ||
             (camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) ||
             (camera.cameraType == CameraType.SceneView && !owner.renderInSceneView))
+        {
+            grassPass?.ReleaseCamera(camera);
             return;
+        }
 
         bool contacts = GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
         bool motion = grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
@@ -228,15 +230,25 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public override void RecordRenderGraph(RenderGraph graph, ContextContainer frameData)
         {
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-            if (disposed || !owner || !owner.IsReadyForRendering || !owner.grassMaterial || !kernelsValid)
+            if (disposed)
                 return;
+            if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial || !kernelsValid)
+            {
+                ReleaseCameras();
+                return;
+            }
 
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
             UniversalResourceData resources = frameData.Get<UniversalResourceData>();
             Camera camera = cameraData.camera;
             if (!camera || camera.stereoEnabled || cameraData.renderType != CameraRenderType.Base ||
+                (camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) ||
+                (camera.cameraType == CameraType.SceneView && !owner.renderInSceneView) ||
                 !resources.activeColorTexture.IsValid() || !resources.activeDepthTexture.IsValid())
+            {
+                ReleaseCamera(camera);
                 return;
+            }
 
             PruneCameras();
             if (!cameras.TryGetValue(camera, out CameraState state))
@@ -1387,11 +1399,16 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 if (!pair.Key || now - pair.Value.LastUsedTime > CameraIdleSeconds)
                     staleCameras.Add(pair.Key);
             for (int i = 0; i < staleCameras.Count; i++)
-            {
-                motion.Release(staleCameras[i]);
-                cameras[staleCameras[i]].Dispose();
-                cameras.Remove(staleCameras[i]);
-            }
+                ReleaseCamera(staleCameras[i]);
+        }
+
+        public void ReleaseCamera(Camera camera)
+        {
+            motion.Release(camera);
+            if (ReferenceEquals(camera, null) || !cameras.TryGetValue(camera, out CameraState state))
+                return;
+            state.Dispose();
+            cameras.Remove(camera);
         }
 
         public void ReleaseCameras()

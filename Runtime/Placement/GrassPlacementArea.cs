@@ -65,8 +65,9 @@ public struct GrassPlacementDrawData
         if (sourceMax.x < queryMin.x || sourceMin.x > queryMax.x ||
             sourceMax.z < queryMin.z || sourceMin.z > queryMax.z)
             return false;
-        if (shape == GrassPlacementShape.Texture && !densityAsset)
-            return densityTexture && densityTexture.dimension == TextureDimension.Tex2D;
+        if (shape == GrassPlacementShape.Texture && !densityAsset &&
+            (!densityTexture || densityTexture.dimension != TextureDimension.Tex2D))
+            return false;
 
         Vector3 a = worldToMask.MultiplyPoint3x4(new Vector3(queryMin.x, 0f, queryMin.z));
         Vector3 b = worldToMask.MultiplyPoint3x4(new Vector3(queryMax.x, 0f, queryMin.z));
@@ -76,7 +77,7 @@ public struct GrassPlacementDrawData
         float xMax = Mathf.Max(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x));
         float yMin = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
         float yMax = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
-        if (shape == GrassPlacementShape.Texture)
+        if (shape == GrassPlacementShape.Texture && densityAsset)
             return densityAsset.HasCoverageIn(Rect.MinMaxRect(xMin, yMin, xMax, yMax));
         if (shape == GrassPlacementShape.Circle)
         {
@@ -88,7 +89,7 @@ public struct GrassPlacementDrawData
             return nearestX * nearestX + nearestY * nearestY <= 0.25f;
         }
         // World X/Z overlap was checked above. These local axes complete the
-        // conservative rectangle overlap check for a rotated or narrow box.
+        // conservative rectangle overlap check for a rotated or narrow box/texture.
         return xMax >= 0f && xMin <= 1f && yMax >= 0f && yMin <= 1f;
     }
 }
@@ -114,7 +115,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
     [SerializeField] private Terrain terrain;
     [Tooltip("Map the texture over this terrain's complete XZ extent. Object position, scale and rotation are then ignored.")]
     [SerializeField] private bool useTerrainBounds;
-    [Tooltip("Optional collider used by the Scene brush when the surface is not a Terrain.")]
+    [Tooltip("Optional mesh surface and Scene brush collider. Its Renderer, or a parent Renderer, supports this area.")]
     [SerializeField] private Collider paintSurface;
 
     [Header("Texture coverage")]
@@ -618,6 +619,22 @@ public sealed class GrassPlacementArea : MonoBehaviour
 #if UNITY_EDITOR
             // The area may live in a normal scene while an assigned terrain is moved
             // into a preview scene. Its geometry must not leak into the main scene.
+            if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(supportingScene))
+                return false;
+#endif
+        }
+        else if (!ReferenceEquals(paintSurface, null))
+        {
+            // An explicitly assigned mesh surface must not turn into generic coverage
+            // when its collider is destroyed, unloaded or moved into a preview scene.
+            if (!paintSurface || !paintSurface.gameObject.activeInHierarchy)
+                return false;
+            if (!paintSurface.GetComponent<Renderer>() && !paintSurface.GetComponentInParent<Renderer>())
+                return false;
+            var supportingScene = paintSurface.gameObject.scene;
+            if (!supportingScene.IsValid() || !supportingScene.isLoaded)
+                return false;
+#if UNITY_EDITOR
             if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(supportingScene))
                 return false;
 #endif

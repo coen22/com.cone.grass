@@ -48,6 +48,7 @@ public static class GrassValidationBuild
         blade.SetFloat("_GrassHeight", 0.85f);
         blade.SetFloat("_GrassCurving", 0.15f);
         blade.SetFloat("_WindStrength", 0.15f);
+        blade.SetVector("_WindScroll", new Vector4(0.08f, 0.05f, 0f, 0f));
         blade.SetTexture("_WindTexture", WindAsset());
         blade.SetTextureScale("_WindTexture", Vector2.one * 0.13f);
         EditorUtility.SetDirty(blade);
@@ -70,6 +71,21 @@ public static class GrassValidationBuild
         featureProperties.FindProperty("heightMapLayer").intValue = 0;
         featureProperties.ApplyModifiedPropertiesWithoutUndo();
         feature.SetActive(true);
+        GrassValidationAttachmentFeature attachmentFeature = null;
+        foreach (ScriptableRendererFeature candidate in renderer.rendererFeatures)
+            if (candidate is GrassValidationAttachmentFeature observer)
+                attachmentFeature = observer;
+        if (!attachmentFeature)
+        {
+            attachmentFeature = ScriptableObject.CreateInstance<GrassValidationAttachmentFeature>();
+            attachmentFeature.name = "Grass validation attachment evidence";
+            AssetDatabase.AddObjectToAsset(attachmentFeature, renderer);
+        }
+        // Both passes use BeforeRenderingTransparents. Preserve this order so
+        // evidence comes from the active attachments used by GrassForward.
+        renderer.rendererFeatures.Remove(attachmentFeature);
+        renderer.rendererFeatures.Insert(renderer.rendererFeatures.IndexOf(feature) + 1, attachmentFeature);
+        attachmentFeature.SetActive(true);
         renderer.SetDirty();
         EditorUtility.SetDirty(renderer);
         pipeline.msaaSampleCount = 1;
@@ -284,6 +300,7 @@ public static class GrassValidationBuild
         for (int i = 0; i < colors.Length; i++)
             colors[i] = new Color(0.5f + 0.3f * Mathf.Sin(i * 0.3f), 0.5f + 0.3f * Mathf.Cos(i * 0.2f), 0f, 1f);
         texture.SetPixels(colors); texture.Apply(); texture.wrapMode = TextureWrapMode.Repeat;
+        texture.filterMode = FilterMode.Bilinear;
         EditorUtility.SetDirty(texture);
         return texture;
     }

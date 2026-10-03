@@ -36,7 +36,7 @@ if (TerrainGrassAlbedoBaker.TryBake(terrain, 1024, "Assets/TerrainGrassAlbedo.as
 }
 ```
 
-Record Undo and prefab overrides when an editor integration changes the area's serialized binding. `TryBake` preserves an existing output Texture2D asset's identity and emits `Baked(Terrain, Texture2D)` after saving. Reusing the same asset therefore still allows consumers to invalidate their cached ground-color capture. The bake never changes the terrain or its source textures.
+Record Undo and prefab overrides when an editor integration changes the area's serialized binding. `TryBake` preserves an existing output Texture2D asset's identity and emits `Baked(Terrain, Texture2D)` after saving. Reusing the same asset therefore still allows consumers to invalidate their cached ground-color capture. An observer exception is logged while the remaining observers still receive that saved output. The bake never changes the terrain or its source textures.
 
 `TryGetSourceSignature(Terrain, int, out Hash128, out string)` provides a cheap signature for polling within an editor session. It includes source properties, texture update counts, relevant source-import revisions, terrain texture callbacks and Undo/Redo. It does not require an output path or pixel readback. `Invalidate(Terrain)` handles GPU changes that do not emit a Terrain callback. `SourceChanged` reports terrain texture callbacks and explicit invalidation. Polling still detects layer, material and source-import changes.
 

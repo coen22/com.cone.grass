@@ -236,10 +236,22 @@ public static class TerrainGrassAlbedoBaker
 
         error = null;
         NotifyBoundAreas(texture);
-        // A subscriber failure must not turn a successfully saved bake into a reported failure.
-        try { Baked?.Invoke(terrain, texture); }
-        catch (Exception exception) { Debug.LogException(exception); }
+        NotifyBaked(terrain, texture);
         return true;
+    }
+
+    private static void NotifyBaked(Terrain terrain, Texture2D texture)
+    {
+        Action<Terrain, Texture2D> subscribers = Baked;
+        if (subscribers == null)
+            return;
+        // A failed observer must neither change the result of a saved bake nor
+        // prevent later observers from invalidating their own cached output.
+        foreach (Action<Terrain, Texture2D> subscriber in subscribers.GetInvocationList())
+        {
+            try { subscriber(terrain, texture); }
+            catch (Exception exception) { Debug.LogException(exception); }
+        }
     }
 
     private static void NotifyBoundAreas(Texture2D texture)

@@ -97,6 +97,41 @@ public sealed class GrassMotionLifecycleTests
         }
     }
 
+    [TestCase("Keys", -1)]
+    [TestCase("DispatchArguments", -1)]
+    [TestCase("Roots", 0)]
+    [TestCase("Counts", 0)]
+    [TestCase("Roots", 1)]
+    [TestCase("Counts", 1)]
+    public void LostHistoryBufferIsRecreatedAndInvalidatesBothFrameSnapshots(string field, int snapshotIndex)
+    {
+        using (var fixture = new HistoryFixture())
+        {
+            SetField(fixture.History, "RenderedFrame", 28);
+            SetField(fixture.History, "LatestIndex", 1);
+            SetField(fixture.History, "PreviousValid", true);
+            foreach (object snapshot in fixture.Snapshots)
+                SetField(snapshot, "FrameNumber", 28);
+
+            object owner = snapshotIndex < 0 ? fixture.History : fixture.Snapshots.GetValue(snapshotIndex);
+            GraphicsBuffer lost = (GraphicsBuffer)GetField(owner, field);
+            lost.Dispose();
+            Assert.That(lost.IsValid(), Is.False);
+
+            Assert.That(fixture.EnsureAllocation(), Is.True);
+
+            Assert.That(GetField(owner, field), Is.Not.SameAs(lost));
+            Assert.That(GetField(fixture.History, "RenderedFrame"), Is.EqualTo(-1));
+            Assert.That(GetField(fixture.History, "PreviousValid"), Is.False);
+            foreach (object snapshot in fixture.Snapshots)
+                Assert.That(GetField(snapshot, "FrameNumber"), Is.EqualTo(-1));
+            foreach (GraphicsBuffer buffer in fixture.Buffers)
+                Assert.That(buffer.IsValid(), Is.True);
+            Assert.That(fixture.EnsureAllocation(), Is.False,
+                "Recovering one lost allocation must return to a stable allocation on the next frame.");
+        }
+    }
+
     [Test]
     public void WindSnapshotMatchesGpuMipZeroWhenTextureQualityChanges()
     {
@@ -232,4 +267,69 @@ public sealed class GrassMotionLifecycleTests
                 Object.DestroyImmediate(Camera.gameObject);
         }
     }
+}
+
+[NonParallelizable]
+public sealed class GrassMotionPassLayoutTests
+{
+    [Test]
+    public void PendingHistoryPassesKeepTheirLodLayoutsWithoutSteadyStateAllocations()
+    {
+        Type passType = typeof(GrassMotionVectors).GetNestedType("HistoryPass", BindingFlags.NonPublic);
+        object previous = Activator.CreateInstance(passType, true);
+        object current = Activator.CreateInstance(passType, true);
+        var capturePrevious = (Action<int[], int[], Mesh[]>)passType.GetMethod("CaptureLayout")
+            .CreateDelegate(typeof(Action<int[], int[], Mesh[]>), previous);
+        var captureCurrent = (Action<int[], int[], Mesh[]>)passType.GetMethod("CaptureLayout")
+            .CreateDelegate(typeof(Action<int[], int[], Mesh[]>), current);
+        Mesh[] meshes =
+        {
+            InfiniteGrassRenderer.CreateBladeMesh(5),
+            InfiniteGrassRenderer.CreateBladeMesh(2),
+            InfiniteGrassRenderer.CreateBladeMesh(0)
+        };
+        try
+        {
+            int[] offsets = { 0, 2, 4, 0 };
+            int[] capacities = { 2, 2, 2, 0 };
+            capturePrevious(offsets, capacities, meshes);
+            offsets[1] = 4;
+            offsets[2] = 5;
+            capacities[0] = 4;
+            capacities[1] = capacities[2] = 1;
+            Array.Reverse(meshes);
+            captureCurrent(offsets, capacities, meshes);
+
+            Assert.That(GetLayout(previous, "Offsets"), Is.EqualTo(new[] { 0, 2, 4, 0 }));
+            Assert.That(GetLayout(previous, "Capacities"), Is.EqualTo(new[] { 2, 2, 2, 0 }));
+            Assert.That(GetLayout(previous, "Rows"), Is.EqualTo(new[] { 6, 3, 1, 0 }));
+            Assert.That(GetLayout(current, "Offsets"), Is.EqualTo(offsets));
+            Assert.That(GetLayout(current, "Capacities"), Is.EqualTo(capacities));
+            Assert.That(GetLayout(current, "Rows"), Is.EqualTo(new[] { 1, 3, 6, 0 }));
+
+            // Warm the exact delegate outside the measurement. Reflection and
+            // NUnit allocations are intentionally excluded from this hot path.
+            for (int i = 0; i < 16; i++)
+                captureCurrent(offsets, capacities, meshes);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 128; i++)
+                captureCurrent(offsets, capacities, meshes);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.That(allocated, Is.Zero, "Recording an unchanged motion layout must reuse its pooled pass storage.");
+
+            // Later camera settings updates must not modify a recorded layout.
+            offsets[1] = 999;
+            capacities[0] = 999;
+            Assert.That(GetLayout(current, "Offsets"), Is.EqualTo(new[] { 0, 4, 5, 0 }));
+            Assert.That(GetLayout(current, "Capacities"), Is.EqualTo(new[] { 4, 1, 1, 0 }));
+        }
+        finally
+        {
+            foreach (Mesh mesh in meshes)
+                Object.DestroyImmediate(mesh);
+        }
+    }
+
+    private static int[] GetLayout(object pass, string name) =>
+        (int[])pass.GetType().GetField(name).GetValue(pass);
 }
