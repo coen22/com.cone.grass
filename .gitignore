@@ -76,3 +76,12 @@ crashlytics-build.properties
 .vsconfig
 .DS_Store
 mono_crash.*
+
+# Package validation tools and generated projects.
+!Tools~/SourceChecks/SourceChecks.csproj
+/Tools~/SourceChecks/bin/
+/Tools~/SourceChecks/obj/
+/Validation~/
+/artifacts/
+__pycache__/
+*.pyc
