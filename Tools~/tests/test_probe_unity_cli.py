@@ -68,6 +68,50 @@ class UnityCliProbeTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertFalse(report["tests_executed"])
 
+    def test_new_attempt_replaces_previous_success_before_launch(self):
+        result_path = self.output / "cli-attempt.json"
+        result_path.write_text(json.dumps({"status": "headless_tests_passed", "tests_executed": True}))
+        def launch(command, **kwargs):
+            running = json.loads(result_path.read_text())
+            self.assertEqual(running["status"], "running")
+            self.assertFalse(running["tests_executed"])
+            self.assertEqual(running["command"], command)
+            return subprocess.CompletedProcess(command, 127)
+        code, report = self.run_probe(launch)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["status"], "failed")
+
+    def test_old_sibling_result_cannot_supply_a_missing_current_grass_pass(self):
+        (self.output / "older-export.xml").write_text(
+            '<test-run><test-case fullname="GrassDensityAssetTests.OldRun" result="Passed" /></test-run>')
+        real_run = subprocess.run
+        def launch(command, **kwargs):
+            if command[0] == str(self.editor):
+                (self.output / "editmode.xml").write_text(
+                    '<test-run><test-case fullname="UnrelatedTests.CurrentRun" result="Passed" /></test-run>')
+                return subprocess.CompletedProcess(command, 0)
+            return real_run(command, **kwargs)
+        code, report = self.run_probe(launch)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["result_reporter_exit_code"], 1)
+        self.assertIn("No grass NUnit test results", (self.output / "test-scope.log").read_text())
+
+    def test_current_passing_result_is_not_combined_with_an_old_failure(self):
+        (self.output / "older-export.xml").write_text(
+            '<test-run><test-case fullname="GrassDensityAssetTests.OldRun" result="Failed" /></test-run>')
+        real_run = subprocess.run
+        def launch(command, **kwargs):
+            if command[0] == str(self.editor):
+                (self.output / "editmode.xml").write_text(
+                    '<test-run><test-case fullname="GrassDensityAssetTests.CurrentRun" result="Passed" /></test-run>')
+                return subprocess.CompletedProcess(command, 0)
+            return real_run(command, **kwargs)
+        code, report = self.run_probe(launch)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "headless_tests_passed")
+        self.assertEqual(report["result_reporter_exit_code"], 0)
+
     def test_timeout_is_a_failure_with_a_persisted_outcome(self):
         def launch(command, **kwargs):
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])

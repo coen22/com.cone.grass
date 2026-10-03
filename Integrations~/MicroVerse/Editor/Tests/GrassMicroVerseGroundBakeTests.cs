@@ -455,6 +455,144 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(other.LastRefreshSucceeded, Is.True);
     }
 
+    [TestCase("delete")]
+    [TestCase("replace")]
+    public void LostOutputDuringNotificationKeepsItsConfiguredPathAndCanRecover(string mutation)
+    {
+        Texture2D original = Refresh();
+        string sourceKey = bridge.GroundBakeSourceKey;
+        string outputKey = bridge.GroundBakeOutputKey;
+        Hash128 diffuseHash = AssetDatabase.GetAssetDependencyHash(diffusePath);
+        Texture2D replacement = null;
+        bool changed = false;
+        Action<Terrain, Texture2D> changeOutput = (source, output) =>
+        {
+            if (source != terrain || changed)
+                return;
+            changed = true;
+            Assert.That(output, Is.SameAs(original));
+            Assert.That(AssetDatabase.DeleteAsset(outputPath), Is.True);
+            if (mutation == "replace")
+            {
+                replacement = Own(new Texture2D(2, 2, TextureFormat.RGBA32, false, true));
+                replacement.SetPixels(new[] { Color.blue, Color.blue, Color.blue, Color.blue });
+                replacement.Apply(false, false);
+                AssetDatabase.CreateAsset(replacement, outputPath);
+                AssetDatabase.SaveAssetIfDirty(replacement);
+            }
+        };
+        TerrainGrassAlbedoBaker.Baked += changeOutput;
+        try
+        {
+            Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true), Is.False);
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= changeOutput;
+        }
+
+        Assert.That(changed, Is.True);
+        StringAssert.Contains("removed or replaced", bridge.LastRefreshMessage);
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath), "A failed bake must retain its configured recovery path.");
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(sourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(outputKey), "The lost output must not receive a new durable record.");
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.Null);
+        Assert.That(TerrainGrassAlbedoBaker.IsBakingOutput(outputPath), Is.False, "Failure must release output ownership.");
+        uint revision = bridge.PlacementArea.SourceRevision;
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False);
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+        if (replacement)
+        {
+            Assert.That(AssetDatabase.LoadMainAssetAtPath(outputPath), Is.SameAs(replacement));
+            Assert.That(replacement.width, Is.EqualTo(2), "Rejecting the failed bake must leave its replacement untouched.");
+            AssertColor(replacement.GetPixel(0, 0), Color.blue);
+        }
+
+        Texture2D recovered = Refresh();
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath));
+        Assert.That(TerrainGrassAlbedoBaker.TryGetOutputAssetPath(recovered, out string recoveredPath), Is.True);
+        Assert.That(recoveredPath, Is.EqualTo(outputPath));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(AssetDatabase.GetAssetDependencyHash(diffusePath), Is.EqualTo(diffuseHash));
+        AssertColor(recovered.GetPixel(32, 32), Color.red);
+        Assert.That(bakeCount, Is.EqualTo(3));
+        Refresh();
+        Assert.That(bakeCount, Is.EqualTo(3), "Recovery must settle instead of repeatedly regenerating the asset.");
+    }
+
+    [Test]
+    public void LiveNonpersistentOutputRecordRecoversAtItsConfiguredPath()
+    {
+        Texture2D savedOutput = Refresh();
+        string guid = AssetDatabase.AssetPathToGUID(outputPath);
+        string sourceKey = bridge.GroundBakeSourceKey;
+        string outputKey = bridge.GroundBakeOutputKey;
+        Texture2D transient = Own(new Texture2D(64, 64, TextureFormat.RGBAHalf, false, true));
+        transient.SetPixel(0, 0, Color.blue);
+        transient.Apply(false, false);
+        Assert.That(transient != null, Is.True);
+        Assert.That(AssetDatabase.Contains(transient), Is.False);
+        Assert.That(AssetDatabase.GetAssetPath(transient), Is.Empty);
+        bridge.SetBakedGroundColor(transient, outputPath, sourceKey, outputKey);
+        uint revision = bridge.PlacementArea.SourceRevision;
+
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False);
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(transient));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(savedOutput));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Preflight must not repair the unsaved record.");
+
+        Assert.That(Refresh(), Is.SameAs(savedOutput), "An unsaved reference must not hide the configured existing output.");
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(savedOutput));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(AssetDatabase.Contains(transient), Is.False, "Recovery must not adopt or destroy the producer's transient object.");
+        AssertColor(transient.GetPixel(0, 0), Color.blue);
+        AssertColor(savedOutput.GetPixel(32, 32), Color.red);
+        Assert.That(bakeCount, Is.EqualTo(2));
+        Refresh();
+        Assert.That(bakeCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void SameOutputMovedDuringNotificationRetainsIdentityAndUpdatesTheSavedPath()
+    {
+        Texture2D original = Refresh();
+        string guid = AssetDatabase.AssetPathToGUID(outputPath);
+        string movedPath = folder + "/MovedGround.asset";
+        bool moved = false;
+        Action<Terrain, Texture2D> moveOutput = (source, output) =>
+        {
+            if (source != terrain || moved)
+                return;
+            moved = true;
+            Assert.That(output, Is.SameAs(original));
+            Assert.That(AssetDatabase.MoveAsset(outputPath, movedPath), Is.Empty);
+        };
+        TerrainGrassAlbedoBaker.Baked += moveOutput;
+        try
+        {
+            Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true),
+                Is.True, bridge.LastRefreshMessage);
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= moveOutput;
+        }
+
+        Assert.That(moved, Is.True);
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(original));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(movedPath));
+        Assert.That(AssetDatabase.AssetPathToGUID(movedPath), Is.EqualTo(guid));
+        Assert.That(TerrainGrassAlbedoBaker.TryGetOutputAssetPath(original, out string resolvedPath), Is.True);
+        Assert.That(resolvedPath, Is.EqualTo(movedPath));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(Refresh(), Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(2), "A legitimate move must not lose the completed bake or require another one.");
+    }
+
     [Test]
     public void SharedTerrainOutputAtAnotherResolutionClearsConflictingCoverage()
     {

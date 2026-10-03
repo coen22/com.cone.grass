@@ -83,12 +83,29 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
                     _GrassContactInverseViewProjection);
             }
 
-            void SampleDepths(float2 uv, out float sceneRaw, out float grassRaw, out float grassCoverage)
+            uint2 GrassDepthDimensions()
+            {
+                uint width, height;
+                #if defined(UNITY_STEREO_INSTANCING_ENABLED) || defined(UNITY_STEREO_MULTIVIEW_ENABLED)
+                    uint slices;
+                    _GrassContactGrassDepth.GetDimensions(width, height, slices);
+                #else
+                    _GrassContactGrassDepth.GetDimensions(width, height);
+                #endif
+                return max(uint2(width, height), uint2(1, 1));
+            }
+
+            void SampleDepths(float2 uv, uint2 grassDimensions, out float sceneRaw,
+                out float grassRaw, out float grassCoverage, out uint2 grassTexel)
             {
                 sceneRaw = SAMPLE_TEXTURE2D_X_LOD(_GrassContactSceneDepth,
                     sampler_PointClamp, uv * _GrassContactDepthScale.xy + _GrassContactDepthScale.zw, 0).r;
-                float2 grass = SAMPLE_TEXTURE2D_X_LOD(_GrassContactGrassDepth,
-                    sampler_PointClamp, uv * _GrassContactGrassDepthScale.xy + _GrassContactGrassDepthScale.zw, 0).rg;
+                float2 grassUV = uv * _GrassContactGrassDepthScale.xy + _GrassContactGrassDepthScale.zw;
+                grassTexel = uint2(clamp(floor(grassUV * float2(grassDimensions)),
+                    0.0, float2(grassDimensions) - 1.0));
+                // Load the same clamped point texel used to identify an origin
+                // self-hit. Screen UV alone is insufficient for scaled allocations.
+                float2 grass = LOAD_TEXTURE2D_X(_GrassContactGrassDepth, grassTexel).rg;
                 grassRaw = grass.r;
                 grassCoverage = saturate(grass.g);
             }
@@ -115,8 +132,11 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float2 uv = input.texcoord;
+                uint2 grassDimensions = GrassDepthDimensions();
+                uint2 receiverGrassTexel;
                 float sceneRaw, grassRaw, receiverGrassCoverage;
-                SampleDepths(uv, sceneRaw, grassRaw, receiverGrassCoverage);
+                SampleDepths(uv, grassDimensions, sceneRaw, grassRaw,
+                    receiverGrassCoverage, receiverGrassTexel);
                 bool receiverIsGrass = GrassIsVisible(uv, sceneRaw, grassRaw, receiverGrassCoverage);
                 float receiverRaw = receiverIsGrass ? grassRaw : sceneRaw;
                 if (!HasSurface(receiverRaw))
@@ -170,8 +190,16 @@ Shader "Hidden/InfiniteGrass/ContactShadows"
                         break;
 
                     float sampleSceneRaw, sampleGrassRaw, hitGrassCoverage;
-                    SampleDepths(sampleUV, sampleSceneRaw, sampleGrassRaw, hitGrassCoverage);
+                    uint2 sampleGrassTexel;
+                    SampleDepths(sampleUV, grassDimensions, sampleSceneRaw, sampleGrassRaw,
+                        hitGrassCoverage, sampleGrassTexel);
                     bool hitIsGrass = GrassIsVisible(sampleUV, sampleSceneRaw, sampleGrassRaw, hitGrassCoverage);
+
+                    // One grass texel stores one nearest surface. Reading the
+                    // receiver's texel again cannot reveal a separate grass caster.
+                    // Keep the scene layer available behind that known self-hit.
+                    if (receiverIsGrass && hitIsGrass && all(sampleGrassTexel == receiverGrassTexel))
+                        hitIsGrass = false;
 
                     // Limit the effect to contacts involving grass. Existing terrain
                     // and unrelated opaque objects do not shadow each other here.

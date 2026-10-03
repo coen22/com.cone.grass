@@ -974,9 +974,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             Texture texture = material.GetTexture(Id.Wind);
             // Released RenderTextures remain live Unity objects. Sampling one
             // would recreate storage with undefined contents; its producer must
-            // restore the wind map before grass can use it again.
+            // restore the wind map before grass can use it again. Wind shaders
+            // use Texture2D sampling, so unresolved multisampled storage is also
+            // incompatible even while the producer's texture remains created.
             return texture && texture.dimension == TextureDimension.Tex2D &&
-                (!(texture is RenderTexture renderTexture) || renderTexture.IsCreated())
+                (!(texture is RenderTexture renderTexture) || (renderTexture.IsCreated() &&
+                    (renderTexture.antiAliasing <= 1 || !renderTexture.bindTextureMS)))
                 ? texture : Texture2D.grayTexture;
         }
 
@@ -1089,6 +1092,21 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         {
             state.DispatchCount = 0;
             state.CandidateCount = 0;
+            try
+            {
+                BuildDispatchData(graph, state, owner, bounds, spacing, authored, fallbackDensity);
+            }
+            finally
+            {
+                // Execution uses the resolved values below. Pooled records must
+                // not keep an evicted group's terrain and sparse tile storage alive.
+                state.ReleaseDispatchGroups();
+            }
+        }
+
+        private void BuildDispatchData(RenderGraph graph, CameraState state, InfiniteGrassRenderer owner,
+            Bounds bounds, float spacing, bool authored, TextureHandle fallbackDensity)
+        {
             float densityFootprint = (2f * state.CaptureExtent) / state.Density.rt.width;
             bool valid = TryGridBounds(bounds, spacing, out int minX, out int minZ, out int maxX, out int maxZ);
             if (valid && !authored)
@@ -1131,13 +1149,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                             Vector2Int tile = new Vector2Int(tx, tz);
                             if (group.Tiles.Contains(tile))
                                 continue;
-                            Bounds tileBounds = new Bounds(
-                                new Vector3((tx + 0.5f) * TileCells * spacing, 0f, (tz + 0.5f) * TileCells * spacing),
-                                new Vector3((TileCells + 1) * spacing, 0f, (TileCells + 1) * spacing));
-                            tileBounds = GrassDispatchMath.ExpandXZ(tileBounds, densityFootprint);
-                            if (!source.Data.IntersectsCoverage(tileBounds))
-                                continue;
                             if (!GrassDispatchMath.TryClipTile(cameraGrid, tx, tz, TileCells, out GrassGridRange clipped))
+                                continue;
+                            if (!GrassDispatchMath.TryGetCandidateBounds(clipped, spacing, densityFootprint, out Bounds tileBounds))
+                            {
+                                valid = false;
+                                break;
+                            }
+                            if (!source.Data.IntersectsCoverage(tileBounds))
                                 continue;
                             if (!GrassDispatchMath.TryAddCandidateBudget(projectedCandidates, clipped.Width, clipped.Height,
                                     MaximumCandidates, out projectedCandidates))
@@ -1171,8 +1190,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             {
                 // A complete, visible failure is safer than silently selecting a
                 // moving subset or allowing uint counters/dispatch dimensions to wrap.
-                state.DispatchCount = 0;
-                state.CandidateCount = 0;
+                state.RejectDispatches();
                 if (!state.WarnedBudget)
                     Debug.LogWarning("Grass generation was skipped: the camera/source grid exceeds the safety budget of " +
                         MaximumCandidates + " candidate cells. Increase spacing, reduce draw distance, or use smaller authored areas.", owner);
@@ -1608,6 +1626,21 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             {
                 Camera = camera;
                 ReadbackCallback = OnReadback;
+            }
+
+            public void ReleaseDispatchGroups()
+            {
+                // Only the current plan can hold references: successful and
+                // rejected plans release them before a shorter plan reuses the pool.
+                for (int i = 0; i < DispatchCount; i++)
+                    Dispatches[i].Group = null;
+            }
+
+            public void RejectDispatches()
+            {
+                ReleaseDispatchGroups();
+                DispatchCount = 0;
+                CandidateCount = 0;
             }
 
             public bool EnsureResources(InfiniteGrassRenderer owner, Mesh[] meshes, int argumentStride)

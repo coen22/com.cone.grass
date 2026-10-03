@@ -21,6 +21,8 @@ Adjacent terrains assign roots through world-space bounds that include the lower
 
 CPU grid bounds include float32 rounding in candidate coordinates. The shader preserves the written root calculation order so compiler reassociation cannot move a candidate beyond that interval. Upgrading from the earlier optimized calculation can shift existing roots by floating-point rounding amounts, especially at large world coordinates; the world-cell seeds are unchanged.
 
+Sparse tile occupancy uses those same rounded root endpoints plus the capture filter margin. Its world bounds round outward, including when a tile is clipped to the camera grid, so the occupancy check cannot discard a retained boundary root through a different coordinate calculation.
+
 A positive area mask means **black = no grass, white = full grass**. Missing masks and empty painted assets produce no grass. Overlapping area density uses the maximum coverage, so overlap does not double the population. Areas whose computed footprint overflows or collapses at the current coordinate precision stop contributing coverage and recover when usable coordinates are restored.
 
 ### Painting individual spots
@@ -32,6 +34,8 @@ Long cursor segments are clipped to the map plus brush overlap before applying t
 Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. Small strokes update occupancy counts and upload a bounded pixel rectangle through a reusable staging texture where regional copies are supported. Unsupported copies and full edits use the authoritative whole-map data.
 
 For external density maps, use a linear 2D texture with a normalized or floating-point red channel. Alpha-only, integer and depth formats contribute no coverage. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers must create and populate their RenderTextures before use. An uncreated or released density texture contributes no grass. Call `MarkCoverageDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path. Destroying an explicitly assigned density asset keeps coverage absent until that binding is deliberately cleared or replaced.
+
+`SetDensityAsset(null, ...)` clears a missing assigned asset as well as a live binding. Rebinding or disabling an area removes its old density-change subscription even when the asset's native object has already been destroyed. Configuring an external producer explicitly clears that painted override and invalidates the restored coverage immediately.
 
 ### Mesh surfaces and legacy scenes
 
@@ -96,6 +100,8 @@ Enable **Contact Shadows > Enabled** on Infinite Grass Renderer. The effect supp
 
 The feature requests scene depth and draws a dedicated grass depth/coverage pass with matching deformation. Contact evaluation reads those depths and multiplies the existing camera color attachment through fixed-function blending. It preserves MSAA color samples and alpha, and does not sample the color attachment it writes. Contact depth rejects fragments outside the receiver distance plus ray reach, and the search uses explicit projection/origin mapping for viewport and depth-texture differences. Disabled contacts schedule no contact passes or intermediates.
 
+A ray sampling its receiver's own grass-depth texel cannot count that same recorded surface as another grass caster. The separately stored scene depth remains available at that texel. This check uses the actual grass allocation's scaled and shifted texel coordinates; distinguishable grass casters in other texels remain eligible.
+
 This is a **custom screen-space approximation**. Unity's [pipeline comparison](https://docs.unity3d.com/6000.6/Documentation/Manual/render-pipelines-feature-comparison.html) lists built-in contact shadows for HDRP, not URP. Off-screen and hidden casters are unavailable. Only the nearest grass depth is stored, so fractional/MSAA silhouettes are approximate. The final color multiplication also attenuates ambient/emissive contributions. It supplements normal main-light shadow reception; it does not add grass to the directional light's shadow atlas.
 
 ## Reducing aliasing
@@ -114,6 +120,8 @@ Evaluate grass quality with **TAA disabled**. New renderer settings use **Motion
 Perspective blades face the viewing ray at each blade row, including roots visible behind the camera in world XZ during steep downward views. Orthographic blades keep parallel facing directions. The shared deformation also keeps contact depth and optional previous-frame motion geometry consistent with this orientation.
 
 Blade color, contact depth and optional motion passes render both sides. Wind can reverse a triangle's projected winding at steep camera angles, especially for the one-triangle far LOD; both sides retain the same authored blade normals so the reversal does not introduce a lighting switch. Missing or released wind textures use the existing gray fallback until their producer supplies a ready texture.
+
+Wind RenderTextures must supply a single-sample texture binding. An unresolved multisampled source (`antiAliasing > 1` with `bindTextureMS` enabled) uses that same fallback; automatically resolved MSAA sources remain eligible. The renderer leaves source storage and material assignments under producer ownership.
 
 For multisampled color, A2C receives the blade's density and width compensation. The rasterizer covers its tapered geometric silhouette. Applying an analytic edge fade to that output as well would thin the same edge twice, because the [A2C mask is intersected with primitive sample coverage](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-blend-state#alpha-to-coverage). The separate single-sample contact depth keeps its analytic silhouette estimate.
 
@@ -156,6 +164,8 @@ Removing a required material or compute shader, or assigning a material without 
 Deactivating the renderer feature releases its camera resources at the next render-context boundary, even though URP no longer calls its pass-enqueue method. An active feature in an unused renderer asset continues to evict idle camera caches. Re-enabling the feature creates camera resources as needed; disabling or destroying the feature object tears down its owned helpers and callback.
 
 Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
+
+Dispatch plans release their temporary terrain-group references after resolving execution inputs, including rejected and interrupted plans. Reusing a larger plan pool therefore does not retain an evicted group's terrain and occupancy collections.
 
 The configured height range is normalized before both matrix construction and cache comparison. Reversed endpoints and nonfinite values that resolve to the same finite defaults share one cache identity.
 

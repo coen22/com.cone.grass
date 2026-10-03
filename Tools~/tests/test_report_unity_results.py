@@ -10,14 +10,14 @@ REPORTER = Path(__file__).resolve().parents[1] / "report_unity_results.py"
 
 
 class UnityResultReporterTests(unittest.TestCase):
-    def run_report(self, files, require_gpu=False):
+    def run_report(self, files, require_gpu=False, result_file=None):
         with tempfile.TemporaryDirectory(prefix="grass-results-", dir=Path.cwd()) as folder:
             folder = Path(folder)
             for name, text in files.items():
                 (folder / name).write_text(text, encoding="utf-8")
             environment = os.environ.copy()
             environment.pop("GITHUB_STEP_SUMMARY", None)
-            command = [sys.executable, str(REPORTER), str(folder)]
+            command = [sys.executable, str(REPORTER), str(folder / result_file if result_file else folder)]
             if require_gpu:
                 command.append("--require-gpu")
             return subprocess.run(command, capture_output=True, text=True, env=environment, check=False)
@@ -96,6 +96,15 @@ class UnityResultReporterTests(unittest.TestCase):
         result = self.run_report({})
         self.assertEqual(result.returncode, 1)
         self.assertIn("No grass NUnit test results", result.stderr)
+
+    def test_single_result_file_does_not_merge_sibling_results(self):
+        result = self.run_report({
+            "current.xml": '<test-run><test-case fullname="GrassGpuGenerationTests.CurrentRun" result="Passed" /></test-run>',
+            "older.xml": '<test-run><test-case fullname="GrassGpuGenerationTests.OldRun" result="Failed" /></test-run>'
+        }, require_gpu=True, result_file="current.xml")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("1 passed, 0 failed", result.stdout)
+        self.assertIn("GPU cases: 1 of 1 passed.", result.stdout)
 
 
 if __name__ == "__main__":

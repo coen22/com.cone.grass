@@ -25,21 +25,26 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     results = output / "editmode.xml"
     editor_log = output / "editor.log"
-    # A failed new startup must never inherit old results or a stale license error.
-    for previous in (results, editor_log):
-        if previous.exists():
-            previous.unlink()
     command = [str(editor), "-batchmode", "-nographics", "-projectPath", str(project),
                "-runTests", "-testPlatform", "EditMode", "-testResults", str(results),
                "-logFile", str(output / "editor.log")]
-    record = {"unity": "6000.6.0f1", "status": "failed", "tests_executed": False,
+    record = {"unity": "6000.6.0f1", "status": "running", "tests_executed": False,
               "graphics": "Null device requested; GPU results are not inferred",
               "command": command}
+    record_path = output / "cli-attempt.json"
     started = time.monotonic()
+    # A killed launcher cannot replace this record in finally. Invalidate any
+    # previous pass before cleanup or launch, leaving an incomplete attempt.
+    record_path.write_text(json.dumps(record, indent=2) + "\n")
     try:
+        # A failed new startup must never inherit old results or a stale license error.
+        for previous in (results, editor_log):
+            if previous.exists():
+                previous.unlink()
         with (output / "launcher.log").open("w") as log:
             process = subprocess.run(command, cwd=project, stdout=log, stderr=subprocess.STDOUT,
                                      timeout=args.timeout, check=False)
+        record["status"] = "failed"
         record["editor_exit_code"] = process.returncode
         log = editor_log.read_text(errors="replace") if editor_log.exists() else ""
         launcher = (output / "launcher.log").read_text(errors="replace")
@@ -47,7 +52,9 @@ def main():
         if results.is_file():
             reporter = Path(__file__).with_name("report_unity_results.py")
             with (output / "test-scope.log").open("w") as report:
-                check = subprocess.run([sys.executable, str(reporter), str(output)],
+                # Other XML exports in this folder cannot stand in for the
+                # current attempt's exact -testResults output.
+                check = subprocess.run([sys.executable, str(reporter), str(results)],
                                        stdout=report, stderr=subprocess.STDOUT, check=False)
             record["tests_executed"] = True
             record["result_reporter_exit_code"] = check.returncode
@@ -63,10 +70,11 @@ def main():
         record["status"] = "timed_out"
         record["reason"] = "The Editor did not complete within the configured deadline."
     except OSError as error:
+        record["status"] = "failed"
         record["reason"] = str(error)
     finally:
         record["seconds"] = round(time.monotonic() - started, 3)
-        (output / "cli-attempt.json").write_text(json.dumps(record, indent=2) + "\n")
+        record_path.write_text(json.dumps(record, indent=2) + "\n")
     summary = ("## Actual Unity CLI attempt\n\n"
                + "**Outcome: " + record["status"] + "**\n\n"
                + "Editor exit code: " + str(record.get("editor_exit_code", "unavailable")) + ". "

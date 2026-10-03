@@ -383,6 +383,152 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void ClearingDestroyedDensityBindingsAllowsExplicitExternalRecovery()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+
+        Object.DestroyImmediate(density);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.DensityTexture, Is.Null);
+        Assert.That(ReferenceEquals(area.DensityAsset, null), Is.False,
+            "The missing assigned asset must remain a binding until explicitly cleared.");
+        uint revision = area.SourceRevision;
+        area.SetDensityAsset(null, false);
+        Assert.That(ReferenceEquals(area.DensityAsset, null), Is.True);
+        Assert.That(area.SourceRevision, Is.GreaterThan(revision));
+        revision = area.SourceRevision;
+        area.SetDensityAsset(null, false);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision));
+
+        Texture2D external = NewTexture();
+        BindLocalTexture(area, external);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.DensityTexture, Is.SameAs(external));
+
+        Object.DestroyImmediate(external);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(ReferenceEquals(area.DensityTexture, null), Is.False);
+        area.SetDensityAsset(null, false);
+        Assert.That(ReferenceEquals(area.DensityTexture, null), Is.True,
+            "Clearing density bindings must also remove a destroyed external texture wrapper.");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void DestroyedDensityWrappersStopInvalidatingAfterRebindingOrDisabling(bool disable)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset destroyed = NewDensity();
+        destroyed.Fill(1f);
+        area.SetDensityAsset(destroyed, false);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Object.DestroyImmediate(destroyed);
+
+        GrassDensityAsset replacement = NewDensity();
+        if (disable)
+            area.enabled = false;
+        else
+            area.SetDensityAsset(replacement, false);
+        uint revision = area.SourceRevision;
+        // NotifyChanged only touches managed fields/events. Its wrapper can outlive
+        // the native asset, but no detached area should still receive this event.
+        destroyed.NotifyChanged();
+        Assert.That(area.SourceRevision, Is.EqualTo(revision));
+
+        if (disable)
+        {
+            area.SetDensityAsset(replacement, false);
+            area.enabled = true;
+        }
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        revision = area.SourceRevision;
+        replacement.Fill(1f);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision + 1u),
+            "The new live asset must retain exactly one active subscription.");
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.DensityAsset, Is.SameAs(replacement));
+    }
+
+    [Test]
+    public void ReconfiguringExternalCoverageAfterADestroyedOverrideInvalidatesImmediately()
+    {
+        Terrain terrain = NewTerrain(Vector3.zero, new Vector3(100f, 10f, 100f));
+        GrassPlacementArea area = NewArea();
+        Texture2D external = NewTexture();
+        area.ConfigureTexture(terrain, external);
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("densityAsset").objectReferenceValue = density;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Assert.That(original.DensityAsset, Is.SameAs(density));
+        Object.DestroyImmediate(density);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+
+        uint revision = area.DensityRevision, surfaceRevision = area.SurfaceRevision;
+        int notifications = 0;
+        GrassPlacementChange reportedChanges = GrassPlacementChange.None;
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, changes) =>
+        {
+            if (source == area)
+            {
+                notifications++;
+                reportedChanges = changes;
+            }
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            area.ConfigureTexture(terrain, external);
+            Assert.That(ReferenceEquals(area.DensityAsset, null), Is.True);
+            Assert.That(area.DensityRevision, Is.GreaterThan(revision),
+                "Clearing the destroyed override must invalidate before a later capture polls the new binding.");
+            Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+            Assert.That(notifications, Is.EqualTo(1));
+            Assert.That(reportedChanges, Is.EqualTo(GrassPlacementChange.Density | GrassPlacementChange.GroundColor));
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+            Assert.That(restored.DensityTexture, Is.SameAs(external));
+
+            uint sourceRevision = area.SourceRevision;
+            area.ConfigureTexture(terrain, external);
+            Assert.That(area.SourceRevision, Is.EqualTo(sourceRevision));
+            Assert.That(notifications, Is.EqualTo(1));
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+        }
+    }
+
+    [Test]
+    public void RebindingTheSameLiveDensityAssetIsANoopAndKeepsOneSubscription()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        uint revision = area.SourceRevision, densityRevision = area.DensityRevision, surfaceRevision = area.SurfaceRevision;
+
+        area.SetDensityAsset(density, false);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision));
+        density.Fill(0f);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision + 1u));
+        Assert.That(area.DensityRevision, Is.EqualTo(densityRevision + 1u));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+    }
+
+    [Test]
     public void PaintedOccupancySkipsEmptyRegionsAndRespondsToErase()
     {
         GrassPlacementArea area = NewArea();

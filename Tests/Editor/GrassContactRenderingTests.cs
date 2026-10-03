@@ -25,7 +25,10 @@ public sealed class GrassContactRenderingTests
         GrassToScene,
         SceneOnly,
         HiddenGrass,
-        ZeroCoverage
+        ZeroCoverage,
+        GrassOnly,
+        GrassToGrass,
+        SceneBehindGrass
     }
 
     [SetUp]
@@ -56,7 +59,9 @@ public sealed class GrassContactRenderingTests
     [TestCase(false, ContactLayout.GrassToScene)]
     [TestCase(true, ContactLayout.SceneToGrass)]
     [TestCase(true, ContactLayout.GrassToScene)]
-    public void VisibleGrassAndSceneCastContactsInBothDirections(bool orthographic, ContactLayout layout)
+    [TestCase(false, ContactLayout.GrassToGrass)]
+    [TestCase(true, ContactLayout.GrassToGrass)]
+    public void VisibleSurfacesCastContactsWhenGrassParticipates(bool orthographic, ContactLayout layout)
     {
         Color[] pixels = Render(orthographic, layout);
         // The ray starts left of a depth discontinuity and travels toward it.
@@ -89,6 +94,8 @@ public sealed class GrassContactRenderingTests
     [TestCase(false, ContactLayout.GrassToScene)]
     [TestCase(true, ContactLayout.SceneToGrass)]
     [TestCase(true, ContactLayout.GrassToScene)]
+    [TestCase(false, ContactLayout.GrassToGrass)]
+    [TestCase(true, ContactLayout.GrassToGrass)]
     public void DifferentDepthAllocationScalesPreserveContactLocations(bool orthographic, ContactLayout layout)
     {
         Color[] reference = Render(orthographic, layout);
@@ -122,8 +129,77 @@ public sealed class GrassContactRenderingTests
             AssertColor(pixels[index], InitialColor, "Out-of-range pixel " + index);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ReceiverDepthTexelCannotCastAContactOnItself(bool orthographic)
+    {
+        Color[] pixels = Render(orthographic, ContactLayout.GrassOnly, lightDirection: Vector3.back);
+        AssertColor(pixels[Size / 2 * Size + Size / 2], InitialColor, "Origin grass texel");
+        if (orthographic)
+            for (int index = 0; index < pixels.Length; index++)
+                AssertColor(pixels[index], InitialColor, "Parallel origin ray " + index);
+        AssertAlphaUnchanged(pixels);
+    }
+
+    [TestCase(false, 1f)]
+    [TestCase(true, 1f)]
+    [TestCase(true, 0.25f)]
+    public void SceneBehindTheOriginGrassTexelRemainsAnAvailableCaster(bool orthographic, float coverage)
+    {
+        Color[] pixels = Render(orthographic, ContactLayout.SceneBehindGrass,
+            grassCoverage: coverage, lightDirection: Vector3.back);
+        Color receiver = pixels[Size / 2 * Size + Size / 2];
+        // A known self grass sample must not hide the separately stored scene
+        // layer at eye depth 5.08. Only the receiver contributes grass coverage.
+        float attenuation = 1f - 0.6f * coverage;
+        AssertColor(receiver, new Color(InitialColor.r * attenuation, InitialColor.g * attenuation,
+            InitialColor.b * attenuation, InitialColor.a), "Scene behind grass");
+        AssertAlphaUnchanged(pixels);
+    }
+
+    [Test]
+    public void SceneBehindTheOriginGrassTexelMustStillBeWithinRayReach()
+    {
+        Color[] pixels = Render(true, ContactLayout.SceneBehindGrass,
+            lightDirection: Vector3.back, rayLength: 0.03f);
+        for (int index = 0; index < pixels.Length; index++)
+            AssertColor(pixels[index], InitialColor, "Scene beyond short origin ray " + index);
+    }
+
+    [TestCase(0.5f, 0.25f, 26)]
+    [TestCase(0.75f, 0.125f, 25)]
+    public void AngledOriginRayUsesTheScaledAndShiftedGrassTexel(float scale, float offset, int pixelX)
+    {
+        var direction = new Vector3(0.8660254f, 0f, -0.5f);
+        float receiverUV = (pixelX + 0.5f) / Size;
+        float lastTravel = 0.03f + 7.5f * 0.09f / 8f;
+        float lastUV = receiverUV + direction.x * lastTravel / 6f;
+        Assert.That(Mathf.FloorToInt(lastUV * Size), Is.GreaterThan(pixelX),
+            "The ray must leave the unscaled screen pixel to exercise allocation-space identity.");
+        Assert.That(Mathf.FloorToInt((lastUV * scale + offset) * Size),
+            Is.EqualTo(Mathf.FloorToInt((receiverUV * scale + offset) * Size)));
+
+        Color[] pixels = Render(true, ContactLayout.GrassOnly, grassScale: scale,
+            grassOffset: Vector2.one * offset, lightDirection: direction, rayLength: 0.09f);
+        AssertColor(pixels[Size / 2 * Size + pixelX], InitialColor, "Angled ray inside one grass texel");
+        AssertAlphaUnchanged(pixels);
+    }
+
+    [TestCase(0.5f, 0.25f)]
+    [TestCase(0.75f, 0.125f)]
+    public void ShiftedGrassAllocationPreservesDistinctCasterContacts(float scale, float offset)
+    {
+        Color[] reference = Render(true, ContactLayout.GrassToGrass);
+        Color[] shifted = Render(true, ContactLayout.GrassToGrass, grassScale: scale,
+            grassOffset: Vector2.one * offset);
+        Assert.That(reference[Size / 2 * Size + 26].r, Is.LessThan(InitialColor.r - 0.15f));
+        for (int index = 0; index < reference.Length; index++)
+            AssertColor(shifted[index], reference[index], "Shifted grass contact pixel " + index);
+    }
+
     private Color[] Render(bool orthographic, ContactLayout layout, float grassCoverage = 1f,
-        float maximumDistance = 50f, float sceneScale = 1f, float grassScale = 1f)
+        float maximumDistance = 50f, float sceneScale = 1f, float grassScale = 1f,
+        Vector2 grassOffset = default, Vector3? lightDirection = null, float rayLength = 0.75f)
     {
         Matrix4x4 projection = GL.GetGPUProjectionMatrix(orthographic
             ? Matrix4x4.Ortho(-3f, 3f, -3f, 3f, 0.1f, 100f)
@@ -133,7 +209,7 @@ public sealed class GrassContactRenderingTests
             out Matrix4x4 inverseProjection), Is.True);
         var settings = new GrassContactShadows.Settings
         {
-            enabled = true, strength = 0.6f, rayLength = 0.75f, bias = 0.03f,
+            enabled = true, strength = 0.6f, rayLength = rayLength, bias = 0.03f,
             thickness = 0.15f, steps = 8, maxDistance = maximumDistance
         };
         Assert.That(GrassContactShadows.TryGetParameters(settings, out Vector4 parameters,
@@ -148,7 +224,7 @@ public sealed class GrassContactRenderingTests
         try
         {
             scene = CreateDepthTexture(projection, layout, false, sceneScale, grassCoverage);
-            grass = CreateDepthTexture(projection, layout, true, grassScale, grassCoverage);
+            grass = CreateDepthTexture(projection, layout, true, grassScale, grassCoverage, grassOffset);
             target = new RenderTexture(new RenderTextureDescriptor(Size, Size)
             {
                 graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
@@ -164,7 +240,8 @@ public sealed class GrassContactRenderingTests
             properties.SetVector("_GrassContactDepthScale",
                 GrassContactShadows.GetUVScaleBias(Vector2.one * sceneScale, false));
             properties.SetVector("_GrassContactGrassDepthScale",
-                GrassContactShadows.GetUVScaleBias(Vector2.one * grassScale, false));
+                GrassContactShadows.GetUVScaleBias(Vector2.one * grassScale, false) +
+                new Vector4(0f, 0f, grassOffset.x, grassOffset.y));
             properties.SetVector("_GrassContactParameters", parameters);
             properties.SetVector("_GrassContactLimits", limits);
             properties.SetMatrix("_GrassContactViewProjection", viewProjection);
@@ -177,7 +254,8 @@ public sealed class GrassContactRenderingTests
             Vector4 cameraPosition = Shader.GetGlobalVector("_WorldSpaceCameraPos");
             Vector4 lightPosition = Shader.GetGlobalVector("_MainLightPosition");
             commands.SetGlobalVector("_WorldSpaceCameraPos", Vector4.zero);
-            commands.SetGlobalVector("_MainLightPosition", new Vector4(1f, 0f, 0f, 0f));
+            Vector3 direction = lightDirection ?? Vector3.right;
+            commands.SetGlobalVector("_MainLightPosition", new Vector4(direction.x, direction.y, direction.z, 0f));
             commands.SetRenderTarget(target);
             commands.SetViewport(new Rect(0f, 0f, Size, Size));
             commands.ClearRenderTarget(false, true, InitialColor);
@@ -203,13 +281,15 @@ public sealed class GrassContactRenderingTests
     }
 
     private static Texture2D CreateDepthTexture(Matrix4x4 projection, ContactLayout layout,
-        bool grass, float scale, float coverage)
+        bool grass, float scale, float coverage, Vector2 offset = default)
     {
         var texture = new Texture2D(Size, Size, TextureFormat.RGBAFloat, false, true)
         {
             filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp
         };
         int viewportSize = Mathf.RoundToInt(Size * scale);
+        int viewportX = Mathf.RoundToInt(Size * offset.x);
+        int viewportY = Mathf.RoundToInt(Size * offset.y);
         float farDepth = SystemInfo.usesReversedZBuffer ? 0f : 1f;
         var pixels = new Color[Size * Size];
         for (int y = 0; y < Size; y++)
@@ -217,13 +297,20 @@ public sealed class GrassContactRenderingTests
         {
             float eyeDepth = 0f;
             float pixelCoverage = 0f;
-            if (x < viewportSize && y < viewportSize)
+            if (x >= viewportX && y >= viewportY &&
+                x < viewportX + viewportSize && y < viewportY + viewportSize)
             {
-                bool left = x < viewportSize / 2;
+                bool left = x - viewportX < viewportSize / 2;
                 if (!grass)
-                    eyeDepth = layout == ContactLayout.SceneToGrass
+                    eyeDepth = layout == ContactLayout.GrassOnly || layout == ContactLayout.GrassToGrass ? 0f
+                        : layout == ContactLayout.SceneBehindGrass ? 5.08f
+                        : layout == ContactLayout.SceneToGrass
                         ? (left ? 6f : 4.92f)
                         : layout == ContactLayout.GrassToScene ? 5f : (left ? 5f : 4.92f);
+                else if (layout == ContactLayout.GrassOnly || layout == ContactLayout.SceneBehindGrass)
+                    eyeDepth = 5f;
+                else if (layout == ContactLayout.GrassToGrass)
+                    eyeDepth = left ? 5f : 4.92f;
                 else if (layout == ContactLayout.SceneToGrass && left)
                     eyeDepth = 5f;
                 else if (!left && layout == ContactLayout.GrassToScene)

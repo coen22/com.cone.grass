@@ -137,6 +137,93 @@ public class GrassDispatchMathTests
             "The occupancy query needs the same filter support as dispatch enumeration.");
     }
 
+    [TestCase(84168, true)]
+    [TestCase(140005, false)]
+    [TestCase(-86916, true)]
+    [TestCase(-144729, false)]
+    public void SparseTileBoundsRetainRootsRoundedBeyondTheFormerWorldBounds(int tile, bool minimum)
+    {
+        const int cells = 256;
+        const float spacing = 0.1f;
+        const float captureFootprint = 20f / 2048f;
+        int first = tile * cells;
+        int cell = first + (minimum ? 0 : cells - 1);
+        // At these cell magnitudes every supported jitter rounds back to the
+        // same integer-to-float coordinate. This is an actual generated root.
+        float root = (float)((double)(float)cell * spacing);
+        Bounds former = new Bounds(new Vector3((tile + 0.5f) * cells * spacing, 0f, 0f),
+            new Vector3((cells + 1) * spacing, 0f, (cells + 1) * spacing));
+        former = GrassDispatchMath.ExpandXZ(former, captureFootprint);
+        Assert.That(minimum ? former.min.x > root : former.max.x < root, Is.True,
+            "The existing capture margin must still leave the root outside the former tile query.");
+
+        var range = new GrassGridRange(first, -128, cells, cells);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, captureFootprint, out Bounds bounds), Is.True);
+        Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - captureFootprint));
+        Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + captureFootprint));
+        // Querying a source that ends/starts at this root used to reject the
+        // entire tile even though grid enumeration already retained its cell.
+        float sourceCenter = root + (minimum ? -0.5f : 0.5f);
+        Bounds source = new Bounds(new Vector3(sourceCenter, 0f, 0f), new Vector3(1f, 0f, 1f));
+        Assert.That(source.min.x <= bounds.max.x && source.max.x >= bounds.min.x, Is.True);
+
+        var transposed = new GrassGridRange(-128, first, cells, cells);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(transposed, spacing, captureFootprint, out Bounds zBounds), Is.True);
+        Assert.That(zBounds.min.z, Is.EqualTo(bounds.min.x));
+        Assert.That(zBounds.max.z, Is.EqualTo(bounds.max.x));
+    }
+
+    [Test]
+    public void CandidateBoundsUseClippedCellsAndIncludeTheFilteringMargin()
+    {
+        var range = new GrassGridRange(-2, -3, 5, 7);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, 2f, 0.25f, out Bounds bounds), Is.True);
+        Assert.That(bounds.min, Is.EqualTo(new Vector3(-5.25f, 0f, -7.25f)));
+        Assert.That(bounds.max, Is.EqualTo(new Vector3(5.25f, 0f, 7.25f)));
+    }
+
+    [TestCase(1073741311)]
+    [TestCase(-1073741311)]
+    public void CandidateBoundsKeepSubUlpMarginsAroundCollapsedRootCoordinates(int cell)
+    {
+        const float spacing = 0.125f;
+        const float margin = 0.01f;
+        var range = new GrassGridRange(cell, cell, 1, 1);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, margin, out Bounds bounds), Is.True);
+        float root = (float)((double)(float)cell * spacing);
+        Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - margin));
+        Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + margin));
+        Assert.That(bounds.min.z, Is.EqualTo(bounds.min.x));
+        Assert.That(bounds.max.z, Is.EqualTo(bounds.max.x));
+    }
+
+    [Test]
+    public void CandidateBoundsRetainTinyEndpointAcrossALargeRange()
+    {
+        const float spacing = 0.1f;
+        float margin = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(0.05f) + 1);
+        var range = new GrassGridRange(1, 0, 1073741000, 1);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, margin, out Bounds bounds), Is.True);
+        double minimum = (double)(0.5f * spacing) - margin;
+        Assert.That(minimum, Is.LessThan(0.0));
+        Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo(minimum),
+            "Center/extents cancellation must not collapse the tiny negative endpoint to zero.");
+    }
+
+    [Test]
+    public void CandidateBoundsRejectInvalidRangesAndUnrepresentableEndpoints()
+    {
+        var unit = new GrassGridRange(0, 0, 1, 1);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(unit, 0f, 0f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(unit, float.NaN, 0f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(unit, 1f, -1f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(unit, 1f, float.PositiveInfinity, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(new GrassGridRange(0, 0, 0, 1), 1f, 0f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(new GrassGridRange(int.MaxValue, 0, 2, 1), 1f, 0f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(new GrassGridRange(int.MinValue, 0, 1, 1), 1f, 0f, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryGetCandidateBounds(new GrassGridRange(10, 0, 1, 1), float.MaxValue, 0f, out _), Is.False);
+    }
+
     [TestCase(-257, 256, -2)]
     [TestCase(-256, 256, -1)]
     [TestCase(-1, 256, -1)]
