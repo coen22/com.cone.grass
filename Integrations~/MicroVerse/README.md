@@ -62,6 +62,8 @@ A synchronous refresh requested from that bridge's own bake or placement-change 
 
 If a callback deletes or replaces the completed output, refresh fails and retains the configured output path and previous bake records for recovery. A live nonpersistent reference also falls back to that configured path on the next refresh. Moving the same persistent main asset remains valid and updates its saved path. Failed read-only build validation does not repair these bindings.
 
+After a completed bake and its callbacks, the bridge resolves the selected saved density again before committing placement inputs. A valid replacement binds immediately; a missing or ambiguous output clears coverage. If a callback changes the Terrain, TerrainData or bake configuration, refresh preserves that new configuration and reports that another refresh is needed to bake its current inputs. Ordinary cached polls retain their existing discovery path.
+
 A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
 
 The bridge treats path casing and Windows-style separators as aliases of the same output asset. Before writing a bake, it also checks loaded scenes for inactive bridge objects and disabled bridges retaining a saved bake, so those outputs cannot be overwritten at another Terrain or resolution. Use separate output assets for separate tiles or resolutions. Unchanged polls do not scan scene hierarchies.

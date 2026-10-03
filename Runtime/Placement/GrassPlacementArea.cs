@@ -106,9 +106,12 @@ public struct GrassPlacementDrawData
             yMax >= rectangle.yMin && yMin <= rectangle.yMax;
     }
 
+    // Both capture passes use ordinary Texture2D sampling. Explicit multisampled
+    // bindings have no automatic resolve; the producer must supply a usable view.
     internal static bool IsReadyTexture(Texture texture) => texture &&
         texture.dimension == TextureDimension.Tex2D &&
-        (!(texture is RenderTexture target) || target.IsCreated());
+        (!(texture is RenderTexture target) || (target.IsCreated() &&
+            (target.antiAliasing <= 1 || !target.bindTextureMS)));
 
     /// <summary>
     /// Whether the format supplies the normalized or floating-point red channel
@@ -1034,7 +1037,13 @@ public sealed class GrassPlacementArea : MonoBehaviour
             hash = hash * 397 ^ (int)texture.graphicsFormat;
             hash = hash * 397 ^ (texture is Texture2D image && image.format == TextureFormat.Alpha8).GetHashCode();
             if (texture is RenderTexture target)
+            {
                 hash = hash * 397 ^ target.IsCreated().GetHashCode();
+                // A producer can release/recreate between observations, so the
+                // allocated flag alone cannot detect a different sampling view.
+                hash = hash * 397 ^ target.antiAliasing;
+                hash = hash * 397 ^ target.bindTextureMS.GetHashCode();
+            }
             return hash;
         }
     }

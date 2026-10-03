@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
@@ -1449,35 +1450,33 @@ public sealed class GrassCaptureTextureTests
             renderer.SetPropertyBlock(block, 1);
 
             var scratch = new MaterialPropertyBlock();
-            var textures = new Texture[3];
-            Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
-            var collect = (Func<Renderer, Material, int, MaterialPropertyBlock, Texture[], int>)passType.GetMethod(
-                "CollectCaptureTextures", BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(
-                typeof(Func<Renderer, Material, int, MaterialPropertyBlock, Texture[], int>));
+            var textureIds = new List<int>();
+            var textures = new List<Texture>();
+            CaptureTextureCollector collect = CreateCaptureTextureCollector();
 
-            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(3));
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(3));
             Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external, Texture2D.blackTexture }),
                 "DrawRenderer may read a render texture supplied only through a property block.");
-            Assert.That(collect(renderer, material, 0, scratch, textures), Is.EqualTo(2));
-            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external, null }),
+            Assert.That(collect(renderer, material, 0, scratch, textureIds, textures), Is.EqualTo(2));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external }),
                 "Another material index must not retain a previous override in reused scratch storage.");
 
             block.SetTexture(mainTexture, external);
             renderer.SetPropertyBlock(block, 1);
-            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(2),
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(2),
                 "The same physical texture in both override scopes needs only one declaration.");
-            Assert.That(textures[2], Is.Null);
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, external }));
 
             block.SetTexture(mainTexture, Texture2D.grayTexture);
             renderer.SetPropertyBlock(block);
             renderer.SetPropertyBlock(null, 1);
-            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(2));
-            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, Texture2D.grayTexture, null }));
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(2));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.whiteTexture, Texture2D.grayTexture }));
 
             renderer.SetPropertyBlock(null);
             material.SetTexture(mainTexture, Texture2D.blackTexture);
-            Assert.That(collect(renderer, material, 1, scratch, textures), Is.EqualTo(1));
-            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.blackTexture, null, null }),
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(1));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.blackTexture }),
                 "Removed overrides and replaced material textures must not remain in the next pass's dependencies.");
 
             Shader heightShader = Shader.Find("InfiniteGrass/GrassHeightMapShader");
@@ -1486,8 +1485,9 @@ public sealed class GrassCaptureTextureTests
             block.SetTexture(mainTexture, external);
             renderer.SetPropertyBlock(block);
             Assert.That(material.HasProperty(mainTexture), Is.False);
-            Assert.That(collect(renderer, material, 1, scratch, textures), Is.Zero);
-            Assert.That(textures, Is.EqualTo(new Texture[3]),
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.Zero);
+            Assert.That(textureIds, Is.Empty);
+            Assert.That(textures, Is.Empty,
                 "The height override material does not sample the renderer's modifier texture.");
         }
         finally
@@ -1496,5 +1496,136 @@ public sealed class GrassCaptureTextureTests
             Object.DestroyImmediate(material);
             Object.DestroyImmediate(external);
         }
+    }
+
+    [Test]
+    public void CustomCaptureDeclarationsTrackAllExposedTextureInputsAcrossShaderChanges()
+    {
+        // Only shader metadata is needed; no GPU pass compilation or drawing is requested.
+        Shader shader = ShaderUtil.CreateShaderAsset(@"
+Shader ""Hidden/GrassTests/CustomCaptureInputs""
+{
+    Properties
+    {
+        _Coverage (""Coverage"", 2D) = ""white"" {}
+        _DetailMap (""Detail"", 2D) = ""white"" {}
+    }
+    SubShader
+    {
+        Pass
+        {
+            Name ""GrassMask""
+            Tags { ""LightMode""=""GrassMask"" }
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex Vert
+            #pragma fragment Frag
+            Texture2D _Coverage;
+            SamplerState sampler_Coverage;
+            Texture2D _DetailMap;
+            SamplerState sampler_DetailMap;
+            float4x4 _GrassCaptureVP;
+            float4 Vert(float4 position : POSITION) : SV_POSITION
+            {
+                return mul(_GrassCaptureVP, position);
+            }
+            float4 Frag() : SV_Target
+            {
+                return _Coverage.SampleLevel(sampler_Coverage, float2(0.5, 0.5), 0) *
+                    _DetailMap.SampleLevel(sampler_DetailMap, float2(0.5, 0.5), 0);
+            }
+            ENDHLSL
+        }
+    }
+}", false);
+        Material material = null;
+        GameObject gameObject = null;
+        var external = new RenderTexture[4];
+        try
+        {
+            Assert.That(shader, Is.Not.Null);
+            Assert.That(ShaderUtil.ShaderHasError(shader), Is.False);
+            material = new Material(shader);
+            gameObject = new GameObject("Custom grass capture inputs");
+            Renderer renderer = gameObject.AddComponent<MeshRenderer>();
+            renderer.sharedMaterials = new[] { material, material };
+            Assert.That(material.FindPass("GrassMask"), Is.GreaterThanOrEqualTo(0));
+            Assert.That(material.HasProperty("_MainTex"), Is.False,
+                "A supported custom capture pass need not name its texture _MainTex.");
+            int coverage = Shader.PropertyToID("_Coverage");
+            int detail = Shader.PropertyToID("_DetailMap");
+            material.SetTexture(coverage, Texture2D.whiteTexture);
+            material.SetTexture(detail, Texture2D.blackTexture);
+            for (int i = 0; i < external.Length; i++)
+                external[i] = new RenderTexture(4, 4, 0);
+            var block = new MaterialPropertyBlock();
+            block.SetTexture(coverage, external[0]);
+            block.SetTexture(detail, external[1]);
+            renderer.SetPropertyBlock(block);
+            block.SetTexture(coverage, external[2]);
+            block.SetTexture(detail, external[3]);
+            renderer.SetPropertyBlock(block, 1);
+
+            var scratch = new MaterialPropertyBlock();
+            var textureIds = new List<int>();
+            var textures = new List<Texture>();
+            CaptureTextureCollector collect = CreateCaptureTextureCollector();
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(6));
+            Assert.That(textureIds, Is.EquivalentTo(new[] { coverage, detail }));
+            Assert.That(textures, Is.EquivalentTo(new Texture[]
+            {
+                Texture2D.whiteTexture, Texture2D.blackTexture, external[0], external[1], external[2], external[3]
+            }));
+            int idCapacity = textureIds.Capacity;
+            int textureCapacity = textures.Capacity;
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(6));
+            Assert.That(textureIds.Capacity, Is.EqualTo(idCapacity));
+            Assert.That(textures.Capacity, Is.EqualTo(textureCapacity),
+                "Repeated collection reuses the lists after their largest observed input set.");
+
+            Assert.That(collect(renderer, material, 0, scratch, textureIds, textures), Is.EqualTo(4));
+            Assert.That(textures, Is.EquivalentTo(new Texture[]
+                { Texture2D.whiteTexture, Texture2D.blackTexture, external[0], external[1] }));
+            block.SetTexture(coverage, external[0]);
+            block.SetTexture(detail, external[0]);
+            renderer.SetPropertyBlock(block, 1);
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(4));
+            Assert.That(textures, Is.EquivalentTo(new Texture[]
+                { Texture2D.whiteTexture, Texture2D.blackTexture, external[0], external[1] }),
+                "Repeated textures across properties and override scopes need a single declaration.");
+
+            Shader maskShader = Shader.Find("InfiniteGrass/Modifiers/GrassMaskShader");
+            Assert.That(maskShader, Is.Not.Null);
+            material.shader = maskShader;
+            int mainTexture = Shader.PropertyToID("_MainTex");
+            material.SetTexture(mainTexture, Texture2D.grayTexture);
+            Assert.That(collect(renderer, material, 1, scratch, textureIds, textures), Is.EqualTo(1));
+            Assert.That(textureIds, Is.EqualTo(new[] { mainTexture }));
+            Assert.That(textures, Is.EqualTo(new Texture[] { Texture2D.grayTexture }),
+                "Removed shader properties must not retain their old material or property-block textures.");
+            Assert.That(collect(renderer, null, 1, scratch, textureIds, textures), Is.Zero);
+            Assert.That(textureIds, Is.Empty);
+            Assert.That(textures, Is.Empty);
+            foreach (RenderTexture texture in external)
+                Assert.That(texture.IsCreated(), Is.False, "Dependency collection must not allocate producer storage.");
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameObject);
+            Object.DestroyImmediate(material);
+            Object.DestroyImmediate(shader);
+            foreach (RenderTexture texture in external)
+                Object.DestroyImmediate(texture);
+        }
+    }
+
+    private delegate int CaptureTextureCollector(Renderer renderer, Material material, int materialIndex,
+        MaterialPropertyBlock properties, List<int> textureIds, List<Texture> textures);
+
+    private static CaptureTextureCollector CreateCaptureTextureCollector()
+    {
+        Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+        return (CaptureTextureCollector)passType.GetMethod("CollectCaptureTextures",
+            BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(CaptureTextureCollector));
     }
 }

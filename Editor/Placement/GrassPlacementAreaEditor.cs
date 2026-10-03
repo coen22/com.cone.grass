@@ -42,15 +42,25 @@ public sealed class GrassPlacementAreaEditor : Editor
         {
             if (!GrassPlacementDrawData.SupportsDensityFormat(area.DensityTexture))
                 EditorGUILayout.HelpBox("Density needs a normalized or floating-point red channel. Use R8 or linear RGBA; alpha-only, integer and depth formats cannot provide grass coverage.", MessageType.Warning);
-            if (area.DensityTexture is RenderTexture densityTarget && !densityTarget.IsCreated())
-                EditorGUILayout.HelpBox("The density RenderTexture has no allocated contents. Its producer must create and populate it before this area can provide grass coverage.", MessageType.Warning);
+            if (area.DensityTexture is RenderTexture densityTarget)
+            {
+                if (densityTarget.antiAliasing > 1 && densityTarget.bindTextureMS)
+                    EditorGUILayout.HelpBox("The density RenderTexture uses a multisampled binding. Disable Bind Texture MS or assign a resolved 2D texture from its producer before this area can provide grass coverage.", MessageType.Warning);
+                else if (!densityTarget.IsCreated())
+                    EditorGUILayout.HelpBox("The density RenderTexture has no allocated contents. Its producer must create and populate it before this area can provide grass coverage.", MessageType.Warning);
+            }
             string path = AssetDatabase.GetAssetPath(area.DensityTexture);
             TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
             if (importer && importer.sRGBTexture)
                 EditorGUILayout.HelpBox("Density is linear data. Disable sRGB on this density texture to preserve brush strength and soft boundaries.", MessageType.Warning);
         }
-        if (area.GroundColorTexture is RenderTexture groundTarget && !groundTarget.IsCreated())
-            EditorGUILayout.HelpBox("The ground-color RenderTexture has no allocated contents. This area uses its TerrainLayer and tint until the producer creates and populates the color texture.", MessageType.Info);
+        if (area.GroundColorTexture is RenderTexture groundTarget)
+        {
+            if (groundTarget.antiAliasing > 1 && groundTarget.bindTextureMS)
+                EditorGUILayout.HelpBox("The ground-color RenderTexture uses a multisampled binding. This area uses its TerrainLayer and tint until Bind Texture MS is disabled or a resolved 2D texture is assigned.", MessageType.Info);
+            else if (!groundTarget.IsCreated())
+                EditorGUILayout.HelpBox("The ground-color RenderTexture has no allocated contents. This area uses its TerrainLayer and tint until the producer creates and populates the color texture.", MessageType.Info);
+        }
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Scene Brush", EditorStyles.boldLabel);

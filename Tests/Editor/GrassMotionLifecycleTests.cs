@@ -314,6 +314,7 @@ public sealed class GrassMotionLifecycleTests
             AssertReleased(buffers, textures);
             // An unsupported source should not repeat its warning every frame.
             Assert.That(resolve.Invoke(fixture.Renderer, arguments), Is.False);
+            LogAssert.NoUnexpectedReceived();
         }
     }
 

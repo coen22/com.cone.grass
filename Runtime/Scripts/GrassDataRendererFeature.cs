@@ -100,7 +100,6 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int Slope = Shader.PropertyToID("_GrassSlopeRT");
         public static readonly int Ground = Shader.PropertyToID("_GrassGroundColorRT");
         public static readonly int Wind = Shader.PropertyToID("_WindTexture");
-        public static readonly int MainTexture = Shader.PropertyToID("_MainTex");
         public static readonly int HeightTexelSize = Shader.PropertyToID("_GrassHeightMapRT_TexelSize");
         public static readonly int Center = Shader.PropertyToID("_CenterPos");
         public static readonly int DrawDistance = Shader.PropertyToID("_DrawDistance");
@@ -942,7 +941,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 {
                     RendererDraw draw = draws[i];
                     int textureCount = CollectCaptureTextures(draw.Renderer, draw.Material, draw.Submesh,
-                        state.CaptureProperties, state.CaptureTextures);
+                        state.CaptureProperties, state.CaptureTextureIds, state.CaptureTextures);
                     for (int texture = 0; texture < textureCount; texture++)
                         builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
                 }
@@ -967,24 +966,31 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         }
 
         private static int CollectCaptureTextures(Renderer renderer, Material material, int materialIndex,
-            MaterialPropertyBlock properties, Texture[] textures)
+            MaterialPropertyBlock properties, List<int> textureIds, List<Texture> textures)
         {
-            Array.Clear(textures, 0, textures.Length);
-            if (!material || !material.HasProperty(Id.MainTexture))
+            textureIds.Clear();
+            textures.Clear();
+            if (!material)
                 return 0;
-            int count = 0;
-            AddCaptureTexture(material.GetTexture(Id.MainTexture), textures, ref count);
+            // Custom capture passes can expose inputs beyond _MainTex. Reuse
+            // the list overload so discovering them does not allocate an array.
+            material.GetTexturePropertyNameIDs(textureIds);
+            if (textureIds.Count == 0)
+                return 0;
+            for (int i = 0; i < textureIds.Count; i++)
+                AddCaptureTexture(material.GetTexture(textureIds[i]), textures);
             if (renderer && renderer.HasPropertyBlock())
             {
-                // DrawRenderer consumes renderer and per-material overrides.
-                // Declare both scopes conservatively, including overrides that
-                // replace a material texture with an externally rendered map.
+                // Declare both override scopes conservatively, including inputs
+                // supplied only through an externally rendered texture override.
                 renderer.GetPropertyBlock(properties);
-                AddCaptureTexture(properties.GetTexture(Id.MainTexture), textures, ref count);
+                for (int i = 0; i < textureIds.Count; i++)
+                    AddCaptureTexture(properties.GetTexture(textureIds[i]), textures);
                 renderer.GetPropertyBlock(properties, materialIndex);
-                AddCaptureTexture(properties.GetTexture(Id.MainTexture), textures, ref count);
+                for (int i = 0; i < textureIds.Count; i++)
+                    AddCaptureTexture(properties.GetTexture(textureIds[i]), textures);
             }
-            return count;
+            return textures.Count;
         }
 
         private static Texture ResolveWindTexture(Material material)
@@ -1001,14 +1007,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 ? texture : Texture2D.grayTexture;
         }
 
-        private static void AddCaptureTexture(Texture texture, Texture[] textures, ref int count)
+        private static void AddCaptureTexture(Texture texture, List<Texture> textures)
         {
             if (!texture)
                 return;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < textures.Count; i++)
                 if (textures[i] == texture)
                     return;
-            textures[count++] = texture;
+            textures.Add(texture);
         }
 
         private void BuildPlacementCapture(RenderGraph graph, CameraState state, TextureHandle density,
@@ -1604,7 +1610,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly Vector4[] Frustum = new Vector4[6];
             public readonly MaterialPropertyBlock[] DrawProperties = { new MaterialPropertyBlock(), new MaterialPropertyBlock(), new MaterialPropertyBlock() };
             public readonly MaterialPropertyBlock CaptureProperties = new MaterialPropertyBlock();
-            public readonly Texture[] CaptureTextures = new Texture[3];
+            public readonly List<int> CaptureTextureIds = new List<int>();
+            public readonly List<Texture> CaptureTextures = new List<Texture>();
             public readonly TextureHandle[] VertexTextures = new TextureHandle[5];
             public Renderer[] CaptureRenderers;
             public IReadOnlyList<Renderer> ModifierRenderers;
@@ -1855,6 +1862,9 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 foreach (TextureWrapper wrapper in TextureWrappers.Values)
                     wrapper.Handle.Release();
                 TextureWrappers.Clear();
+                CaptureProperties.Clear();
+                CaptureTextureIds.Clear();
+                CaptureTextures.Clear();
                 CoreUtils.Destroy(BladeMaterial);
             }
         }

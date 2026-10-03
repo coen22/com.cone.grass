@@ -385,6 +385,170 @@ public sealed class GrassMicroVerseGroundBakeTests
         }
     }
 
+    [TestCase("missing")]
+    [TestCase("replacement")]
+    [TestCase("ambiguous")]
+    public void MaskRegenerationDuringBakeNotificationCommitsOnlyTheCurrentMapping(string mutation)
+    {
+        Texture2D originalOutput = Refresh();
+        Texture2D originalDensity = density;
+        string selectedName = bridge.TextureSubAssetName;
+        string outputGuid = AssetDatabase.AssetPathToGUID(outputPath);
+        Hash128 sourceHash = AssetDatabase.GetAssetDependencyHash(diffusePath);
+        Texture2D replacement = null, duplicate = null;
+        bool changed = false, succeeded = false;
+        Action<Terrain, Texture2D> regenerate = (source, output) =>
+        {
+            if (source != terrain || changed)
+                return;
+            changed = true;
+            Object.DestroyImmediate(originalDensity, true);
+            if (mutation != "missing")
+                replacement = CreateSavedDensity(selectedName, 16);
+            if (mutation == "ambiguous")
+                duplicate = CreateSavedDensity(selectedName, 32);
+            EditorUtility.SetDirty(target);
+            AssetDatabase.SaveAssetIfDirty(target);
+        };
+        TerrainGrassAlbedoBaker.Baked += regenerate;
+        try
+        {
+            Assert.DoesNotThrow(() => succeeded = GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true),
+                "A producer replacing its saved mask must not leave a destroyed local reference in the success message.");
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= regenerate;
+        }
+
+        Assert.That(changed, Is.True, "The regression must cross the synchronous completion callback.");
+        Assert.That(originalDensity == null, Is.True);
+        Assert.That(succeeded, Is.EqualTo(mutation == "replacement"));
+        Assert.That(bridge.LastRefreshSucceeded, Is.EqualTo(succeeded));
+        Assert.That(bridge.TextureSubAssetName, Is.EqualTo(selectedName), "Regeneration must preserve the explicit mapping.");
+        Assert.That(bakeCount, Is.EqualTo(2));
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(originalOutput));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(outputGuid));
+        Assert.That(AssetDatabase.GetAssetDependencyHash(diffusePath), Is.EqualTo(sourceHash));
+        AssertColor(originalOutput.GetPixel(32, 32), Color.red);
+        if (succeeded)
+        {
+            Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(replacement));
+            Assert.That(bridge.PlacementArea.DensityTexture.width, Is.EqualTo(16));
+            Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(originalOutput));
+            Assert.That(bridge.PlacementArea.TryGetCaptureData(out _), Is.True);
+        }
+        else
+        {
+            StringAssert.Contains(mutation == "missing" ? "missing" : "Several textures", bridge.LastRefreshMessage);
+            Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+            Assert.That(bridge.PlacementArea.GroundColorTexture, Is.Null);
+            Assert.That(bridge.PlacementArea.TryGetCaptureData(out _), Is.False);
+        }
+        uint revision = bridge.PlacementArea.SourceRevision;
+        Texture boundDensity = bridge.PlacementArea.DensityTexture;
+        Texture boundColor = bridge.PlacementArea.GroundColorTexture;
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.EqualTo(succeeded), message);
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Preflight must remain read-only.");
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(boundDensity));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(boundColor));
+
+        if (!replacement)
+            replacement = CreateSavedDensity(selectedName, 16);
+        if (duplicate)
+        {
+            Object.DestroyImmediate(duplicate, true);
+            EditorUtility.SetDirty(target);
+            AssetDatabase.SaveAssetIfDirty(target);
+        }
+        density = replacement;
+        Assert.That(Refresh(), Is.SameAs(originalOutput));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(replacement));
+        Assert.That(bridge.PlacementArea.Terrain, Is.SameAs(terrain));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out message), Is.True, message);
+        for (int i = 0; i < 3; i++)
+            Refresh();
+        Assert.That(bakeCount, Is.EqualTo(2), "Resolving the new mask must reuse the already completed, unchanged ground bake.");
+    }
+
+    [TestCase("terrain")]
+    [TestCase("resolution")]
+    [TestCase("output")]
+    public void BakeConfigurationChangedByObserverIsPreservedUntilTheNextRefresh(string mutation)
+    {
+        Texture2D originalOutput = Refresh();
+        Terrain originalTerrain = terrain;
+        string originalSourceKey = bridge.GroundBakeSourceKey;
+        string originalOutputKey = bridge.GroundBakeOutputKey;
+        string originalGuid = AssetDatabase.AssetPathToGUID(outputPath);
+        string replacementPath = folder + "/NewGround.asset";
+        Terrain replacementTerrain = null;
+        if (mutation == "terrain")
+        {
+            GameObject other = Own(Terrain.CreateTerrainGameObject(data));
+            replacementTerrain = other.GetComponent<Terrain>();
+            replacementTerrain.materialTemplate = terrain.materialTemplate;
+        }
+        bool changed = false, succeeded = true;
+        Action<Terrain, Texture2D> reconfigure = (source, output) =>
+        {
+            if (source != originalTerrain || changed)
+                return;
+            changed = true;
+            if (mutation == "output")
+                bridge.SetBakedGroundColor(null, replacementPath, string.Empty, string.Empty);
+            else
+            {
+                var serialized = new SerializedObject(bridge);
+                if (mutation == "terrain")
+                    serialized.FindProperty("terrain").objectReferenceValue = replacementTerrain;
+                else
+                    serialized.FindProperty("groundBakeResolution").intValue = 128;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+        };
+        TerrainGrassAlbedoBaker.Baked += reconfigure;
+        try
+        {
+            Assert.DoesNotThrow(() => succeeded = GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true));
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.Baked -= reconfigure;
+        }
+
+        Assert.That(changed, Is.True);
+        Assert.That(succeeded, Is.False);
+        StringAssert.Contains("configuration changed during the bake", bridge.LastRefreshMessage);
+        Assert.That(bridge.Terrain, Is.SameAs(replacementTerrain ? replacementTerrain : originalTerrain));
+        Assert.That(bridge.GroundBakeResolution, Is.EqualTo(mutation == "resolution" ? 128 : 64));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(mutation == "output" ? replacementPath : outputPath));
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(mutation == "output" ? null : originalOutput));
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(mutation == "output" ? string.Empty : originalSourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(mutation == "output" ? string.Empty : originalOutputKey));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.Null);
+        Assert.That(AssetDatabase.LoadMainAssetAtPath(outputPath), Is.SameAs(originalOutput));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(originalGuid));
+        AssertColor(originalOutput.GetPixel(32, 32), Color.red);
+        Assert.That(bakeCount, Is.EqualTo(2));
+        uint revision = bridge.PlacementArea.SourceRevision;
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False);
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision), "Preflight must not repair the changed configuration.");
+
+        terrain = bridge.Terrain;
+        Texture2D recovered = Refresh();
+        Assert.That(recovered.width, Is.EqualTo(bridge.GroundBakeResolution));
+        Assert.That(bridge.PlacementArea.Terrain, Is.SameAs(terrain));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(density));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(mutation == "output" ? replacementPath : outputPath));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(bakeCount, Is.EqualTo(3));
+        for (int i = 0; i < 3; i++)
+            Refresh();
+        Assert.That(bakeCount, Is.EqualTo(3), "A recovered configuration must settle after one new bake.");
+    }
+
     [Test]
     public void ReentrantRefreshDoesNotClearOrRebindTheCommittedPlacement()
     {
@@ -852,6 +1016,21 @@ public sealed class GrassMicroVerseGroundBakeTests
         diffuse.SetPixels(new[] { color, color, color, color });
         diffuse.Apply(false, false);
         EditorUtility.SetDirty(diffuse);
+    }
+
+    private Texture2D CreateSavedDensity(string name, int resolution)
+    {
+        Texture2D texture = Own(new Texture2D(resolution, resolution, TextureFormat.R8, false, true) { name = name });
+        byte[] pixels = new byte[resolution * resolution];
+        for (int i = 0; i < pixels.Length; i++)
+            pixels[i] = 255;
+        texture.LoadRawTextureData(pixels);
+        texture.Apply(false, false);
+        AssetDatabase.AddObjectToAsset(texture, target);
+        EditorUtility.SetDirty(texture);
+        EditorUtility.SetDirty(target);
+        AssetDatabase.SaveAssetIfDirty(target);
+        return texture;
     }
 
     private void OnBaked(Terrain source, Texture2D output)
