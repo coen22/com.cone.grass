@@ -775,7 +775,7 @@ public sealed class GrassMicroVerseGroundBakeTests
             bridge.enabled = false;
         else
             bridge.gameObject.SetActive(false);
-        Assert.That(GrassMicroVerseBridge.ActiveBridges, Does.Not.Contain(bridge));
+        Assert.That(GrassMicroVerseBridge.ActiveBridges, Has.No.Member(bridge));
         GameObject otherObject = Own(new GameObject("Conflicting inactive bake owner"));
         GrassMicroVerseBridge other = AddBridge(otherObject, 128, true);
 
