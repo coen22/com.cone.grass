@@ -238,7 +238,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         GrassPlacementChange changes = GrassPlacementChange.None;
         if (terrain != supportingTerrain || !useTerrainBounds)
             changes |= GrassPlacementChange.All;
-        if (shape != GrassPlacementShape.Texture || densityAsset || densityTexture != coverage || edgeFalloff != 0f)
+        if (shape != GrassPlacementShape.Texture || !ReferenceEquals(densityAsset, null) || densityTexture != coverage || edgeFalloff != 0f)
             changes |= GrassPlacementChange.Density;
         float strength = matchingGroundLayer || matchingGroundColor ? 1f : 0f;
         if (groundLayer != matchingGroundLayer || groundColorTexture != matchingGroundColor ||
@@ -303,7 +303,8 @@ public sealed class GrassPlacementArea : MonoBehaviour
     public void SetDensityAsset(GrassDensityAsset asset, bool fitTerrain)
     {
         bool mappingChanged = useTerrainBounds != fitTerrain;
-        if (densityAsset == asset && !densityTexture && shape == GrassPlacementShape.Texture && !mappingChanged && edgeFalloff == 0f)
+        if (ReferenceEquals(densityAsset, asset) && ReferenceEquals(densityTexture, null) &&
+            shape == GrassPlacementShape.Texture && !mappingChanged && edgeFalloff == 0f)
             return;
         densityAsset = asset;
         densityTexture = null;
@@ -471,7 +472,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
     {
         activeAreas.Remove(this);
         registered = false;
-        if (observedAsset)
+        if (!ReferenceEquals(observedAsset, null))
             observedAsset.RegionChanged -= OnAssetRegionChanged;
         observedAsset = null;
         supportingMaterials.Clear();
@@ -653,9 +654,11 @@ public sealed class GrassPlacementArea : MonoBehaviour
 
     private void SynchronizeAssetSubscription()
     {
-        if (observedAsset == densityAsset)
+        if (ReferenceEquals(observedAsset, densityAsset))
             return;
-        if (observedAsset)
+        // RegionChanged lives on the managed wrapper, which can outlive the
+        // native asset. Detaching it must also work after that asset is destroyed.
+        if (!ReferenceEquals(observedAsset, null))
             observedAsset.RegionChanged -= OnAssetRegionChanged;
         observedAsset = IsRegistryEligible() ? densityAsset : null;
         if (observedAsset)
