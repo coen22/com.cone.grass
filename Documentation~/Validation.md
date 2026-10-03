@@ -41,9 +41,13 @@ The same probe can run against an installed Editor locally:
 python3 Tools~/probe_unity_cli.py --editor /path/to/Editor/Unity --project Validation~/Project --output artifacts/unity-cli
 ```
 
-It removes previous XML and Editor logs before each attempt so stale results or a stale license error cannot conceal a new startup failure. Unexpected startup errors, missing results after a successful process exit, failed tests and timeouts fail the command.
+It writes a new `running` attempt record before cleanup or launch, then removes previous XML and Editor logs. Reporting reads only that attempt's `editmode.xml`, so older sibling exports cannot supply missing passes or unrelated failures. Interrupted launches cannot retain an earlier passing record. Unexpected startup errors, missing results after a successful process exit, failed tests and timeouts fail the command.
+
+The availability-probe workflow runs manually through `workflow_dispatch`. It supplies no license credentials and already established the startup block above; ordinary pull requests exercise its Python regressions. The licensed test and player-build jobs in `validation.yml` remain the engine acceptance gate.
 
 ## Reproducible test setup
+
+Project generation checks its required bridge, Editor and runtime template roots before modifying output. A partial checkout fails without deleting existing scripts, metadata or saved scene references. Restore the missing templates before regenerating.
 
 Use the included generator from the repository root:
 
@@ -168,6 +172,7 @@ Overlay, reflection, preview, and XR cameras are deliberately excluded by the cu
 - External map: linear red-channel density, unreadable texture, missing texture, wrong texture dimension, replaced asset, and resolution change. Uncreated or released density RenderTextures must contribute no coverage without the consumer allocating them; recreate and populate them in the producer, notify unreported writes, then verify coverage returns. Destroy an explicitly assigned density asset while a lower-priority texture is present: coverage must remain absent until the asset binding is deliberately cleared or replaced.
 - Assign Alpha8, integer and depth density textures directly to an area. They must contribute no coverage without changing producer storage. Replace or reinitialize the same texture with a usable red-channel format and verify density/ground capture recovers without changing the surface revision.
 - Give an area finite coordinates and dimensions whose computed footprint overflows or collapses. Its old valid region must invalidate once, painting must stop, repeated observations must remain stable, and restoring usable coordinates must recover the original mapping.
+- Destroy a bound density asset, explicitly clear or replace that binding, and verify external coverage can recover. Disable or rebind the area and ensure the old managed asset wrapper can no longer advance its revisions; the live replacement must retain exactly one subscription.
 - Terrain: changed height, holes, different origin/size, negative coordinates, adjacent borders/corners, and multiple tiles.
 - At fractional world origins, inspect adjacent terrain roots exactly on their shared world edge and just inside it. The upper-edge terrain must exclude the shared root while the lower-edge terrain accepts it once. An interior root whose normalized UV rounds to one must remain valid.
 - Mesh surface: assigned paint surface, legacy height layer, partial vertex-color red, missing capture material, and a moved surface followed by Refresh Grass Data. Destroy or deactivate an explicit collider, remove/disable/force off its associated Renderer, or move its object into a preview/unloaded scene; coverage must stop. Empty meshes and meshes whose only indexed submesh has no corresponding material slot must also stop coverage. Explicitly clearing the binding restores the generic fallback. Disabling physics alone may retain the associated visible mesh support.
@@ -191,6 +196,7 @@ The projection models one captured mesh height at each XZ position. Ground color
 - Verify no capture read/write hazard, unbound compute texture, undeclared material texture, or indirect argument validation warning. Include modifier `_MainTex` overrides set through renderer-wide and per-material property blocks, then replace and remove those overrides.
 - Verify integer grid, source flags, LOD offsets, and cascade count are uploaded as integers.
 - Exercise included grid endpoints at positive and negative coordinates, including float32 root rounding and integer-to-float precision loss. The precise shader coordinate must agree with its written jitter-add/spacing-product order, and CPU enumeration must include its source cell. Keep the coordinate and candidate-budget rejection limits in force.
+- Repeat boundary cases with sparse tile occupancy enabled. Its clipped tile bounds must retain the rounded root plus the capture filter margin, including negative coordinates and margins smaller than a world-coordinate ULP.
 - Change the generated blade mesh's first-submesh index count, start or base vertex through the public mesh cache. The next resource update must refresh native indirect index metadata without replacing unchanged buffers; generation must still own instance counts.
 - Test zero dispatches after previously drawing grass: counts and all three indirect instance counts become zero.
 - Force a small buffer capacity. Writes remain in bounds; counts are clamped and overflow is reported asynchronously.
@@ -198,8 +204,10 @@ The projection models one captured mesh height at each XZ position. Ground color
 - A source/camera grid above the 67,108,864-candidate budget (64 × 1024²) must skip generation and issue the explicit warning. It must not silently choose a moving subset or wrap counters.
 - Confirm argument layout/stride on every target API. The CPU probes the platform-provided typed layout instead of assuming the instance-count byte offset.
 - Confirm no repeated large GPU or managed-array allocations at steady state. Large capacity reductions shrink the position buffer; bounded idle terrain/camera caches release their maps. Check repeated optional motion-mode changes release history, including removal of the material/compute prerequisite and unsupported camera changes.
+- Grow and shrink the dispatch plan, reject a partial plan at the candidate budget, and interrupt texture import. Planning-only terrain-group references must be cleared while successful execution inputs remain intact; evicted groups must not stay reachable through unused pooled entries.
 - Deactivate the renderer feature with `SetActive(false)` while a camera has allocated resources, then render another context. Its camera cache must release even though URP skips the feature. Switch to a different renderer asset and verify idle eviction still runs; reactivation must restore rendering. Destroy or disable the feature object and check callback teardown. Diagnostics from another active feature must remain intact.
 - Release the material's borrowed wind RenderTexture. Forward, contact and optional motion must use the same fallback without creating storage or changing the source material. Recreate and populate it in the producer and verify all passes return to that source.
+- Reconfigure that same wind RenderTexture for unresolved MSAA (`bindTextureMS` enabled with multiple samples). All grass passes must use the neutral fallback; automatically resolved MSAA and single-sample configurations remain accepted when actually supported by the device.
 - Confirm motion history stays within the configured budget: `32 * capacity + 4 * NextPowerOfTwo(2 * capacity)` bytes for roots and hash keys, plus counts and texture snapshots. At two million blades the buffers use 77.04 MiB per active camera; each pair of 1024² RGBAHalf snapshots adds 16 MiB. Test the supported RGBAFloat fallback and device-limit rejection.
 - Confirm normal camera matrices remain unchanged after top-down capture passes.
 - Set capture-height endpoints to reversed or nonfinite values at runtime. Equivalent finite resolved ranges must reuse their cache; a changed resolved range must invalidate it.
@@ -242,6 +250,7 @@ Check contacts enabled/disabled at the same exposure and lighting:
 - Main light at high and low elevations, near/far distance fade, orthographic projection, reversed/normal Z.
 - MSAA silhouettes and transparent objects rendered after the contact pass.
 - Render scale changes, screen boundaries, and objects entering/leaving the frame.
+- A grass-only receiver whose ray stays inside its own sampled grass texel must not darken from that sample. Repeat with scaled and shifted allocations and a slightly angled ray. A distinct grass texel or reachable scene depth behind the origin must still cast contact; scene depth beyond the ray's reach must not.
 
 The overlay must leave unrelated scene-to-scene shading unchanged and preserve color alpha/MSAA samples. Increasing bias/thickness/length must have bounded, explainable effects. It has one nearest grass depth layer and no off-screen data; fractional silhouettes remain approximate. Its color multiplication attenuates all existing lighting, including ambient and emissive contributions.
 
@@ -258,6 +267,7 @@ Use the actual installed versions of MicroVerse Core, Splines, and Masks:
 7. Preview an unsaved terrain texture edit. Its bake must not be certified by an older disk hash; save the source and rebake before build readiness is restored.
 8. Edit or save a terrain input from a bake-completion observer. The next refresh must bake the changed input instead of certifying it against older pixels. A failed observer must be logged while later observers still receive the successful saved output.
 9. Delete the current bridge owner and a later queued owner from a bake-completion observer. Watcher and scene-save iteration must skip removed objects and finish refreshing surviving consumers.
+10. Delete or replace the output asset from a bake-completion observer. Refresh must fail without losing its configured path or certifying new bake keys, then recover on a later refresh. Also check a live nonpersistent recorded reference and a legitimate move of the same persistent output; the move must retain its GUID and avoid an unnecessary rebake.
 
 The bridge does not know the native generation transaction state. Verified completion/cancellation callbacks require the installed Core/Splines/Masks source and remain follow-up work. The bridge checks saved scenes in an unconditional player-build preflight, because Unity can reuse cached scenes without invoking a scene processor. Prefab/addressable or other content builders must validate their own binding inputs.
 
