@@ -1,0 +1,32 @@
+#pragma kernel Query
+#pragma kernel QueryTriangles
+#include "Packages/com.cone.grass/Runtime/Shaders/GrassMotionHistoryLookup.hlsl"
+#include "Packages/com.cone.grass/Runtime/Shaders/GrassMotionInterpolation.hlsl"
+StructuredBuffer<float4> _Queries;
+StructuredBuffer<float4> _Edges;
+RWStructuredBuffer<float4> _Results;
+RWStructuredBuffer<uint> _Found;
+int _QueryCount;
+int _HashMask;
+
+[numthreads(64, 1, 1)]
+void Query(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_QueryCount)
+        return;
+    float4 previous;
+    bool found = GrassFindPreviousRoot(_Queries[id.x].xz, (uint)_HashMask, previous);
+    _Results[id.x] = previous;
+    _Found[id.x] = found ? 1u : 0u;
+}
+
+[numthreads(64, 1, 1)]
+void QueryTriangles(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_QueryCount)
+        return;
+    float4 query = _Queries[id.x];
+    uint start = id.x * 4u;
+    _Results[id.x] = float4(GrassInterpolatePreviousTriangle(query.xy, query.z, query.w,
+        _Edges[start].xyz, _Edges[start + 1u].xyz, _Edges[start + 2u].xyz, _Edges[start + 3u].xyz), 1.0);
+}

@@ -1,0 +1,10 @@
+{
+  "name": "com.cone.grass.placement.editor",
+  "references": [
+    "com.cone.grass"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

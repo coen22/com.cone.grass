@@ -15321,6 +15321,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   grassMaterial: {fileID: 2100000, guid: 851879c6d723afb4a8aaa2242cee777c, type: 2}
+  placementMode: 1
   spacing: 0.1
   drawDistance: 200
   subdivisionDistance: 100

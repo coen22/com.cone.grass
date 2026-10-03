@@ -1,61 +1,46 @@
 Shader "InfiniteGrass/GrassHeightMapShader"
 {
-    Properties
-    {
-    }
     SubShader
     {
-        Tags { 
-            "RenderType"="Opaque"
-        }
-
+        Tags { "RenderPipeline"="UniversalPipeline" "RenderType"="Opaque" }
         Pass
         {
-            CGPROGRAM
-            #pragma vertex vert
-            #pragma fragment frag
-
-            #include "UnityCG.cginc"
-
-            struct appdata
+            Name "GrassHeight"
+            Tags { "LightMode"="GrassHeight" }
+            Cull Off
+            ZWrite On
+            ZTest LEqual
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex Vertex
+            #pragma fragment Fragment
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            float4x4 _GrassCaptureVP;
+            struct Attributes
             {
-                float4 vertex : POSITION;
+                float3 positionOS : POSITION;
                 half4 color : COLOR;
             };
-
-            struct v2f
+            struct Varyings
             {
-                float4 vertex : SV_POSITION;
-                float2 color : TEXCOORD0;
+                float4 positionCS : SV_POSITION;
+                float2 heightAndValidity : TEXCOORD0;
             };
-
-            float2 _BoundsYMinMax;
-
-            float Remap(float In, float2 InMinMax, float2 OutMinMax)
+            Varyings Vertex(Attributes input)
             {
-                return OutMinMax.x + (In - InMinMax.x) * (OutMinMax.y - OutMinMax.x) / (InMinMax.y - InMinMax.x);
+                Varyings output;
+                float3 world = TransformObjectToWorld(input.positionOS);
+                output.positionCS = mul(_GrassCaptureVP, float4(world, 1));
+                // World-space height makes the cached map independent of camera altitude.
+                // Preserve fractional red vertex-color eligibility for legacy surfaces.
+                output.heightAndValidity = float2(world.y, saturate(input.color.r));
+                return output;
             }
-
-            v2f vert (appdata v)
+            float2 Fragment(Varyings input) : SV_Target
             {
-                v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-
-                float3 worldPos = mul(unity_ObjectToWorld, v.vertex);
-
-                float rChannel = Remap(worldPos.y, _BoundsYMinMax, float2(0, 1)); //We store here the altitude
-                float gChannel = v.color.r; //We store here the mask from the RED in the vertex color
-
-                o.color = float2(rChannel, gChannel);
-
-                return o;
+                return input.heightAndValidity;
             }
-
-            float2 frag (v2f i) : SV_Target
-            {
-                return i.color;
-            }
-            ENDCG
+            ENDHLSL
         }
     }
 }

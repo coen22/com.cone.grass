@@ -1,0 +1,109 @@
+name: Package validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      unity_version:
+        description: Complete Unity editor version to validate
+        default: 6000.6.0f1
+        required: true
+        type: string
+      urp_version:
+        description: Exact URP version for the selected editor
+        default: 17.6.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grass-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Source and package checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      unity_available: ${{ steps.license.outputs.available }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate package metadata and shader contracts
+        run: python3 Tools~/validate_source.py .
+      - name: Parse C# in editor and player configurations
+        run: dotnet run --project Tools~/SourceChecks -- .
+      - name: Verify disposable test project generation
+        run: python3 Tools~/create_validation_project.py
+      - name: Verify validation-tool regression tests
+        run: python3 -B -m unittest discover -s Tools~/tests -v
+      - name: Report Unity validation availability
+        id: license
+        env:
+          GRASS_UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          GRASS_UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          GRASS_UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          GRASS_UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          GRASS_UNITY_LICENSE_SERVER: ${{ secrets.UNITY_LICENSE_SERVER }}
+        run: |
+          python3 - <<'PY'
+          import os
+          configured = bool(os.environ['GRASS_UNITY_LICENSE_SERVER']) or (
+              bool(os.environ['GRASS_UNITY_EMAIL']) and bool(os.environ['GRASS_UNITY_PASSWORD']) and
+              (bool(os.environ['GRASS_UNITY_LICENSE']) or bool(os.environ['GRASS_UNITY_SERIAL'])))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('available=' + str(configured).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Validation scope\n\nSource checks parse C# and inspect package/shader contracts. They do not compile Unity APIs or shaders.\n\n')
+              summary.write('Unity credentials are configured; the separate editor job will attempt validation.\n' if configured else
+                            '**Unity validation was not run:** repository Unity licensing credentials are not configured. GPU and Unity acceptance remain unverified.\n')
+          PY
+
+  unity:
+    name: Unity import and EditMode tests
+    needs: source
+    if: needs.source.outputs.unity_available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create validation project
+        env:
+          GRASS_UNITY_VERSION: ${{ inputs.unity_version || '6000.6.0f1' }}
+          GRASS_URP_VERSION: ${{ inputs.urp_version || '17.6.0' }}
+        run: python3 Tools~/create_validation_project.py --unity "$GRASS_UNITY_VERSION" --urp "$GRASS_URP_VERSION"
+      - name: Run Unity EditMode tests
+        uses: game-ci/unity-test-runner@32e57712352b500e17974b245a6dce9e11a73213 # v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          cliVersion: v0.1.71
+          projectPath: Validation~/Project
+          testMode: EditMode
+          coverageEnabled: false
+          artifactsPath: artifacts/unity
+          githubToken: ''
+          unityLicensingServer: ${{ secrets.UNITY_LICENSE_SERVER }}
+      - name: Report executed and skipped tests
+        if: always()
+        run: python3 Tools~/report_unity_results.py artifacts/unity
+      - name: Upload Unity logs and test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unity-validation
+          path: artifacts/unity
+          if-no-files-found: warn

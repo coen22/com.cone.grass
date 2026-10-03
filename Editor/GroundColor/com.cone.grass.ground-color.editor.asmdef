@@ -1,0 +1,11 @@
+{
+  "name": "com.cone.grass.ground-color.editor",
+  "references": [
+    "com.cone.grass",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}
