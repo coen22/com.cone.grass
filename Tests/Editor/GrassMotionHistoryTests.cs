@@ -4,7 +4,6 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[NonParallelizable]
 public sealed class GrassMotionHistoryTests
 {
     [TestCase(3)]

@@ -10,7 +10,7 @@ using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 /// <summary>Run in a URP Editor test project with a graphics device; these exercise the actual GPU bake and saved assets.</summary>
-[Category("GrassGPU"), NonParallelizable]
+[Category("GrassGPU")]
 public sealed class TerrainGrassAlbedoBakerTests
 {
     private readonly List<Object> owned = new List<Object>();

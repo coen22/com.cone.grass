@@ -13,7 +13,6 @@ using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-[NonParallelizable]
 public sealed class GrassSettingsLifecycleTests
 {
     [Test]
@@ -203,7 +202,6 @@ public sealed class GrassSettingsLifecycleTests
     }
 }
 
-[NonParallelizable]
 public sealed class GrassPopulationSettingsTests
 {
     [TestCase(0f, 3)]
@@ -297,7 +295,6 @@ public sealed class GrassPopulationSettingsTests
     }
 }
 
-[NonParallelizable]
 public sealed class GrassRendererLifecycleTests
 {
     [TestCase("InfiniteGrass/Modifiers/GrassMaskShader", "GrassMask", "GrassMask")]
@@ -1336,7 +1333,6 @@ public sealed class GrassRendererLifecycleTests
     }
 }
 
-[NonParallelizable]
 public sealed class GrassCaptureTextureTests
 {
     [Test]

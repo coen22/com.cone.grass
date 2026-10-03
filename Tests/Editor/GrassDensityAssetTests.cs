@@ -4,7 +4,6 @@ using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 
-[NonParallelizable]
 public sealed class GrassDensityAssetTests
 {
     private GrassDensityAsset asset;

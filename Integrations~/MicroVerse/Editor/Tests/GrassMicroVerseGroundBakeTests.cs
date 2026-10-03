@@ -13,7 +13,7 @@ using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 /// <summary>Exercises saved native TerrainLit bakes through the optional bridge's public editor API.</summary>
-[Category("GrassGPU"), NonParallelizable]
+[Category("GrassGPU")]
 public sealed class GrassMicroVerseGroundBakeTests
 {
     private readonly List<Object> owned = new List<Object>();

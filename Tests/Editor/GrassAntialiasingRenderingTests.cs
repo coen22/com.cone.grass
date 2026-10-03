@@ -8,7 +8,6 @@ using Object = UnityEngine.Object;
 
 /// <summary>Renders the shipped blade shader without temporal accumulation or a replacement fragment program.</summary>
 [Category("GrassGPU")]
-[NonParallelizable]
 public sealed class GrassAntialiasingRenderingTests
 {
     private const int Size = 128;

@@ -11,7 +11,6 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-[NonParallelizable]
 [Category("GrassGPU")]
 public sealed class GrassMotionLifecycleTests
 {
@@ -502,7 +501,6 @@ public sealed class GrassMotionLifecycleTests
     }
 }
 
-[NonParallelizable]
 public sealed class GrassMotionSnapshotFormatTests
 {
     [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, true, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
@@ -526,7 +524,6 @@ public sealed class GrassMotionSnapshotFormatTests
     }
 }
 
-[NonParallelizable]
 public sealed class GrassMotionPassLayoutTests
 {
     [Test]
