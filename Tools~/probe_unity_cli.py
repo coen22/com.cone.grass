@@ -24,9 +24,11 @@ def main():
         parser.error("--timeout must be positive.")
     output.mkdir(parents=True, exist_ok=True)
     results = output / "editmode.xml"
-    # A previous successful XML must never turn a failed new attempt into a pass.
-    if results.exists():
-        results.unlink()
+    editor_log = output / "editor.log"
+    # A failed new startup must never inherit old results or a stale license error.
+    for previous in (results, editor_log):
+        if previous.exists():
+            previous.unlink()
     command = [str(editor), "-batchmode", "-nographics", "-projectPath", str(project),
                "-runTests", "-testPlatform", "EditMode", "-testResults", str(results),
                "-logFile", str(output / "editor.log")]
@@ -39,7 +41,6 @@ def main():
             process = subprocess.run(command, cwd=project, stdout=log, stderr=subprocess.STDOUT,
                                      timeout=args.timeout, check=False)
         record["editor_exit_code"] = process.returncode
-        editor_log = output / "editor.log"
         log = editor_log.read_text(errors="replace") if editor_log.exists() else ""
         launcher = (output / "launcher.log").read_text(errors="replace")
         combined = log + "\n" + launcher
