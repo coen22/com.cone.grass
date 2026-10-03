@@ -40,13 +40,14 @@ def case_result(case):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("artifacts", type=Path)
+    parser.add_argument("artifacts", type=Path, help="A single NUnit result file or a directory of result XML files")
     parser.add_argument("--require-gpu", action="store_true")
     args = parser.parse_args()
     cases = {}
     invalid_xml = []
     failed_runs = []
-    for path in sorted(args.artifacts.rglob("*.xml")):
+    paths = [args.artifacts] if args.artifacts.is_file() else sorted(args.artifacts.rglob("*.xml"))
+    for path in paths:
         try:
             root = ET.parse(path).getroot()
         except (ET.ParseError, OSError) as error:
