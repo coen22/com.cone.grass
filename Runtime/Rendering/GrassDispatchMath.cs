@@ -102,9 +102,14 @@ public static class GrassDispatchMath
     private static bool TryGetCandidateAxis(int first, int last, float spacing, float margin,
         out float center, out float extent)
     {
-        center = extent = 0f;
         double minimum = (double)CandidateEndpoint(first, spacing, false) - margin;
         double maximum = (double)CandidateEndpoint(last, spacing, true) + margin;
+        return TryGetOutwardAxis(minimum, maximum, out center, out extent);
+    }
+
+    private static bool TryGetOutwardAxis(double minimum, double maximum, out float center, out float extent)
+    {
+        center = extent = 0f;
         if (minimum < -float.MaxValue || maximum > float.MaxValue ||
             double.IsNaN(minimum) || double.IsNaN(maximum))
             return false;
@@ -149,8 +154,51 @@ public static class GrassDispatchMath
     {
         if (!Finite(margin) || margin < 0f || margin > float.MaxValue * 0.5f)
             throw new ArgumentOutOfRangeException(nameof(margin));
+        if (margin == 0f)
+            return bounds;
+
+        Vector3 minimum = bounds.min, maximum = bounds.max;
+        if (minimum.x <= maximum.x && minimum.z <= maximum.z &&
+            TryGetOutwardAxis((double)minimum.x - margin, (double)maximum.x + margin,
+                out float centerX, out float extentX) &&
+            TryGetOutwardAxis((double)minimum.z - margin, (double)maximum.z + margin,
+                out float centerZ, out float extentZ))
+        {
+            // Extent + margin can round inward, losing a reachable boundary
+            // cell before sparse tile enumeration. Enclose the expanded source
+            // endpoints instead, without changing its vertical bounds.
+            bounds.center = new Vector3(centerX, bounds.center.y, centerZ);
+            bounds.extents = new Vector3(extentX, bounds.extents.y, extentZ);
+            return bounds;
+        }
+
+        // Keep the existing behavior for invalid or unrepresentable inputs;
+        // downstream range checks reject their nonfinite/inverted endpoints.
         bounds.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
         return bounds;
+    }
+
+    /// <summary>Intersect source/camera XZ ranges without rounding their overlap inward. Touching edges are empty.</summary>
+    public static bool TryIntersectXZ(Bounds a, Bounds b, out Bounds intersection)
+    {
+        Vector3 minimum = new Vector3(Mathf.Max(a.min.x, b.min.x), 0f, Mathf.Max(a.min.z, b.min.z));
+        Vector3 maximum = new Vector3(Mathf.Min(a.max.x, b.max.x), 0f, Mathf.Min(a.max.z, b.max.z));
+        intersection = default;
+        if (minimum.x >= maximum.x || minimum.z >= maximum.z)
+            return false;
+        if (TryGetOutwardAxis(minimum.x, maximum.x, out float centerX, out float extentX) &&
+            TryGetOutwardAxis(minimum.z, maximum.z, out float centerZ, out float extentZ))
+        {
+            intersection.center = new Vector3(centerX, 0f, centerZ);
+            intersection.extents = new Vector3(extentX, 0f, extentZ);
+        }
+        else
+        {
+            // Preserve the native conversion for invalid/unrepresentable
+            // overlap so the existing downstream grid check still rejects it.
+            intersection.SetMinMax(minimum, maximum);
+        }
+        return true;
     }
 
     /// <summary>Clips an integer tile before counting or dispatching its candidate cells.</summary>
