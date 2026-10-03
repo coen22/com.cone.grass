@@ -140,6 +140,119 @@ public sealed class GrassMicroVerseGroundBakeTests
         AssertColor(output.GetPixel(32, 32), Color.red);
     }
 
+    [TestCase("pixels", false)]
+    [TestCase("pixels", true)]
+    [TestCase("wrapV", false)]
+    [TestCase("wrapV", true)]
+    [TestCase("format", false)]
+    [TestCase("format", true)]
+    public void EditedLiveOutputIsRebakedOnceWithOrWithoutSessionCache(string change, bool clearCache)
+    {
+        Texture2D output = Refresh();
+        string guid = AssetDatabase.AssetPathToGUID(outputPath);
+        string sourceKey = bridge.GroundBakeSourceKey;
+        string outputKey = bridge.GroundBakeOutputKey;
+        Hash128 sourceHash = AssetDatabase.GetAssetDependencyHash(diffusePath);
+        Color[] sourcePixels = diffuse.GetPixels();
+        uint outputUpdateCount = output.updateCount;
+
+        if (change == "wrapV")
+        {
+            output.wrapModeV = TextureWrapMode.Repeat;
+            EditorUtility.ClearDirty(output);
+            Assert.That(output.wrapModeU, Is.EqualTo(TextureWrapMode.Clamp));
+            Assert.That(output.updateCount, Is.EqualTo(outputUpdateCount), "The sampler edit does not upload pixels.");
+        }
+        else
+        {
+            if (change == "format")
+                Assert.That(output.Reinitialize(64, 64, TextureFormat.RGBA32, true), Is.True);
+            var pixels = new Color[64 * 64];
+            for (int i = 0; i < pixels.Length; i++)
+                pixels[i] = Color.blue;
+            output.SetPixels(pixels);
+            output.Apply(true, false);
+            if (change == "pixels")
+                EditorUtility.SetDirty(output);
+            else
+                EditorUtility.ClearDirty(output);
+        }
+        Assert.That(output.width, Is.EqualTo(64));
+        Assert.That(output.height, Is.EqualTo(64));
+        Assert.That(EditorUtility.IsDirty(output), Is.EqualTo(change == "pixels"));
+        Assert.That(AssetDatabase.GetAssetDependencyHash(outputPath).ToString(), Is.EqualTo(outputKey),
+            "An unsaved live edit must not rely on a changed disk hash for invalidation.");
+        if (clearCache)
+            GrassMicroVerseBridgeUtility.ClearCaches();
+
+        uint revision = bridge.PlacementArea.SourceRevision;
+        int dirtyCount = EditorUtility.GetDirtyCount(output);
+        uint editedUpdateCount = output.updateCount;
+        TextureFormat editedFormat = output.format;
+        TextureWrapMode editedWrapV = output.wrapModeV;
+        Color[] editedPixels = output.GetPixels();
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False,
+            "A changed live output cannot certify the saved ground-albedo contract.");
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(output));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(output));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.SameAs(density));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(sourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(outputKey));
+        Assert.That(EditorUtility.GetDirtyCount(output), Is.EqualTo(dirtyCount));
+        Assert.That(output.updateCount, Is.EqualTo(editedUpdateCount));
+        Assert.That(output.format, Is.EqualTo(editedFormat));
+        Assert.That(output.wrapModeV, Is.EqualTo(editedWrapV));
+        Assert.That(output.GetPixels(), Is.EqualTo(editedPixels), "Preflight must not bake, save or repair the output.");
+        Assert.That(bakeCount, Is.EqualTo(1));
+
+        Assert.That(Refresh(), Is.SameAs(output));
+        Assert.That(bakeCount, Is.EqualTo(2));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+        Assert.That(output.format, Is.EqualTo(TextureFormat.RGBAHalf));
+        Assert.That(output.mipmapCount, Is.EqualTo(7));
+        Assert.That(output.filterMode, Is.EqualTo(FilterMode.Trilinear));
+        Assert.That(output.wrapModeU, Is.EqualTo(TextureWrapMode.Clamp));
+        Assert.That(output.wrapModeV, Is.EqualTo(TextureWrapMode.Clamp));
+        Assert.That(EditorUtility.IsDirty(output), Is.False);
+        AssertColor(output.GetPixel(32, 32), Color.red);
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(sourceKey));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(AssetDatabase.GetAssetDependencyHash(diffusePath), Is.EqualTo(sourceHash));
+        Assert.That(diffuse.GetPixels(), Is.EqualTo(sourcePixels));
+        Assert.That(EditorUtility.IsDirty(diffuse), Is.False);
+
+        revision = bridge.PlacementArea.SourceRevision;
+        for (int i = 0; i < 3; i++)
+            Refresh();
+        Assert.That(bakeCount, Is.EqualTo(2), "A repaired output must settle after one bake.");
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+    }
+
+    [Test]
+    public void OutputUploadCounterInvalidatesTheKnownBakeWithoutADirtyFlag()
+    {
+        Texture2D output = Refresh();
+        string outputKey = bridge.GroundBakeOutputKey;
+        uint updateCount = output.updateCount;
+        int dirtyCount = EditorUtility.GetDirtyCount(output);
+        output.SetPixel(32, 32, Color.blue);
+        output.Apply(true, false);
+        EditorUtility.ClearDirty(output);
+        Assert.That(output.updateCount, Is.Not.EqualTo(updateCount));
+        Assert.That(EditorUtility.GetDirtyCount(output), Is.EqualTo(dirtyCount));
+        Assert.That(EditorUtility.IsDirty(output), Is.False);
+        Assert.That(AssetDatabase.GetAssetDependencyHash(outputPath).ToString(), Is.EqualTo(outputKey));
+        AssertColor(output.GetPixel(32, 32), Color.blue);
+
+        Assert.That(Refresh(), Is.SameAs(output));
+        Assert.That(bakeCount, Is.EqualTo(2), "Reported uploads must not be hidden by an unchanged saved hash.");
+        AssertColor(output.GetPixel(32, 32), Color.red);
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Refresh();
+        Assert.That(bakeCount, Is.EqualTo(2));
+    }
+
     [Test]
     public void LegacyBakeKeyWithoutCaptureShaderFailsPreflightAndRebuildsAfterCacheReset()
     {
