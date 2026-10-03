@@ -213,6 +213,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private bool missingPlacementWarning;
         private bool missingHeightWarning;
         private bool missingForwardWarning;
+        private bool warnedBufferLimit;
         private bool disposed;
 
         public GrassDataPass(LayerMask layer, Material height, ComputeShader shader)
@@ -276,6 +277,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 return;
             }
 
+            if (!ValidateBufferCapacity(owner, camera, SystemInfo.maxGraphicsBufferSize))
+                return;
             PruneCameras();
             if (!cameras.TryGetValue(camera, out CameraState state))
             {
@@ -293,15 +296,6 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             if (meshes == null || meshes.Length != 3 || !meshes[0] || !meshes[1] || !meshes[2])
                 return;
 
-            long positionBytes = (long)owner.Capacity * sizeof(float) * 4;
-            if (positionBytes > SystemInfo.maxGraphicsBufferSize)
-            {
-                if (!state.WarnedBufferLimit)
-                    Debug.LogWarning("The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.", owner);
-                state.WarnedBufferLimit = true;
-                return;
-            }
-            state.WarnedBufferLimit = false;
             bool ownerChanged = state.Owner != owner;
             bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
             bool materialChanged = state.UpdateMaterial(owner,
@@ -534,6 +528,22 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             // Invalid materials cannot use any camera buffers or capture maps.
             // Reject them before allocation or requesting URP depth/motion work.
             ReleaseCameras();
+            return false;
+        }
+
+        private bool ValidateBufferCapacity(InfiniteGrassRenderer owner, Camera camera, long deviceLimit)
+        {
+            if ((long)owner.Capacity * sizeof(float) * 4 <= deviceLimit)
+            {
+                warnedBufferLimit = false;
+                return true;
+            }
+            // Reject before creating a state or refreshing its activity time.
+            // Previously allocated resources cannot serve this configuration.
+            ReleaseCamera(camera);
+            if (!warnedBufferLimit)
+                Debug.LogWarning("The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.", owner);
+            warnedBufferLimit = true;
             return false;
         }
 
@@ -1569,7 +1579,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public InfiniteGrassRenderer Owner;
             public uint OwnerRevision, InventoryRevision;
             public ulong GroundVersion, NextGroundVersion, SurfaceVersion, NextSurfaceVersion;
-            public bool CacheValid, WarnedBudget, WarnedBufferLimit, Disposed;
+            public bool CacheValid, WarnedBudget, Disposed;
             public Vector2 Center;
             public Vector2 CaptureRange;
             public float CaptureExtent, MotionSpacing;

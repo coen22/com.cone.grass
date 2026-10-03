@@ -344,6 +344,230 @@ public sealed class GrassRendererLifecycleTests
         }
     }
 
+    [Test]
+    [Category("GrassGPU")]
+    public void AllocatedCoreResourcesReuseStorageAcrossSettingsAndMeshUpdates()
+    {
+        using (var fixture = new RendererFixture(allocateCoreResources: true))
+        {
+            object state = fixture.CameraStates[0];
+            var first = new CoreResources(state);
+            var second = new CoreResources(fixture.CameraStates[1]);
+            first.AssertDistinctFrom(second);
+            // Simulate counts written by generation. Unchanged resource setup
+            // must preserve the GPU argument data instead of uploading CPU zeros.
+            var arguments = new GraphicsBuffer.IndirectDrawIndexedArgs[3];
+            first.Arguments.GetData(arguments);
+            for (int lod = 0; lod < arguments.Length; lod++)
+                arguments[lod].instanceCount = (uint)(lod + 1);
+            first.Arguments.SetData(arguments);
+            fixture.Owner.lodCapacityWeights = new Vector3(0.2f, 0.3f, 0.5f);
+            fixture.Owner.spacing *= 2f;
+            fixture.Owner.drawDistance += 10f;
+            for (int update = 0; update < 3; update++)
+            {
+                Assert.That(fixture.EnsureCoreResources(0), Is.False);
+                Assert.That(fixture.EnsureCoreResources(1), Is.False);
+            }
+            first.AssertCurrent(state);
+            second.AssertCurrent(fixture.CameraStates[1]);
+            first.Arguments.GetData(arguments);
+            for (int lod = 0; lod < arguments.Length; lod++)
+                Assert.That(arguments[lod].instanceCount, Is.EqualTo((uint)(lod + 1)));
+
+            fixture.Owner.maxBufferCount = 0.02f;
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            GraphicsBuffer grown = (GraphicsBuffer)GetField(state, "Positions");
+            Assert.That(grown, Is.Not.SameAs(first.Positions));
+            Assert.That(grown.count, Is.EqualTo(fixture.Owner.Capacity));
+            Assert.That(first.Positions.IsValid(), Is.False);
+            first.AssertBuffersCurrent(state, includePositions: false);
+            first.AssertTexturesCurrent(state);
+            second.AssertCurrent(fixture.CameraStates[1]);
+
+            fixture.Owner.maxBufferCount = 0.015f;
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            Assert.That(GetField(state, "Positions"), Is.SameAs(grown),
+                "A small capacity reduction should reuse the existing buffer.");
+            fixture.Owner.maxBufferCount = 0.01f;
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            Assert.That(grown.IsValid(), Is.False);
+            var shrunk = new CoreResources(state);
+            Assert.That(shrunk.Positions.count, Is.EqualTo(fixture.Owner.Capacity));
+            first.AssertBuffersCurrent(state, includePositions: false);
+            first.AssertTexturesCurrent(state);
+
+            fixture.Owner.grassMeshSubdivision = fixture.Owner.grassMeshSubdivision == 0 ? 1 : 0;
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            shrunk.AssertCurrent(state);
+            shrunk.Arguments.GetData(arguments);
+            Mesh[] meshes = fixture.Owner.GetLodMeshes();
+            for (int lod = 0; lod < arguments.Length; lod++)
+            {
+                Assert.That(arguments[lod].indexCountPerInstance, Is.EqualTo(meshes[lod].GetIndexCount(0)));
+                Assert.That(arguments[lod].startIndex, Is.EqualTo(meshes[lod].GetIndexStart(0)));
+                Assert.That(arguments[lod].baseVertexIndex, Is.EqualTo(meshes[lod].GetBaseVertex(0)));
+                Assert.That(arguments[lod].instanceCount, Is.Zero);
+            }
+
+            fixture.Owner.captureResolution = 256;
+            Assert.That(fixture.EnsureCoreResources(0), Is.True);
+            shrunk.AssertBuffersCurrent(state);
+            var resized = new CoreResources(state);
+            resized.AssertLive();
+            for (int i = 0; i < resized.Textures.Length; i++)
+            {
+                Assert.That(resized.Textures[i], Is.Not.SameAs(shrunk.Textures[i]));
+                Assert.That(resized.Textures[i].rt.width, Is.EqualTo(256));
+            }
+            // Replaced handles can belong to URP's bounded stale-resource pool;
+            // the feature continues to own only its current per-camera handles.
+            second.AssertCurrent(fixture.CameraStates[1]);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    [Category("GrassGPU")]
+    public void AllocatedCoreResourcesRecoverLostBuffersAndCaptureStorage(bool destroyTexture)
+    {
+        using (var fixture = new RendererFixture(allocateCoreResources: true))
+        {
+            object state = fixture.CameraStates[0];
+            var before = new CoreResources(state);
+            var other = new CoreResources(fixture.CameraStates[1]);
+            before.Positions.Dispose();
+            before.Counts.Dispose();
+            before.Arguments.Dispose();
+            RTHandle lostHeight = before.Textures[0];
+            if (destroyTexture)
+                Object.DestroyImmediate(lostHeight.rt);
+            else
+                lostHeight.rt.Release();
+
+            Assert.That(fixture.EnsureCoreResources(0), Is.True,
+                "Lost capture storage must invalidate cached capture contents.");
+            var recovered = new CoreResources(state);
+            recovered.AssertLive();
+            Assert.That(recovered.Positions, Is.Not.SameAs(before.Positions));
+            Assert.That(recovered.Counts, Is.Not.SameAs(before.Counts));
+            Assert.That(recovered.Arguments, Is.Not.SameAs(before.Arguments));
+            Assert.That(before.Positions.IsValid() || before.Counts.IsValid() || before.Arguments.IsValid(), Is.False);
+            Assert.That(recovered.Textures[0], Is.Not.SameAs(lostHeight));
+            Assert.That(lostHeight.rt, Is.Null);
+            before.AssertTexturesCurrent(state, except: "Height");
+            other.AssertCurrent(fixture.CameraStates[1]);
+            var arguments = new GraphicsBuffer.IndirectDrawIndexedArgs[3];
+            recovered.Arguments.GetData(arguments);
+            Mesh[] meshes = fixture.Owner.GetLodMeshes();
+            for (int lod = 0; lod < arguments.Length; lod++)
+            {
+                Assert.That(arguments[lod].indexCountPerInstance, Is.EqualTo(meshes[lod].GetIndexCount(0)));
+                Assert.That(arguments[lod].instanceCount, Is.Zero);
+            }
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            recovered.AssertCurrent(state);
+        }
+    }
+
+    [Test]
+    [Category("GrassGPU")]
+    public void AllocatedCameraResourcesReleaseSelectivelyAndCanBeRecreatedAfterFeatureInactivity()
+    {
+        using (var fixture = new RendererFixture(allocateCoreResources: true))
+        {
+            var first = new CoreResources(fixture.CameraStates[0]);
+            var second = new CoreResources(fixture.CameraStates[1]);
+            fixture.Pass.GetType().GetMethod("ReleaseCamera").Invoke(fixture.Pass, new object[] { fixture.Cameras[0] });
+            first.AssertReleased();
+            second.AssertCurrent(fixture.CameraStates[1]);
+            Assert.That(fixture.States.Count, Is.EqualTo(1));
+            Assert.That(fixture.Histories.Contains(fixture.Cameras[0]), Is.False);
+
+            fixture.Feature.SetActive(false);
+            InvokePrivate(fixture.Feature, "OnBeginContextRendering", default(ScriptableRenderContext), null);
+            second.AssertReleased();
+            Assert.That(fixture.States.Count, Is.Zero);
+            Assert.That(fixture.Histories.Count, Is.Zero);
+            Assert.That(GetField(fixture.Pass, "disposed"), Is.False);
+
+            fixture.Feature.SetActive(true);
+            InvokePrivate(fixture.Feature, "OnBeginContextRendering", default(ScriptableRenderContext), null);
+            Assert.That(GetField(fixture.Feature, "grassPass"), Is.SameAs(fixture.Pass));
+            // Model the next supported camera's state registration, then execute
+            // the real allocator. This verifies recreation, not a rendered frame.
+            fixture.RecreateCameraState(0);
+            Assert.That(fixture.EnsureCoreResources(0), Is.True);
+            var recreated = new CoreResources(fixture.CameraStates[0]);
+            recreated.AssertLive();
+            recreated.AssertDistinctFrom(first);
+            recreated.AssertDistinctFrom(second);
+            Assert.That(fixture.EnsureCoreResources(0), Is.False);
+            recreated.AssertCurrent(fixture.CameraStates[0]);
+
+            fixture.Feature.Dispose();
+            recreated.AssertReleased();
+            Assert.That(fixture.States.Count, Is.Zero);
+        }
+    }
+
+    [Test]
+    [Category("GrassGPU")]
+    public void UnsupportedBufferCapacityReleasesPopulatedCameraAndDebouncesWarningsUntilRecovery()
+    {
+        using (var fixture = new RendererFixture(allocateCoreResources: true))
+        {
+            var first = new CoreResources(fixture.CameraStates[0]);
+            var second = new CoreResources(fixture.CameraStates[1]);
+            var historyKeys = new GraphicsBuffer[2];
+            var historyWind = new RTHandle[2];
+            for (int camera = 0; camera < 2; camera++)
+            {
+                object history = fixture.Histories[fixture.Cameras[camera]];
+                historyKeys[camera] = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 4, sizeof(uint));
+                SetField(history, "Keys", historyKeys[camera]);
+                object snapshot = ((Array)GetField(history, "Snapshots")).GetValue(0);
+                historyWind[camera] = RTHandles.Alloc(new RenderTexture(4, 4, 0), transferOwnership: true);
+                SetField(snapshot, "Wind", historyWind[camera]);
+                Assert.That(historyWind[camera].rt.Create(), Is.True);
+            }
+            long required = (long)fixture.Owner.Capacity * sizeof(float) * 4;
+            const string warning = "The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.";
+            LogAssert.Expect(LogType.Warning, warning);
+            Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
+                fixture.Cameras[0], required - 1), Is.False);
+            first.AssertReleased();
+            Assert.That(fixture.States.Contains(fixture.Cameras[0]), Is.False);
+            Assert.That(fixture.Histories.Contains(fixture.Cameras[0]), Is.False);
+            Assert.That(historyKeys[0].IsValid(), Is.False);
+            Assert.That(historyWind[0].rt, Is.Null);
+            Assert.That(historyKeys[1].IsValid() && historyWind[1].rt.IsCreated(), Is.True);
+            second.AssertCurrent(fixture.CameraStates[1]);
+            for (int attempt = 0; attempt < 3; attempt++)
+                Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
+                    fixture.Cameras[0], required - 1), Is.False);
+            Assert.That(fixture.States.Count, Is.EqualTo(1),
+                "Repeated unsupported renders must not recreate the rejected camera's state.");
+            LogAssert.NoUnexpectedReceived();
+
+            Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
+                fixture.Cameras[0], required), Is.True, "A buffer exactly at the device limit is supported.");
+            fixture.RecreateCameraState(0);
+            Assert.That(fixture.EnsureCoreResources(0), Is.True);
+            var recovered = new CoreResources(fixture.CameraStates[0]);
+            recovered.AssertLive();
+            LogAssert.Expect(LogType.Warning, warning);
+            Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
+                fixture.Cameras[1], required - 1), Is.False);
+            second.AssertReleased();
+            Assert.That(historyKeys[1].IsValid(), Is.False);
+            Assert.That(historyWind[1].rt, Is.Null);
+            recovered.AssertCurrent(fixture.CameraStates[0]);
+            Assert.That(fixture.States.Count, Is.EqualTo(1));
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public void UnavailableGrassInputsReleaseEveryCameraWithoutWaitingForIdleTimeout(bool missingMaterial)
@@ -840,6 +1064,82 @@ public sealed class GrassRendererLifecycleTests
     private static void SetField(object owner, string name, object value) =>
         owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).SetValue(owner, value);
 
+    private sealed class CoreResources
+    {
+        private static readonly string[] TextureFields = { "Height", "HeightDepth", "Density", "Mask", "Color", "Slope", "Ground" };
+        public readonly GraphicsBuffer Positions, Counts, Arguments;
+        public readonly RTHandle[] Textures = new RTHandle[TextureFields.Length];
+        private readonly RenderTexture[] storage = new RenderTexture[TextureFields.Length];
+
+        public CoreResources(object state)
+        {
+            Positions = (GraphicsBuffer)GetField(state, "Positions");
+            Counts = (GraphicsBuffer)GetField(state, "Counts");
+            Arguments = (GraphicsBuffer)GetField(state, "Arguments");
+            for (int i = 0; i < Textures.Length; i++)
+            {
+                Textures[i] = (RTHandle)GetField(state, TextureFields[i]);
+                storage[i] = Textures[i].rt;
+            }
+            AssertLive();
+        }
+
+        public void AssertLive()
+        {
+            Assert.That(Positions.IsValid() && Counts.IsValid() && Arguments.IsValid(), Is.True);
+            foreach (RTHandle texture in Textures)
+                Assert.That(texture.rt != null && texture.rt.IsCreated(), Is.True);
+        }
+
+        public void AssertCurrent(object state)
+        {
+            AssertLive();
+            AssertBuffersCurrent(state);
+            AssertTexturesCurrent(state);
+        }
+
+        public void AssertBuffersCurrent(object state, bool includePositions = true)
+        {
+            if (includePositions)
+                Assert.That(GetField(state, "Positions"), Is.SameAs(Positions));
+            Assert.That(GetField(state, "Counts"), Is.SameAs(Counts));
+            Assert.That(GetField(state, "Arguments"), Is.SameAs(Arguments));
+        }
+
+        public void AssertTexturesCurrent(object state, string except = null)
+        {
+            for (int i = 0; i < Textures.Length; i++)
+                if (TextureFields[i] != except)
+                {
+                    Assert.That(GetField(state, TextureFields[i]), Is.SameAs(Textures[i]));
+                    Assert.That(Textures[i].rt, Is.SameAs(storage[i]));
+                    Assert.That(storage[i].IsCreated(), Is.True);
+                }
+        }
+
+        public void AssertDistinctFrom(CoreResources other)
+        {
+            Assert.That(Positions, Is.Not.SameAs(other.Positions));
+            Assert.That(Counts, Is.Not.SameAs(other.Counts));
+            Assert.That(Arguments, Is.Not.SameAs(other.Arguments));
+            for (int i = 0; i < Textures.Length; i++)
+            {
+                Assert.That(Textures[i], Is.Not.SameAs(other.Textures[i]));
+                Assert.That(storage[i], Is.Not.SameAs(other.storage[i]));
+            }
+        }
+
+        public void AssertReleased()
+        {
+            Assert.That(Positions.IsValid() || Counts.IsValid() || Arguments.IsValid(), Is.False);
+            for (int i = 0; i < Textures.Length; i++)
+            {
+                Assert.That(Textures[i].rt, Is.Null);
+                Assert.That(!storage[i] || !storage[i].IsCreated(), Is.True);
+            }
+        }
+    }
+
     private sealed class DispatchFixture : IDisposable
     {
         public readonly object State;
@@ -945,8 +1245,10 @@ public sealed class GrassRendererLifecycleTests
         private readonly InfiniteGrassRenderer previous;
         private readonly bool previousEnabled;
 
-        public RendererFixture(int surfaceLayerMask = 0)
+        public RendererFixture(int surfaceLayerMask = 0, bool allocateCoreResources = false)
         {
+            if (allocateCoreResources)
+                RequireCoreGraphicsSupport();
             previous = InfiniteGrassRenderer.Instance;
             previousEnabled = previous && previous.enabled;
             if (previous)
@@ -955,6 +1257,11 @@ public sealed class GrassRendererLifecycleTests
             {
                 Owner = new GameObject("Grass renderer lifetime settings").AddComponent<InfiniteGrassRenderer>();
                 Assert.That(Owner.IsReadyForRendering, Is.True);
+                if (allocateCoreResources)
+                {
+                    Owner.maxBufferCount = 0.01f;
+                    Owner.captureResolution = 128;
+                }
                 Feature = ScriptableObject.CreateInstance<GrassDataRendererFeature>();
                 SetField(Feature, "heightMapLayer", (LayerMask)surfaceLayerMask);
                 Feature.Create();
@@ -970,6 +1277,8 @@ public sealed class GrassRendererLifecycleTests
                     SetField(CameraStates[i], "LastUsedTime", Time.realtimeSinceStartupAsDouble);
                     States.Add(Cameras[i], CameraStates[i]);
                     Histories.Add(Cameras[i], Activator.CreateInstance(historyType, true));
+                    if (allocateCoreResources)
+                        Assert.That(EnsureCoreResources(i), Is.True);
                 }
             }
             catch
@@ -977,6 +1286,36 @@ public sealed class GrassRendererLifecycleTests
                 Dispose();
                 throw;
             }
+        }
+
+        public bool EnsureCoreResources(int cameraIndex) => (bool)CameraStates[cameraIndex].GetType()
+            .GetMethod("EnsureResources").Invoke(CameraStates[cameraIndex],
+                new object[] { Owner, Owner.GetLodMeshes(), GraphicsBuffer.IndirectDrawIndexedArgs.size });
+
+        public void RecreateCameraState(int cameraIndex)
+        {
+            Assert.That(States.Contains(Cameras[cameraIndex]), Is.False);
+            Type stateType = Pass.GetType().GetNestedType("CameraState", BindingFlags.NonPublic);
+            CameraStates[cameraIndex] = Activator.CreateInstance(stateType, new object[] { Cameras[cameraIndex] });
+            SetField(CameraStates[cameraIndex], "LastUsedTime", Time.realtimeSinceStartupAsDouble);
+            States.Add(Cameras[cameraIndex], CameraStates[cameraIndex]);
+        }
+
+        private static void RequireCoreGraphicsSupport()
+        {
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !SystemInfo.supportsComputeShaders ||
+                !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer ||
+                SystemInfo.maxTextureSize < 256 || SystemInfo.maxGraphicsBufferSize < 20000L * 16)
+                Assert.Ignore("Core grass resource tests require compute, indirect buffers and the bounded test allocation sizes.");
+            if (!(RenderPipelineManager.currentPipeline is UniversalRenderPipeline))
+                Assert.Ignore("Core grass resource tests require an initialized URP instance and its RTHandle pool.");
+            foreach (GraphicsFormat format in new[]
+            {
+                GraphicsFormat.R32G32_SFloat, GraphicsFormat.D32_SFloat, GraphicsFormat.R8_UNorm,
+                GraphicsFormat.R16G16B16A16_SFloat, GraphicsFormat.R8G8B8A8_UNorm
+            })
+                if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render))
+                    Assert.Ignore("Core grass resource tests require the package's default capture render formats.");
         }
 
         public void Dispose()
