@@ -26,6 +26,18 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             // Opaque depth and lighting are available; grass still precedes transparents.
             renderPassEvent = RenderPassEvent.BeforeRenderingTransparents
         };
+        RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
+        RenderPipelineManager.beginContextRendering += OnBeginContextRendering;
+    }
+
+    private void OnBeginContextRendering(ScriptableRenderContext context, List<Camera> cameras)
+    {
+        // URP skips AddRenderPasses on inactive features and renderers unused by
+        // the current cameras. Their GPU caches still need a cleanup path.
+        if (!isActive)
+            grassPass?.ReleaseCameras();
+        else
+            grassPass?.PruneCameras();
     }
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
@@ -68,9 +80,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
     protected override void Dispose(bool disposing)
     {
+        RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
         grassPass?.Dispose();
         grassPass = null;
     }
+
+    private void OnDisable() => Dispose(true);
 
     private static class Id
     {
@@ -147,6 +162,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int PlacementTint = Shader.PropertyToID("_PlacementGroundTint");
         public static readonly int PlacementGroundStrength = Shader.PropertyToID("_PlacementGroundStrength");
         public static readonly int PlacementLayer = Shader.PropertyToID("_PlacementGroundLayerTexture");
+        public static readonly int PlacementLayerSampler = Shader.PropertyToID("_PlacementGroundLayerSamplerTexture");
         public static readonly int PlacementHasLayer = Shader.PropertyToID("_PlacementHasGroundLayer");
         public static readonly int PlacementLayerUV = Shader.PropertyToID("_PlacementGroundLayerUV");
         public static readonly int PlacementRemapMin = Shader.PropertyToID("_PlacementGroundRemapMin");
@@ -442,9 +458,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 return;
             }
 
-            Texture windTexture = state.BladeMaterial.GetTexture(Id.Wind);
-            if (!windTexture || windTexture.dimension != TextureDimension.Tex2D)
-                windTexture = Texture2D.grayTexture;
+            Texture windTexture = ResolveWindTexture(state.BladeMaterial);
             TextureHandle wind = ImportTexture(graph, state, windTexture);
             state.SetDrawProperties(center, distanceLimit, capturePadding, windTexture,
                 frameData.Get<UniversalShadowData>().mainLightShadowCascadesCount);
@@ -940,6 +954,17 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             return count;
         }
 
+        private static Texture ResolveWindTexture(Material material)
+        {
+            Texture texture = material.GetTexture(Id.Wind);
+            // Released RenderTextures remain live Unity objects. Sampling one
+            // would recreate storage with undefined contents; its producer must
+            // restore the wind map before grass can use it again.
+            return texture && texture.dimension == TextureDimension.Tex2D &&
+                (!(texture is RenderTexture renderTexture) || renderTexture.IsCreated())
+                ? texture : Texture2D.grayTexture;
+        }
+
         private static void AddCaptureTexture(Texture texture, Texture[] textures, ref int count)
         {
             if (!texture)
@@ -996,7 +1021,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     if (source.GroundColorTexture)
                         builder.UseTexture(ImportTexture(graph, state, source.GroundColorTexture), AccessFlags.Read);
                     if (source.GroundLayerTexture)
+                    {
                         builder.UseTexture(ImportTexture(graph, state, source.GroundLayerTexture), AccessFlags.Read);
+                        Texture samplerTexture = ResolveGroundLayerSamplerTexture(source);
+                        if (samplerTexture != source.GroundLayerTexture)
+                            builder.UseTexture(ImportTexture(graph, state, samplerTexture), AccessFlags.Read);
+                    }
                 }
                 builder.SetRenderAttachment(target, 0, AccessFlags.Write);
                 builder.AllowGlobalStateModification(true);
@@ -1024,6 +1054,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         properties.SetColor(Id.PlacementTint, source.GroundTint);
                         properties.SetFloat(Id.PlacementGroundStrength, source.GroundColorStrength);
                         properties.SetTexture(Id.PlacementLayer, source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture);
+                        properties.SetTexture(Id.PlacementLayerSampler, ResolveGroundLayerSamplerTexture(source));
                         properties.SetInteger(Id.PlacementHasLayer, source.GroundLayerTexture ? 1 : 0);
                         properties.SetVector(Id.PlacementLayerUV, source.GroundLayerUV);
                         properties.SetVector(Id.PlacementRemapMin, source.GroundLayerRemapMin);
@@ -1033,6 +1064,10 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 });
             }
         }
+
+        private static Texture ResolveGroundLayerSamplerTexture(GrassPlacementDrawData source) =>
+            source.GroundLayerSamplerTexture ? source.GroundLayerSamplerTexture :
+            source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture;
 
         private void BuildDispatches(RenderGraph graph, CameraState state, InfiniteGrassRenderer owner,
             Bounds bounds, float spacing, bool authored, TextureHandle fallbackDensity)

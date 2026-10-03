@@ -120,6 +120,122 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void UncreatedRenderTextureDoesNotContributeLiveOrCapturedCoverage()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        RenderTexture texture = NewRenderTexture();
+        BindLocalTexture(area, texture);
+        var query = new Bounds(Vector3.zero, Vector3.one);
+
+        Assert.That(texture.IsCreated(), Is.False);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(query), Is.False);
+        var snapshot = new GrassPlacementDrawData
+        {
+            Shape = GrassPlacementShape.Texture,
+            Density = 1f,
+            DensityTexture = texture,
+            WorldBounds = new Bounds(Vector3.zero, Vector3.one * 10f),
+            WorldToMask = Matrix4x4.identity
+        };
+        Assert.That(snapshot.IntersectsCoverage(query), Is.False);
+        Assert.That(texture.IsCreated(), Is.False, "Coverage queries must not allocate a borrowed producer texture.");
+    }
+
+    [Test, Category("GrassGPU")]
+    public void ReleasedDensityTextureStopsCoverageAndInvalidatesAgainWhenItsProducerRecreatesIt()
+    {
+        RequireRenderTextureDevice();
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        RenderTexture texture = NewRenderTexture();
+        Assert.That(texture.Create(), Is.True);
+        BindLocalTexture(area, texture);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        uint densityRevision = area.DensityRevision, groundRevision = area.GroundColorRevision, surfaceRevision = area.SurfaceRevision;
+
+        texture.Release();
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+        Assert.That(original.IntersectsCoverage(original.WorldBounds), Is.False);
+        Assert.That(texture.IsCreated(), Is.False);
+        Assert.That(area.DensityRevision, Is.GreaterThan(densityRevision));
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+        densityRevision = area.DensityRevision;
+        groundRevision = area.GroundColorRevision;
+
+        Assert.That(texture.Create(), Is.True);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.DensityTexture, Is.SameAs(texture));
+        Assert.That(area.DensityRevision, Is.GreaterThan(densityRevision));
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+    }
+
+    [Test, Category("GrassGPU")]
+    public void ReleasedGroundColorTextureUsesFallbackWithoutInvalidatingDensityOrSurface()
+    {
+        RequireRenderTextureDevice();
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        RenderTexture texture = NewRenderTexture();
+        Assert.That(texture.Create(), Is.True);
+        area.SetGroundColorTexture(texture, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Assert.That(original.GroundColorTexture, Is.SameAs(texture));
+        uint densityRevision = area.DensityRevision, groundRevision = area.GroundColorRevision, surfaceRevision = area.SurfaceRevision;
+
+        texture.Release();
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData fallback), Is.True);
+        Assert.That(fallback.GroundColorTexture, Is.Null);
+        Assert.That(area.GroundColorTexture, Is.SameAs(texture), "The producer retains its assigned object.");
+        Assert.That(texture.IsCreated(), Is.False);
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+        Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+        groundRevision = area.GroundColorRevision;
+
+        Assert.That(texture.Create(), Is.True);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.GroundColorTexture, Is.SameAs(texture));
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+        Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+    }
+
+    [Test]
+    public void DestroyedPaintedAssetDoesNotActivateAnExternalTextureUntilTheBindingIsCleared()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        Texture2D external = NewTexture();
+        BindLocalTexture(area, external);
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("densityAsset").objectReferenceValue = density;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Assert.That(original.DensityTexture, Is.SameAs(density.Texture));
+
+        Object.DestroyImmediate(density);
+        Assert.That(area.DensityTexture, Is.Null);
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+        uint revision = area.DensityRevision;
+
+        serialized.Update();
+        serialized.FindProperty("densityAsset").objectReferenceValue = null;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
+        Assert.That(restored.DensityTexture, Is.SameAs(external));
+        Assert.That(area.DensityRevision, Is.GreaterThan(revision),
+            "Deliberately clearing a missing asset binding must invalidate the newly restored external coverage.");
+    }
+
+    [Test]
     public void PaintedOccupancySkipsEmptyRegionsAndRespondsToErase()
     {
         GrassPlacementArea area = NewArea();
@@ -325,6 +441,104 @@ public sealed class GrassPlacementAreaTests
         {
             GrassPlacementArea.SourceChanged -= handler;
         }
+    }
+
+    [Test]
+    public void NativeGroupSamplerChangesInvalidateGroundColorWithoutRecapturingDensityOrSurface()
+    {
+        GrassPlacementArea area = NewGroundSamplerArea(out _, out TerrainLayer[] layers);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Assert.That(original.GroundLayerTexture, Is.SameAs(layers[5].diffuseTexture));
+        Assert.That(original.GroundLayerSamplerTexture, Is.SameAs(layers[4].diffuseTexture));
+        uint density = area.DensityRevision, surface = area.SurfaceRevision;
+        Texture2D sampler = layers[4].diffuseTexture;
+        Action[] edits =
+        {
+            () => sampler.filterMode = FilterMode.Point,
+            () => sampler.wrapModeU = TextureWrapMode.Clamp,
+            () => sampler.wrapModeV = TextureWrapMode.Mirror,
+            () => sampler.mipMapBias = 0.5f,
+            () => sampler.anisoLevel = 3,
+            () => layers[4].diffuseTexture = NewTexture()
+        };
+        string[] names = { "filter", "U wrap", "V wrap", "mip bias", "anisotropy", "sampler source" };
+        for (int index = 0; index < edits.Length; index++)
+        {
+            uint ground = area.GroundColorRevision;
+            edits[index]();
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData changed), Is.True);
+            Assert.That(changed.GroundLayerSamplerTexture, Is.SameAs(layers[4].diffuseTexture), names[index]);
+            Assert.That(area.GroundColorRevision, Is.GreaterThan(ground), names[index]);
+            Assert.That(area.DensityRevision, Is.EqualTo(density), names[index]);
+            Assert.That(area.SurfaceRevision, Is.EqualTo(surface), names[index]);
+        }
+    }
+
+    [Test]
+    public void NotifiedTerrainLayerReorderingRefreshesTheGroupSamplerAndPreservesExplicitFallbacks()
+    {
+        GrassPlacementArea area = NewGroundSamplerArea(out Terrain terrain, out TerrainLayer[] layers);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        uint density = area.DensityRevision, surface = area.SurfaceRevision, ground = area.GroundColorRevision;
+        TerrainLayer first = layers[0];
+        layers[0] = layers[4];
+        layers[4] = first;
+        terrain.terrainData.terrainLayers = layers;
+        area.MarkGroundColorDirty();
+
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData reordered), Is.True);
+        Assert.That(reordered.GroundLayerSamplerTexture, Is.SameAs(first.diffuseTexture));
+        Assert.That(reordered.GroundLayerSamplerTexture, Is.Not.SameAs(original.GroundLayerSamplerTexture));
+        Assert.That(area.GroundColorRevision, Is.GreaterThan(ground));
+        Assert.That(area.DensityRevision, Is.EqualTo(density));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surface));
+
+        first.diffuseTexture = null;
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData missingFirstDiffuse), Is.True);
+        Assert.That(missingFirstDiffuse.GroundLayerSamplerTexture, Is.SameAs(Texture2D.grayTexture),
+            "An associated group keeps the native default sampler when its first diffuse is missing.");
+
+        GrassPlacementArea unassociated = NewArea();
+        ConfigureLocal(unassociated, new Vector2(10f, 10f));
+        unassociated.ConfigureGroundLayer(layers[5]);
+        Assert.That(unassociated.TryGetCaptureData(out GrassPlacementDrawData local), Is.True);
+        Assert.That(local.GroundLayerSamplerTexture, Is.SameAs(layers[5].diffuseTexture));
+    }
+
+    [Test]
+    public void WarmedGroundSamplerCapturesDoNotAllocateTerrainLayerArrays()
+    {
+        GrassPlacementArea area = NewGroundSamplerArea(out _, out _);
+        bool captured = true;
+        for (int index = 0; index < 8; index++)
+            captured &= area.TryGetCaptureData(out _);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 32; index++)
+            captured &= area.TryGetCaptureData(out _);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(captured, Is.True);
+        Assert.That(allocated, Is.Zero,
+            "Repeated capture snapshots must reuse terrain-layer topology until it changes or a producer marks it dirty.");
+    }
+
+    [Test]
+    public void ReadyGroundColorOverrideIgnoresChangesToItsUnusedTerrainGroupSampler()
+    {
+        GrassPlacementArea area = NewGroundSamplerArea(out _, out TerrainLayer[] layers);
+        area.SetGroundColorTexture(NewTexture(), false);
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        uint density = area.DensityRevision, surface = area.SurfaceRevision, ground = area.GroundColorRevision;
+        Texture2D sampler = layers[4].diffuseTexture;
+        sampler.filterMode = FilterMode.Point;
+        sampler.wrapModeU = TextureWrapMode.Clamp;
+        sampler.wrapModeV = TextureWrapMode.Mirror;
+
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.GroundColorRevision, Is.EqualTo(ground),
+            "The color override uses its fixed capture sampler, so the unused TerrainLayer sampler cannot change its pixels.");
+        Assert.That(area.DensityRevision, Is.EqualTo(density));
+        Assert.That(area.SurfaceRevision, Is.EqualTo(surface));
     }
 
     [Test]
@@ -537,6 +751,131 @@ public sealed class GrassPlacementAreaTests
         Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void HiddenExplicitParentRendererStopsCoverageAndPaintingUntilRestored(bool forceOff)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider parent = NewMeshSurface(area);
+        var child = new GameObject("Explicit child collider");
+        sceneObjects.Add(child);
+        child.transform.SetParent(parent.transform, false);
+        BoxCollider surface = child.AddComponent<BoxCollider>();
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Renderer renderer = parent.GetComponent<Renderer>();
+        uint sourceRevision = area.SourceRevision, densityRevision = density.Revision;
+
+        if (forceOff)
+            renderer.forceRenderingOff = true;
+        else
+            renderer.enabled = false;
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+        Assert.That(area.Paint(Vector3.zero, 2f, 1f, 1f, true), Is.False);
+        Assert.That(density.Revision, Is.EqualTo(densityRevision));
+        Assert.That(area.SourceRevision, Is.GreaterThan(sourceRevision));
+        sourceRevision = area.SourceRevision;
+
+        renderer.forceRenderingOff = false;
+        renderer.enabled = true;
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+        Assert.That(area.SourceRevision, Is.GreaterThan(sourceRevision));
+    }
+
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public void MissingOrIndexlessExplicitMeshCannotSupplyCoverage(bool skinned, bool indexless)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        MeshFilter filter = surface.GetComponent<MeshFilter>();
+        Mesh originalMesh = filter.sharedMesh;
+        Material[] originalMaterials = surface.GetComponent<MeshRenderer>().sharedMaterials;
+        SkinnedMeshRenderer skinnedRenderer = null;
+        if (skinned)
+        {
+            Object.DestroyImmediate(surface.GetComponent<MeshRenderer>());
+            skinnedRenderer = surface.gameObject.AddComponent<SkinnedMeshRenderer>();
+            skinnedRenderer.sharedMesh = originalMesh;
+            skinnedRenderer.sharedMaterials = originalMaterials;
+        }
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Mesh unavailable = null;
+        if (indexless)
+        {
+            unavailable = new Mesh { vertices = new[] { Vector3.zero, Vector3.right, Vector3.forward } };
+            assets.Add(unavailable);
+        }
+        if (skinned)
+            skinnedRenderer.sharedMesh = unavailable;
+        else
+            filter.sharedMesh = unavailable;
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+
+        if (skinned)
+            skinnedRenderer.sharedMesh = originalMesh;
+        else
+            filter.sharedMesh = originalMesh;
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+    }
+
+    [Test]
+    public void ExplicitMeshWithoutMaterialSlotsStaysEmptyWhileNullOverrideSlotsRemainUsable()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Renderer renderer = NewMeshSurface(area).GetComponent<Renderer>();
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+
+        renderer.sharedMaterials = Array.Empty<Material>();
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+
+        renderer.sharedMaterials = new Material[1];
+        Assert.That(area.TryGetCaptureData(out _), Is.True,
+            "A material slot is enough because the height capture provides its own override material.");
+        Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+    }
+
+    [Test]
+    public void ExplicitMeshNeedsGeometryInASubmeshThatTheHeightCaptureActuallyRecords()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        Collider surface = NewMeshSurface(area);
+        var mesh = new Mesh
+        {
+            vertices = new[] { Vector3.zero, Vector3.right, Vector3.forward },
+            subMeshCount = 2
+        };
+        assets.Add(mesh);
+        mesh.SetIndices(Array.Empty<int>(), MeshTopology.Triangles, 0);
+        mesh.SetIndices(new[] { 0, 1, 2 }, MeshTopology.Triangles, 1);
+        surface.GetComponent<MeshFilter>().sharedMesh = mesh;
+        Renderer renderer = surface.GetComponent<Renderer>();
+        renderer.sharedMaterials = new Material[1];
+        Assert.That(area.TryGetCaptureData(out _), Is.False,
+            "One material slot records only the empty first submesh, not geometry in the second submesh.");
+        Assert.That(area.IntersectsCoverage(new Bounds(Vector3.zero, Vector3.one)), Is.False);
+
+        renderer.sharedMaterials = new Material[2];
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.IntersectsCoverage(new Bounds(Vector3.zero, Vector3.one)), Is.True);
+    }
+
     [Test]
     public void RemovingTheExplicitMeshRendererDisablesCoverageUntilItsRendererIsRestored()
     {
@@ -548,6 +887,7 @@ public sealed class GrassPlacementAreaTests
         area.SetDensityAsset(density, false);
         Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
 
+        Material[] materials = surface.GetComponent<MeshRenderer>().sharedMaterials;
         Object.DestroyImmediate(surface.GetComponent<MeshRenderer>());
         Assert.That(area.TryGetCaptureData(out _), Is.False);
         Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
@@ -555,7 +895,7 @@ public sealed class GrassPlacementAreaTests
         Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.False);
         Assert.That(density.Revision, Is.EqualTo(revision));
 
-        surface.gameObject.AddComponent<MeshRenderer>();
+        surface.gameObject.AddComponent<MeshRenderer>().sharedMaterials = materials;
         Assert.That(area.TryGetCaptureData(out _), Is.True);
         Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
     }
@@ -866,11 +1206,54 @@ public sealed class GrassPlacementAreaTests
         return gameObject.GetComponent<Terrain>();
     }
 
+    private GrassPlacementArea NewGroundSamplerArea(out Terrain terrain, out TerrainLayer[] layers)
+    {
+        terrain = NewTerrain(new Vector3(-10f, 0f, -10f), new Vector3(20f, 10f, 20f));
+        layers = new TerrainLayer[6];
+        for (int index = 0; index < layers.Length; index++)
+        {
+            Texture2D diffuse = NewTexture();
+            diffuse.filterMode = FilterMode.Bilinear;
+            diffuse.wrapMode = TextureWrapMode.Repeat;
+            diffuse.mipMapBias = 0f;
+            diffuse.anisoLevel = 1;
+            layers[index] = new TerrainLayer { diffuseTexture = diffuse, tileSize = Vector2.one };
+            assets.Add(layers[index]);
+        }
+        terrain.terrainData.terrainLayers = layers;
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f), terrain);
+        area.ConfigureGroundLayer(layers[5]);
+        return area;
+    }
+
     private Texture2D NewTexture()
     {
         var texture = new Texture2D(16, 16, TextureFormat.R8, false, true);
         assets.Add(texture);
         return texture;
+    }
+
+    private RenderTexture NewRenderTexture()
+    {
+        var texture = new RenderTexture(16, 16, 0, RenderTextureFormat.ARGB32);
+        assets.Add(texture);
+        return texture;
+    }
+
+    private static void BindLocalTexture(GrassPlacementArea area, Texture texture)
+    {
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Texture;
+        serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+    }
+
+    private static void RequireRenderTextureDevice()
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
+            !SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGB32))
+            Assert.Ignore("RenderTexture loss/recreation checks require an Editor graphics device.");
     }
 
     private Collider NewMeshSurface(GrassPlacementArea area)

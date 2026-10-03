@@ -53,7 +53,9 @@ Shader "InfiniteGrass/GrassBladeShader"
         {
             Name "GrassForward"
             Tags { "LightMode" = "UniversalForwardOnly" }
-            Cull Back
+            // Wind and curvature can turn a thin blade through the viewing ray,
+            // including the entire far-LOD triangle. Keep either side visible.
+            Cull Off
             ZWrite On
             ZTest LEqual
             Blend Off
@@ -181,6 +183,8 @@ Shader "InfiniteGrass/GrassBladeShader"
                 half alpha = GrassForwardCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 half groundBlend = GrassGroundBlend(input.shapeCoordinates.y, input.groundColor.a);
                 half3 albedo = lerp(input.grassAlbedo, input.groundColor.rgb, groundBlend);
+                // This stylized blade/ground normal is independent of winding.
+                // Flipping it on a bent back face would create a lighting seam.
                 half3 normalWS = SafeNormalize(input.normalWSAndSpecular.xyz);
                 #if defined(_GRASS_GROUND_NORMAL)
                     normalWS = SafeNormalize(lerp(normalWS, input.groundNormal, groundBlend));
@@ -229,7 +233,7 @@ Shader "InfiniteGrass/GrassBladeShader"
         {
             Name "GrassContactDepth"
             Tags { "LightMode" = "GrassContactDepth" }
-            Cull Back
+            Cull Off
             ZWrite On
             ZTest LEqual
             Blend Off
@@ -280,7 +284,7 @@ Shader "InfiniteGrass/GrassBladeShader"
         {
             Name "GrassMotionVectors"
             Tags { "LightMode" = "MotionVectors" }
-            Cull Back
+            Cull Off
             ZWrite On
             ZTest LEqual
             Blend Off

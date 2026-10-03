@@ -1,5 +1,11 @@
 Shader "Hidden/InfiniteGrass/Placement"
 {
+    Properties
+    {
+        // Retain the texture property even when only its sampler is used. URP
+        // shares the first diffuse sampler within each four-layer terrain group.
+        [HideInInspector] _PlacementGroundLayerSamplerTexture ("Terrain layer sampler source", 2D) = "white" {}
+    }
     SubShader
     {
         Tags { "RenderPipeline"="UniversalPipeline" }
@@ -28,6 +34,8 @@ Shader "Hidden/InfiniteGrass/Placement"
         TEXTURE2D(_PlacementDensityTexture);
         TEXTURE2D(_PlacementGroundColorTexture);
         TEXTURE2D(_PlacementGroundLayerTexture);
+        TEXTURE2D(_PlacementGroundLayerSamplerTexture);
+        SAMPLER(sampler_PlacementGroundLayerSamplerTexture);
         TEXTURE2D(_PlacementTerrainHeightmap);
         TEXTURE2D(_PlacementTerrainHoles);
         float4 _PlacementTerrainHeightmap_TexelSize;
@@ -127,7 +135,10 @@ Shader "Hidden/InfiniteGrass/Placement"
                 else if (_PlacementHasGroundLayer != 0)
                 {
                     float2 layerUV = input.positionWS.xz * _PlacementGroundLayerUV.xy + _PlacementGroundLayerUV.zw;
-                    albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundLayerTexture, sampler_LinearRepeat, layerUV).rgb;
+                    // Match native TerrainLit's sampler source, including per-axis
+                    // addressing and filtering, rather than forcing linear repeat.
+                    albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundLayerTexture,
+                        sampler_PlacementGroundLayerSamplerTexture, layerUV).rgb;
                     // URP TerrainLit applies diffuse remap scale (max-min), without adding min.
                     albedo *= _PlacementGroundRemapMax.rgb - _PlacementGroundRemapMin.rgb;
                 }
