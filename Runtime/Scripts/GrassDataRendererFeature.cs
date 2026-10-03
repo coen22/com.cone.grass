@@ -399,6 +399,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             bool recaptureHeight = captureMappingChanged || inventoryChanged || state.SurfaceDirty ||
                 state.SurfaceVersion != state.NextSurfaceVersion || !owner.cacheSurfaceData;
             bool recaptureModifiers = captureMappingChanged || inventoryChanged || owner.updateModifiersEveryFrame;
+            bool recaptureInteraction = recaptureModifiers || state.InteractionRevision != owner.InteractionRevision;
 
             if (recaptureHeight)
             {
@@ -407,11 +408,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             }
             BuildPlacementCapture(graph, state, density, ground, captureVP, authored, groundDirty,
                 captureMappingChanged || state.HadDensitySources != (state.ActiveGroups.Count > 0));
-            if (recaptureModifiers)
+            if (recaptureInteraction)
             {
                 CollectRendererDraws(state, captureBounds, false, true, authored);
-                BuildRendererCapture(graph, state, "Grass Exclusion", state.MaskDraws, mask, default, captureVP, Color.clear);
-                BuildRendererCapture(graph, state, "Grass Color Modifiers", state.ColorDraws, color, default, captureVP, Color.clear);
+                if (recaptureModifiers)
+                {
+                    BuildRendererCapture(graph, state, "Grass Exclusion", state.MaskDraws, mask, default, captureVP, Color.clear);
+                    BuildRendererCapture(graph, state, "Grass Color Modifiers", state.ColorDraws, color, default, captureVP, Color.clear);
+                }
                 BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default, captureVP, Color.clear);
             }
 
@@ -423,6 +427,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.Authored = authored;
             state.OwnerRevision = owner.Revision;
             state.InventoryRevision = inventoryRevision;
+            state.InteractionRevision = owner.InteractionRevision;
             state.SurfaceVersion = state.NextSurfaceVersion;
             state.GroundVersion = state.NextGroundVersion;
             state.SurfaceDirty = false;
@@ -1578,6 +1583,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly Camera Camera;
             public InfiniteGrassRenderer Owner;
             public uint OwnerRevision, InventoryRevision;
+            public uint InteractionRevision;
             public ulong GroundVersion, NextGroundVersion, SurfaceVersion, NextSurfaceVersion;
             public bool CacheValid, WarnedBudget, Disposed;
             public Vector2 Center;

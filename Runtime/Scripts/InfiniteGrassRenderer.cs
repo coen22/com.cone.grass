@@ -77,6 +77,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public uint VisibleGrassCount { get; internal set; }
     public uint OverflowGrassCount { get; internal set; }
     public uint Revision { get; private set; }
+    public uint InteractionRevision { get; private set; }
     public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
     public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
@@ -173,6 +174,12 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public void MarkDirty()
     {
         RefreshGrassData();
+    }
+
+    /// <summary>Refresh only the moving interaction capture, including with a stationary camera.</summary>
+    public void RefreshGrassInteraction()
+    {
+        unchecked { InteractionRevision++; }
     }
 
     public void GetLodCapacity(int[] capacities, int[] offsets)

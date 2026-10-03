@@ -51,6 +51,16 @@ Assigned mesh transforms, bounds, mesh replacement, material-slot count and enab
 
 The shared inventory retains existing inactive modifiers and terrains for later activation. With **Update Modifiers Every Frame** enabled, an activated modifier becomes eligible without another scene search. Terrain activation updates the surface set, and active generated terrains retain their existing support. Legacy cached mesh changes still follow the refresh policy above.
 
+## Collider interaction
+
+Add **Cone > Grass > Collider Interactor** to the actor with its actual enabled collider. Assign the included `GrassInteractor.shader` to **Interaction Shader** so the capture pass remains referenced in player builds. Set **Ground Layers** to the character's real collision mask and **Blade Height** to the grass height used by the scene. This component only queries the body and supporting collider; it does not move either.
+
+The live footprint pushes blades radially and moving contact leaves a bounded spatially sampled trail. **Attack Seconds** controls the initial response and **Recovery Seconds** controls return after departure. Support-local points follow moving ground. Jumping above the blade height stops producing contact; the departed footprint continues recovering. Teleports, clock discontinuities and disable/destroy clear owned state. One generated capture mesh, material and helper are released with the component.
+
+Interaction invalidation refreshes the slope capture even with a stationary camera and **Update Modifiers Every Frame** disabled. Static height, exclusion and ground-color captures keep their caches. The same captured slope texture feeds color, contact depth and optional motion-vector deformation.
+
+The new collider path has mathematical and actual-collider Edit Mode controls. Native rendering, motion quality and per-frame costs remain unverified until the Unity/Alice acceptance packet executes. This `2.0.0-preview.2` prerequisite is tracked by [#46](https://github.com/coen22/com.cone.grass/issues/46) and [Alice integration #927](https://github.com/coen22/com.cone.kinematica/issues/927).
+
 ## MicroVerse spline workflow
 
 Install the **MicroVerse Mask Bridge** sample from Package Manager. The sample adds no mandatory MicroVerse assembly dependency and contains no proprietary MicroVerse code.
