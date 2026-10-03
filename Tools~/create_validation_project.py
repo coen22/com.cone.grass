@@ -9,6 +9,47 @@ import shutil
 from pathlib import Path
 
 
+def remove_owned_path(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def synchronize_templates(source, destination):
+    """Replace owned sources without changing Unity identities of retained assets."""
+    if not source.is_dir():
+        remove_owned_path(destination)
+        remove_owned_path(destination.with_name(destination.name + ".meta"))
+        return
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        remove_owned_path(destination)
+        remove_owned_path(destination.with_name(destination.name + ".meta"))
+    destination.mkdir(parents=True, exist_ok=True)
+    sources = {item.name: item for item in source.iterdir()}
+    for item in destination.iterdir():
+        # Unity creates metadata on import for templates that do not ship it.
+        # Keep that metadata while its file/folder remains in the source tree;
+        # saved scenes and renderer assets refer to the GUID it contains.
+        if item.name in sources or (item.name.endswith(".meta") and item.name[:-5] in sources):
+            continue
+        remove_owned_path(item)
+    # Copy metadata last so it remains authoritative even when an owned path
+    # changes between a file and a folder during template replacement.
+    for name, item in sorted(sources.items(), key=lambda pair: pair[0].endswith(".meta")):
+        target = destination / name
+        if item.is_dir():
+            synchronize_templates(item, target)
+        else:
+            if target.is_symlink():
+                target.unlink()
+            if target.is_dir():
+                remove_owned_path(target)
+                remove_owned_path(target.with_name(target.name + ".meta"))
+            # A source-provided .meta file deliberately replaces the old one.
+            shutil.copy2(item, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--unity", default="6000.6.0f1", help="Complete installed editor version")
@@ -61,16 +102,11 @@ def main():
     (output / "Packages/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (output / "ProjectSettings/ProjectVersion.txt").write_text(f"m_EditorVersion: {args.unity}\n")
     sample = output / "Assets/MicroVerseMaskBridge"
-    if sample.exists():
-        shutil.rmtree(sample)
-    shutil.copytree(root / "Integrations~/MicroVerse", sample)
+    synchronize_templates(root / "Integrations~/MicroVerse", sample)
     for name in ("Editor", "Runtime"):
         source = root / "Tools~/UnityProject" / name
         destination = output / "Assets" / ("Editor" if name == "Editor" else "ValidationRuntime")
-        if destination.exists():
-            shutil.rmtree(destination)
-        if source.is_dir():
-            shutil.copytree(source, destination)
+        synchronize_templates(source, destination)
     print(f"Created {output} for Unity {args.unity}, URP {args.urp}.")
     print("Includes package EditMode tests and synthetic saved-mask bridge tests. Proprietary MicroVerse assemblies are not included.")
     print("GrassValidationBuild.BuildCurrent creates a real grass scene and clean/incremental standalone players; its optional smoke mode writes GPU results and captures.")

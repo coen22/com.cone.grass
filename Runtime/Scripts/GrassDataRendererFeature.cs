@@ -197,7 +197,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private readonly GrassMotionVectors motion = new GrassMotionVectors();
         private readonly List<Renderer> modifierInventory = new List<Renderer>();
         private Renderer[] rendererInventory;
-        private Terrain[] terrainInventory;
+        private readonly List<Terrain> terrainInventory = new List<Terrain>();
         private InfiniteGrassRenderer inventoryOwner;
         private uint inventoryOwnerRevision;
         private uint inventoryRevision;
@@ -331,16 +331,17 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.ModifierRenderers = modifierInventory;
             CollectSources(state, captureBounds, authored);
             CollectSurfaceTerrains(state, captureBounds, authored);
+            Vector2 captureRange = ResolveCaptureHeightRange(owner.captureHeightRange);
             bool captureMappingChanged = allocationChanged || !state.CacheValid ||
                 state.Owner != owner || state.Center != center ||
-                state.CaptureExtent != extent || state.CaptureRange != owner.captureHeightRange ||
+                state.CaptureExtent != extent || state.CaptureRange != captureRange ||
                 state.Authored != authored;
             bool inventoryChanged = state.InventoryRevision != inventoryRevision;
             bool refreshRequested = state.OwnerRevision != owner.Revision;
             bool groundDirty = captureMappingChanged || refreshRequested || state.GroundVersion != state.NextGroundVersion;
 
-            float minHeight = Mathf.Min(FiniteOr(owner.captureHeightRange.x, -100f), FiniteOr(owner.captureHeightRange.y, 1000f));
-            float maxHeight = Mathf.Max(FiniteOr(owner.captureHeightRange.x, -100f), FiniteOr(owner.captureHeightRange.y, 1000f));
+            float minHeight = captureRange.x;
+            float maxHeight = captureRange.y;
             for (int i = 0; i < state.SurfaceTerrains.Count; i++)
             {
                 Terrain terrain = state.SurfaceTerrains[i];
@@ -424,7 +425,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.Owner = owner;
             state.Center = center;
             state.CaptureExtent = extent;
-            state.CaptureRange = owner.captureHeightRange;
+            state.CaptureRange = captureRange;
             state.Authored = authored;
             state.OwnerRevision = owner.Revision;
             state.InventoryRevision = inventoryRevision;
@@ -562,8 +563,17 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             // explicitly request discovery with owner.RefreshGrassData().
             if (!inventoryDirty && inventoryOwner == owner && inventoryOwnerRevision == owner.Revision)
                 return;
-            rendererInventory = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
-            terrainInventory = Terrain.activeTerrains;
+            // Existing sources may be activated after discovery. Keep them in
+            // the shared inventory and apply active/scene eligibility at capture.
+            rendererInventory = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include);
+            terrainInventory.Clear();
+            // Native active terrains can include runtime DontSave components,
+            // which FindObjectsByType omits even when inactive objects are included.
+            Terrain.GetActiveTerrains(terrainInventory);
+            Terrain[] discoveredTerrains = UnityEngine.Object.FindObjectsByType<Terrain>(FindObjectsInactive.Include);
+            for (int i = 0; i < discoveredTerrains.Length; i++)
+                if (!terrainInventory.Contains(discoveredTerrains[i]))
+                    terrainInventory.Add(discoveredTerrains[i]);
             RebuildModifierInventory();
             inventoryOwner = owner;
             inventoryOwnerRevision = owner.Revision;
@@ -621,6 +631,11 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                             (supportingRenderer.TryGetComponent(out MeshFilter filter) ? filter.sharedMesh : null);
                         state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion,
                             supportingMesh ? unchecked((uint)supportingMesh.GetEntityId().GetHashCode()) : 0u);
+                        // Height capture emits one draw per material slot even
+                        // though its override material ignores the slot values.
+                        sharedMaterials.Clear();
+                        supportingRenderer.GetSharedMaterials(sharedMaterials);
+                        state.NextSurfaceVersion = MixVersion(state.NextSurfaceVersion, (uint)sharedMaterials.Count);
                     }
                     else
                         state.HasMeshSurfaceFallback = true;
@@ -675,7 +690,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             }
             if (!authored || state.HasMeshSurfaceFallback)
             {
-                for (int i = 0; terrainInventory != null && i < terrainInventory.Length; i++)
+                for (int i = 0; i < terrainInventory.Count; i++)
                 {
                     Terrain terrain = terrainInventory[i];
                     if (!terrain || !terrain.isActiveAndEnabled || !terrain.terrainData ||
@@ -1378,6 +1393,15 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             {
                 Marshal.FreeHGlobal(memory);
             }
+        }
+
+        private static Vector2 ResolveCaptureHeightRange(Vector2 range)
+        {
+            // Use the rendered range as the cache identity. Raw NaN/Infinity
+            // endpoints never compare equal, despite resolving to finite bounds.
+            float first = FiniteOr(range.x, -100f);
+            float second = FiniteOr(range.y, 1000f);
+            return new Vector2(Mathf.Min(first, second), Mathf.Max(first, second));
         }
 
         private static Matrix4x4 MakeCaptureMatrix(Vector2 center, float extent, float minY, float maxY)

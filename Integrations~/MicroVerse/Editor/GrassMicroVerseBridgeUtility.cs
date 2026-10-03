@@ -248,6 +248,18 @@ public static class GrassMicroVerseBridgeUtility
             texture = null;
             return false;
         }
+        GraphicsFormat format = texture.graphicsFormat;
+        if (format == GraphicsFormat.None || GraphicsFormatUtility.IsAlphaOnlyFormat(format) ||
+            GraphicsFormatUtility.IsIntegerFormat(format) || GraphicsFormatUtility.IsDepthStencilFormat(format) ||
+            texture.format == TextureFormat.Alpha8)
+        {
+            // The placement shader uses ordinary filtered float sampling of .r.
+            // Alpha8 can retain legacy swizzling independently of graphicsFormat;
+            // storing alpha alone does not supply this red-channel contract.
+            message = "Density needs a normalized or floating-point red channel. Use R8 or linear RGBA; alpha-only, integer and depth formats are unsupported.";
+            texture = null;
+            return false;
+        }
         if (bridge.GroundLayer && !HasTerrainLayer(bridge.Terrain, bridge.GroundLayer))
         {
             message = "The selected ground TerrainLayer is absent from this terrain. Apply the matching Texture Stamp and save first.";
@@ -376,9 +388,12 @@ public static class GrassMicroVerseBridgeUtility
         }
         else if (groundColor && !IsSaved(groundColor, out message))
             return false;
-        else if (!groundColor && bridge.GroundLayer && bridge.GroundLayer.diffuseTexture &&
-            !IsSaved(bridge.GroundLayer.diffuseTexture, out message))
-            return false;
+        else if (!groundColor && bridge.GroundLayer && bridge.GroundLayer.diffuseTexture)
+        {
+            if (!IsSaved(bridge.GroundLayer.diffuseTexture, out message) ||
+                !GroundLayerSamplerIsSaved(bridge, out message))
+                return false;
+        }
 
         float strength = GroundStrength(bridge, bridge.GroundLayer, groundColor);
         if (!MatchesPlacement(bridge, density, bridge.GroundLayer, groundColor, strength))
@@ -552,6 +567,28 @@ public static class GrassMicroVerseBridgeUtility
         }
         for (int i = 0; i < data.alphamapTextureCount; i++)
             if (!IsSaved(data.GetAlphamapTexture(i), out message)) return false;
+        message = null;
+        return true;
+    }
+
+    private static bool GroundLayerSamplerIsSaved(GrassMicroVerseBridge bridge, out string message)
+    {
+        // Mirror the core's first matching layer and four-layer group rule using
+        // serialized dependencies only. Calling TryGetCaptureData here would
+        // mutate observations and incorrectly require nonempty grass coverage.
+        TerrainLayer[] layers = bridge.Terrain.terrainData.terrainLayers;
+        for (int index = 0; index < layers.Length; index++)
+        {
+            if (layers[index] != bridge.GroundLayer)
+                continue;
+            TerrainLayer samplerLayer = layers[index / 4 * 4];
+            if (samplerLayer && (!IsSaved(samplerLayer, out message) ||
+                (samplerLayer.diffuseTexture && !IsSaved(samplerLayer.diffuseTexture, out message))))
+                return false;
+            break;
+        }
+        // A missing group-first layer/diffuse uses Unity's built-in gray sampler.
+        // A color override wins before this helper and does not consume it.
         message = null;
         return true;
     }

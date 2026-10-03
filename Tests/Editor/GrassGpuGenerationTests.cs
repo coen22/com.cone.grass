@@ -224,6 +224,71 @@ public sealed class GrassGpuGenerationTests
         }
     }
 
+    [Test]
+    public void AdjacentFractionalOriginTerrainsGenerateASharedEdgeRootOnlyOnce()
+    {
+        shader.SetFloat("_Spacing", 0.1f);
+        shader.SetVector("_CameraPosition", new Vector4(512.1f, 0f, -214f, 0f));
+        Generate(5121, -2141, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[] { 1, 0, 0, 0 }));
+        Vector4 baseline = ReadPositions()[offsets[0]];
+
+        // This seeded root exposed duplicate ownership at X = 0.1f + 512f.
+        // Derive the shared edge from the actual GPU result so multiplication
+        // contraction cannot move the candidate out of the regression case.
+        float leftOrigin = (baseline.x - 512f) + 0.00002f;
+        float sharedEdge = leftOrigin + 512f;
+        Assert.That(sharedEdge, Is.EqualTo(baseline.x));
+        Assert.That((baseline.x - leftOrigin) / 512f, Is.LessThan(1f),
+            "The old normalized-UV test must also claim this edge for the left Terrain.");
+
+        shader.SetInt("_UseTerrain", 1);
+        shader.SetVector("_TerrainSize", new Vector4(512f, 20f, 512f, 0f));
+        // Zero decodes to native height zero on every supported channel packing.
+        shader.SetTexture(generateKernel, "_TerrainHeightmap", exclusion);
+        shader.SetVector("_TerrainOrigin", new Vector4(leftOrigin, 11f, -256f, 0f));
+        Generate(5121, -2141, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[4]), "The left Terrain excludes its upper edge.");
+
+        shader.SetVector("_TerrainOrigin", new Vector4(sharedEdge, 11f, -256f, 0f));
+        // Keep the same counts and grid to exercise consecutive Terrain dispatches.
+        shader.Dispatch(generateKernel, 1, 1, 1);
+        shader.Dispatch(finalizeKernel, 1, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[] { 1, 0, 0, 0 }));
+        AssertArguments(1, 0, 0);
+        Vector4[] roots = ReadPositions();
+        Assert.That(roots[offsets[0]].x, Is.EqualTo(baseline.x));
+        Assert.That(roots[offsets[0]].z, Is.EqualTo(baseline.z));
+        Assert.That(roots[offsets[0]].y, Is.EqualTo(11f).Within(0.0001f));
+        AssertGuards(roots, 0, 1);
+    }
+
+    [Test]
+    public void TerrainInteriorRootSurvivesAUVThatRoundsToTheUpperEdge()
+    {
+        shader.SetFloat("_Spacing", 0.1f);
+        shader.SetVector("_CameraPosition", new Vector4(0f, 0f, -370.5f, 0f));
+        Generate(0, -3705, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[] { 1, 0, 0, 0 }));
+        Vector4 baseline = ReadPositions()[offsets[0]];
+        Assert.That(baseline.x, Is.LessThan(0f).And.GreaterThan(-0.00001f));
+        Assert.That((baseline.x + 512f) / 512f, Is.EqualTo(1f),
+            "The old normalized-UV test must reject a representable point inside this Terrain.");
+
+        shader.SetInt("_UseTerrain", 1);
+        shader.SetVector("_TerrainOrigin", new Vector4(-512f, 11f, -512f, 0f));
+        shader.SetVector("_TerrainSize", new Vector4(512f, 20f, 512f, 0f));
+        shader.SetTexture(generateKernel, "_TerrainHeightmap", exclusion);
+        Generate(0, -3705, 1, 1);
+        Assert.That(ReadCounts(), Is.EqualTo(new uint[] { 1, 0, 0, 0 }));
+        AssertArguments(1, 0, 0);
+        Vector4[] roots = ReadPositions();
+        Assert.That(roots[offsets[0]].x, Is.EqualTo(baseline.x));
+        Assert.That(roots[offsets[0]].z, Is.EqualTo(baseline.z));
+        Assert.That(roots[offsets[0]].y, Is.EqualTo(11f).Within(0.0001f));
+        AssertGuards(roots, 0, 1);
+    }
+
     [TestCase(1f)]
     [TestCase(0.25f)]
     public void FilteringAValidMeshEdgeCannotPullRootsTowardClearedWorldHeight(float valid)

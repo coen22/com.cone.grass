@@ -195,20 +195,30 @@ public sealed class GrassPlacementAreaEditor : Editor
         }
         else
         {
-            Vector2 offset = new Vector2(point.x - lastDab.x, point.z - lastDab.z);
+            Vector3 previousDab = lastDab;
+            if (!TryClipStroke(area, previousDab, point, brushRadius, out Vector3 start, out Vector3 end))
+            {
+                // Keep the cursor's real path while it is outside the map. The
+                // next segment must not reconnect from an old boundary point.
+                lastDab = point;
+                return;
+            }
+            Vector2 offset = new Vector2(end.x - start.x, end.z - start.z);
             float distance = offset.magnitude;
+            lastDab = start;
             if (distance >= spacing)
             {
                 int dabs = Mathf.Min(Mathf.FloorToInt(distance / spacing), 512);
-                Vector3 start = lastDab;
                 float step = distance / spacing > 512f ? distance / dabs : spacing;
                 for (int i = 1; i <= dabs; i++)
                 {
-                    Vector3 dab = Vector3.Lerp(start, point, Mathf.Min(i * step / distance, 1f));
+                    Vector3 dab = Vector3.Lerp(start, end, Mathf.Min(i * step / distance, 1f));
                     changed |= area.Paint(dab, brushRadius, brushStrength, brushHardness, eraseThisDab);
                     lastDab = dab;
                 }
             }
+            if (end != point)
+                lastDab = point;
         }
 
         if (changed)
@@ -217,6 +227,53 @@ public sealed class GrassPlacementAreaEditor : Editor
             RefreshViews();
         }
     }
+
+    private static bool TryClipStroke(GrassPlacementArea area, Vector3 from, Vector3 to, float radius,
+        out Vector3 start, out Vector3 end)
+    {
+        start = from;
+        end = to;
+        Matrix4x4 worldToMask = area.WorldToMask;
+        Vector3 first = worldToMask.MultiplyPoint3x4(from);
+        Vector3 last = worldToMask.MultiplyPoint3x4(to);
+        Vector2 radii = new Vector2(
+            new Vector2(worldToMask.m00, worldToMask.m02).magnitude * radius,
+            new Vector2(worldToMask.m20, worldToMask.m22).magnitude * radius);
+        if (!IsFinite(first) || !IsFinite(last) ||
+            !IsFinite(radii.x) || !IsFinite(radii.y) || radii.x <= 0f || radii.y <= 0f)
+            return false;
+
+        // Use the original map rectangle, including currently empty texels.
+        // Brush overlap reaches beyond it by one radius in each mask axis.
+        float enter = 0f, leave = 1f;
+        if (!ClipStrokeAxis(first.x, last.x - first.x, -radii.x, 1f + radii.x, ref enter, ref leave) ||
+            !ClipStrokeAxis(first.z, last.z - first.z, -radii.y, 1f + radii.y, ref enter, ref leave))
+            return false;
+        start = enter > 0f ? Vector3.Lerp(from, to, enter) : from;
+        end = leave < 1f ? Vector3.Lerp(from, to, leave) : to;
+        return true;
+    }
+
+    private static bool ClipStrokeAxis(float origin, float delta, float minimum, float maximum,
+        ref float enter, ref float leave)
+    {
+        if (delta == 0f)
+            return origin >= minimum && origin <= maximum;
+        float first = (minimum - origin) / delta;
+        float last = (maximum - origin) / delta;
+        if (first > last)
+        {
+            float swap = first;
+            first = last;
+            last = swap;
+        }
+        enter = Mathf.Max(enter, first);
+        leave = Mathf.Min(leave, last);
+        return enter <= leave;
+    }
+
+    private static bool IsFinite(Vector3 value) => IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+    private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
     private void FinishStroke()
     {
@@ -287,6 +344,10 @@ public sealed class GrassPlacementAreaEditor : Editor
 
     private void OnUndoRedo()
     {
+        // History has already moved; release this stroke without collapsing its
+        // old group or letting the next drag paint without a new Undo record.
+        strokeUndoGroup = -1;
+        FinishStroke();
         if (!target)
             return;
         if (Area.DensityAsset)

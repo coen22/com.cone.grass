@@ -184,6 +184,30 @@ public sealed class GrassPopulationSettingsTests
             Object.DestroyImmediate(gameObject);
         }
     }
+
+    [TestCase(1000f, -100f, -100f, 1000f)]
+    [TestCase(float.NaN, float.NaN, -100f, 1000f)]
+    [TestCase(float.NegativeInfinity, float.PositiveInfinity, -100f, 1000f)]
+    [TestCase(5000f, float.NaN, 1000f, 5000f)]
+    [TestCase(float.NaN, -500f, -500f, -100f)]
+    [TestCase(10f, 11f, 10f, 11f)]
+    public void EquivalentCaptureHeightRangesHaveFiniteStableCacheIdentity(float first, float second,
+        float expectedMin, float expectedMax)
+    {
+        Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+        var resolve = (Func<Vector2, Vector2>)passType.GetMethod("ResolveCaptureHeightRange",
+            BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(Func<Vector2, Vector2>));
+        Vector2 requested = new Vector2(first, second);
+        Vector2 cachedRange = resolve(requested);
+
+        Assert.That(cachedRange, Is.EqualTo(new Vector2(expectedMin, expectedMax)));
+        Assert.That(cachedRange == resolve(requested), Is.True,
+            "The next frame must reuse the same mapping after invalid endpoints resolve to defaults.");
+        Assert.That(cachedRange == resolve(new Vector2(expectedMax, expectedMin)), Is.True,
+            "Reversed endpoints describe the same capture volume.");
+        Assert.That(cachedRange != resolve(new Vector2(expectedMin, expectedMax + 1f)), Is.True,
+            "A changed rendered volume must still invalidate the capture.");
+    }
 }
 
 [NonParallelizable]
@@ -331,6 +355,218 @@ public sealed class GrassRendererLifecycleTests
         }
     }
 
+    [Test]
+    public void InitiallyInactiveModifierBecomesDrawableFromTheSameInventory()
+    {
+        using (var fixture = new RendererFixture())
+        {
+            GameObject modifierObject = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            Material material = null;
+            try
+            {
+                modifierObject.SetActive(false);
+                Shader shader = Shader.Find("InfiniteGrass/Modifiers/GrassMaskShader");
+                Assert.That(shader, Is.Not.Null);
+                material = new Material(shader);
+                Renderer renderer = modifierObject.GetComponent<Renderer>();
+                renderer.sharedMaterial = material;
+                InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
+                object inventory = GetField(fixture.Pass, "modifierInventory");
+                Assert.That(((IList)inventory).Contains(renderer), Is.True,
+                    "Initial discovery must retain an existing inactive modifier for later activation.");
+                object state = fixture.CameraStates[0];
+                SetField(state, "ModifierRenderers", inventory);
+                MethodInfo collect = fixture.Pass.GetType().GetMethod("CollectRendererDraws",
+                    BindingFlags.Instance | BindingFlags.NonPublic, null,
+                    new[] { state.GetType(), typeof(Bounds), typeof(bool), typeof(bool), typeof(bool) }, null);
+                object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 20f), false, true, false };
+                IList draws = (IList)GetField(state, "MaskDraws");
+                uint inventoryRevision = (uint)GetField(fixture.Pass, "inventoryRevision");
+                collect.Invoke(fixture.Pass, arguments);
+                Assert.That(ContainsDraw(draws, renderer), Is.False);
+
+                modifierObject.SetActive(true);
+                collect.Invoke(fixture.Pass, arguments);
+                Assert.That(ContainsDraw(draws, renderer), Is.True);
+                Assert.That(GetField(fixture.Pass, "modifierInventory"), Is.SameAs(inventory));
+                Assert.That(GetField(fixture.Pass, "inventoryRevision"), Is.EqualTo(inventoryRevision),
+                    "Activation must be handled by capture eligibility without another scene search.");
+
+                renderer.enabled = false;
+                collect.Invoke(fixture.Pass, arguments);
+                Assert.That(ContainsDraw(draws, renderer), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(modifierObject);
+                Object.DestroyImmediate(material);
+            }
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void InitiallyInactiveTerrainJoinsSurfaceCaptureWithoutInventoryRefresh(bool disabledComponent)
+    {
+        using (var fixture = new RendererFixture(1 << 31))
+        {
+            var terrainObject = new GameObject("Initially inactive grass surface terrain") { layer = 31 };
+            TerrainData data = null;
+            try
+            {
+                terrainObject.SetActive(false);
+                data = new TerrainData { heightmapResolution = 33, size = new Vector3(10f, 2f, 10f) };
+                Terrain terrain = terrainObject.AddComponent<Terrain>();
+                terrain.terrainData = data;
+                terrain.enabled = !disabledComponent;
+                terrainObject.SetActive(disabledComponent);
+                Assert.That(terrain.isActiveAndEnabled, Is.False);
+                InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
+                object inventory = GetField(fixture.Pass, "terrainInventory");
+                Assert.That(((IList)inventory).Contains(terrain), Is.True);
+                object state = fixture.CameraStates[0];
+                object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 40f), false };
+                IList surfaces = (IList)GetField(state, "SurfaceTerrains");
+                uint inventoryRevision = (uint)GetField(fixture.Pass, "inventoryRevision");
+                InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
+                Assert.That(surfaces.Contains(terrain), Is.False);
+
+                terrainObject.SetActive(true);
+                terrain.enabled = true;
+                InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
+                Assert.That(surfaces.Contains(terrain), Is.True);
+                Assert.That(GetField(fixture.Pass, "terrainInventory"), Is.SameAs(inventory));
+                Assert.That(GetField(fixture.Pass, "inventoryRevision"), Is.EqualTo(inventoryRevision));
+
+                terrain.enabled = false;
+                InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
+                Assert.That(surfaces.Contains(terrain), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(terrainObject);
+                Object.DestroyImmediate(data);
+            }
+        }
+    }
+
+    [TestCase(HideFlags.None)]
+    [TestCase(HideFlags.DontSave)]
+    public void ActiveTerrainInventoryPreservesNativeSourcesWithoutDuplicates(HideFlags flags)
+    {
+        using (var fixture = new RendererFixture(1 << 31))
+        {
+            var terrainObject = new GameObject("Native active terrain inventory") { layer = 31 };
+            TerrainData data = null;
+            try
+            {
+                data = new TerrainData { heightmapResolution = 33, size = new Vector3(10f, 2f, 10f) };
+                Terrain terrain = terrainObject.AddComponent<Terrain>();
+                terrain.terrainData = data;
+                terrain.hideFlags = flags;
+                Assert.That(Array.IndexOf(Terrain.activeTerrains, terrain), Is.GreaterThanOrEqualTo(0));
+                if (flags == HideFlags.DontSave)
+                    Assert.That(Array.IndexOf(Object.FindObjectsByType<Terrain>(FindObjectsInactive.Include), terrain),
+                        Is.LessThan(0), "The native active list covers sources normal object discovery excludes.");
+
+                InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
+                IList inventory = (IList)GetField(fixture.Pass, "terrainInventory");
+                int retained = 0;
+                foreach (Terrain source in inventory)
+                    if (source == terrain)
+                        retained++;
+                Assert.That(retained, Is.EqualTo(1));
+                object state = fixture.CameraStates[0];
+                InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", state,
+                    new Bounds(Vector3.zero, Vector3.one * 40f), false);
+                Assert.That(((IList)GetField(state, "SurfaceTerrains")).Contains(terrain), Is.True);
+            }
+            finally
+            {
+                Object.DestroyImmediate(terrainObject);
+                Object.DestroyImmediate(data);
+            }
+        }
+    }
+
+    [Test]
+    public void ExplicitMaterialSlotCountInvalidatesHeightWithUnchangedMeshAndBounds()
+    {
+        using (var fixture = new RendererFixture())
+        {
+            var surfaceObject = new GameObject("Grass surface with two height subsets");
+            var areaObject = new GameObject("Grass area for subset cache");
+            Mesh mesh = null;
+            try
+            {
+                mesh = new Mesh
+                {
+                    vertices = new[]
+                    {
+                        Vector3.zero, Vector3.right, Vector3.forward,
+                        Vector3.up * 2f, Vector3.right + Vector3.up * 2f, Vector3.forward + Vector3.up * 2f
+                    },
+                    subMeshCount = 2
+                };
+                mesh.SetIndices(new[] { 0, 1, 2 }, MeshTopology.Triangles, 0);
+                mesh.SetIndices(new[] { 3, 4, 5 }, MeshTopology.Triangles, 1);
+                surfaceObject.AddComponent<MeshFilter>().sharedMesh = mesh;
+                Renderer renderer = surfaceObject.AddComponent<MeshRenderer>();
+                renderer.sharedMaterials = new Material[1];
+                Collider collider = surfaceObject.AddComponent<BoxCollider>();
+                GrassPlacementArea area = areaObject.AddComponent<GrassPlacementArea>();
+                SetField(area, "paintSurface", collider);
+                area.MarkDirty();
+                Assert.That(area.TryGetCaptureData(out _), Is.True);
+                Bounds bounds = renderer.bounds;
+                uint surfaceRevision = area.SurfaceRevision;
+                object state = fixture.CameraStates[0];
+                object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 20f), true };
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                ulong oneSlot = (ulong)GetField(state, "NextSurfaceVersion");
+
+                renderer.sharedMaterials = new Material[2];
+                Assert.That(area.TryGetCaptureData(out _), Is.True);
+                Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+                Assert.That(renderer.bounds, Is.EqualTo(bounds));
+                Assert.That(surfaceObject.GetComponent<MeshFilter>().sharedMesh, Is.SameAs(mesh));
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                ulong twoSlots = (ulong)GetField(state, "NextSurfaceVersion");
+                Assert.That(twoSlots, Is.Not.EqualTo(oneSlot),
+                    "The second height subset becomes drawable even though source readiness stayed true.");
+
+                renderer.sharedMaterials = new[]
+                {
+                    AssetDatabase.LoadAssetAtPath<Material>("Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat"), null
+                };
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(twoSlots),
+                    "Height capture overrides material values; only the number of slots affects its draw selection.");
+
+                renderer.sharedMaterials = new Material[1];
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(oneSlot));
+            }
+            finally
+            {
+                Object.DestroyImmediate(areaObject);
+                Object.DestroyImmediate(surfaceObject);
+                Object.DestroyImmediate(mesh);
+            }
+        }
+    }
+
+    private static bool ContainsDraw(IList draws, Renderer renderer)
+    {
+        foreach (object draw in draws)
+            if (ReferenceEquals(GetField(draw, "Renderer"), renderer))
+                return true;
+        return false;
+    }
+
+    private static object InvokePrivate(object owner, string name, params object[] arguments) =>
+        owner.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(owner, arguments);
+
     private static object GetField(object owner, string name) =>
         owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(owner);
 
@@ -348,7 +584,7 @@ public sealed class GrassRendererLifecycleTests
         private readonly InfiniteGrassRenderer previous;
         private readonly bool previousEnabled;
 
-        public RendererFixture()
+        public RendererFixture(int surfaceLayerMask = 0)
         {
             previous = InfiniteGrassRenderer.Instance;
             previousEnabled = previous && previous.enabled;
@@ -359,6 +595,7 @@ public sealed class GrassRendererLifecycleTests
                 Owner = new GameObject("Grass renderer lifetime settings").AddComponent<InfiniteGrassRenderer>();
                 Assert.That(Owner.IsReadyForRendering, Is.True);
                 Feature = ScriptableObject.CreateInstance<GrassDataRendererFeature>();
+                SetField(Feature, "heightMapLayer", (LayerMask)surfaceLayerMask);
                 Feature.Create();
                 Pass = GetField(Feature, "grassPass");
                 States = (IDictionary)GetField(Pass, "cameras");

@@ -100,10 +100,15 @@ bool GrassTerrainHeight(float2 positionXZ, out float heightWS)
     if (!all(isfinite(_TerrainSize)) || !all(isfinite(_TerrainOrigin)) || any(_TerrainSize.xz <= 0.0))
         return false;
 
-    float2 terrainUV = (positionXZ - _TerrainOrigin.xz) / _TerrainSize.xz;
-    // Half-open bounds give a root on a shared edge exactly one Terrain owner.
-    if (any(terrainUV < 0.0) || any(terrainUV >= 1.0))
+    // Establish ownership in world space. Normalizing first can round a shared
+    // edge below one (two owners), or an interior point to one (no owner).
+    // Adjacent terrains use the same representable origin + size boundary.
+    float2 terrainMax = _TerrainOrigin.xz + _TerrainSize.xz;
+    if (any(positionXZ < _TerrainOrigin.xz) || any(positionXZ >= terrainMax))
         return false;
+
+    // Ownership is already resolved; clamp rounding at the sampling endpoints.
+    float2 terrainUV = saturate((positionXZ - _TerrainOrigin.xz) / _TerrainSize.xz);
 
     if (_TerrainHasHoles != 0)
     {

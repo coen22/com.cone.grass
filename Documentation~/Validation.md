@@ -58,6 +58,8 @@ python3 Tools~/create_validation_project.py --unity 6000.6.0f1 --urp 17.6.0
 
 It creates `Validation~/Project` with a local package dependency, Unity Test Framework 1.6.0, package test discovery, the generic MicroVerse bridge sample, and an editor bootstrap for a native URP asset. This disposable directory is ignored by Git. Open it in the selected Unity editor and verify that the native URP asset is active and RenderGraph is enabled. The generator refuses to overwrite an unrelated project.
 
+Rerunning the generator updates owned template contents while preserving the existing `.meta` files of retained scripts and folders. Saved scenes and renderer assets therefore keep their script GUID references. Obsolete template assets and their metadata are removed; metadata supplied by a template takes precedence. Generated `ValidationSettings` assets are retained.
+
 1. Record the full editor/package versions and graphics API.
 2. Run all grass EditMode tests. Core tests cover placement, painting, additive scene registration, mesh topology, culling/grid math and contact projection parameters.
 3. Run the `GrassGPU` cases with a graphics device. These execute rounded compute groups, capacity overflow, zero-after-populated reset, perspective/orthographic culling, mixed LOD transitions, the full-density plateau, Terrain height/holes, mesh-boundary height normalization, default shader passes, representative blade variants, motion-history lookup/triangle reconstruction and resource lifetime, regional density uploads and native terrain albedo baking. Motion resource tests also require an initialized URP instance; render a camera after opening the generated project if those tests report that precondition missing.
@@ -161,9 +163,11 @@ Overlay, reflection, preview, and XR cameras are deliberately excluded by the cu
 ## Placement and captures
 
 - New empty painted asset: no grass. Fill, paint, erase, Undo, and Redo restore the expected world coverage.
+- Drag across a small rotated/scaled map from far outside both edges. Brush dabs inside the map should remain dense, and outside-only travel must not alter coverage. Re-enter from a different side and verify the path follows the latest cursor endpoint. Undo during a stroke must release its continuation, preserve Redo, and require a new stroke before painting resumes.
 - Circle/Box: move, rotate around Y, apply nonuniform X/Z scale, and soften edges. Verify all four map corners and that a small spot stays small when assigned a Terrain.
 - External map: linear red-channel density, unreadable texture, missing texture, wrong texture dimension, replaced asset, and resolution change. Uncreated or released density RenderTextures must contribute no coverage without the consumer allocating them; recreate and populate them in the producer, notify unreported writes, then verify coverage returns. Destroy an explicitly assigned density asset while a lower-priority texture is present: coverage must remain absent until the asset binding is deliberately cleared or replaced.
 - Terrain: changed height, holes, different origin/size, negative coordinates, adjacent borders/corners, and multiple tiles.
+- At fractional world origins, inspect adjacent terrain roots exactly on their shared world edge and just inside it. The upper-edge terrain must exclude the shared root while the lower-edge terrain accepts it once. An interior root whose normalized UV rounds to one must remain valid.
 - Mesh surface: assigned paint surface, legacy height layer, partial vertex-color red, missing capture material, and a moved surface followed by Refresh Grass Data. Destroy or deactivate an explicit collider, remove/disable/force off its associated Renderer, or move its object into a preview/unloaded scene; coverage must stop. Empty meshes and meshes whose only indexed submesh has no corresponding material slot must also stop coverage. Explicitly clearing the binding restores the generic fallback. Disabling physics alone may retain the associated visible mesh support.
 - Rotate a stationary camera to reveal previously off-screen parts of the same capture window.
 - Moving color, mask, and slope modifiers work while the camera is stationary. After spawning new modifier renderers or replacing an inventory entry, refresh cached grass data.
@@ -172,6 +176,8 @@ Overlay, reflection, preview, and XR cameras are deliberately excluded by the cu
 - Verify a partial-validity mesh edge above and below Y=0. Filtering against cleared invalid texels must retain the valid surface height while coverage continues to feather.
 - Small painted edits report a small uploaded rectangle, while fill/resize/Undo can upload the complete map. Verify both the regional-copy path and its full-upload fallback.
 - Enable/disable a supporting renderer, replace its mesh, move its transform, and open an authored scene additively. Registration and cached coverage must be correct before the first rendered frame.
+- Change an explicit renderer from one to two material slots while its mesh, bounds and initial indexed submesh remain unchanged. The added height subset must appear after capture invalidation. Changing material values without changing slot count must not invalidate this override-material capture.
+- Begin with an inactive modifier and inactive terrain, populate the shared inventory, then activate them. Per-frame modifier capture and terrain surface discovery must use the retained inventory. Also retain support for an active generated terrain with `HideFlags.DontSave`; inactive objects must not draw before activation.
 
 The projection models one captured mesh height at each XZ position. Ground color is also a shared XZ projection: vertically overlapping surfaces cannot retain different ground colors at identical XZ coordinates. Duplicate XZ roots are treated as ambiguous motion history. Stacked mesh layers and arbitrary vertically overlapping terrain/mesh authoring are outside this preview's validated scope.
 
@@ -191,6 +197,7 @@ The projection models one captured mesh height at each XZ position. Ground color
 - Release the material's borrowed wind RenderTexture. Forward, contact and optional motion must use the same fallback without creating storage or changing the source material. Recreate and populate it in the producer and verify all passes return to that source.
 - Confirm motion history stays within the configured budget: `32 * capacity + 4 * NextPowerOfTwo(2 * capacity)` bytes for roots and hash keys, plus counts and texture snapshots. At two million blades the buffers use 77.04 MiB per active camera; each pair of 1024² RGBAHalf snapshots adds 16 MiB. Test the supported RGBAFloat fallback and device-limit rejection.
 - Confirm normal camera matrices remain unchanged after top-down capture passes.
+- Set capture-height endpoints to reversed or nonfinite values at runtime. Equivalent finite resolved ranges must reuse their cache; a changed resolved range must invalidate it.
 
 ## Blending and aliasing comparisons
 
