@@ -8,6 +8,7 @@ using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 [NonParallelizable]
@@ -172,6 +173,236 @@ public sealed class GrassMotionLifecycleTests
         }
     }
 
+    [TestCase(true, TextureFormat.RGBAFloat, false)]
+    [TestCase(true, TextureFormat.RGBA32, false)]
+    [TestCase(true, TextureFormat.RGBA32, true)]
+    [TestCase(false, TextureFormat.RGBA32, false)]
+    [TestCase(false, TextureFormat.RGBAFloat, false)]
+    public void DeformationSnapshotPreservesSampledValuesWithoutHalfPrecisionLoss(
+        bool wind, TextureFormat sourceFormat, bool srgb)
+    {
+        if (!SystemInfo.SupportsTextureFormat(sourceFormat))
+            Assert.Ignore("The deformation precision regression requires the requested source texture format.");
+        using (var fixture = new HistoryFixture())
+        {
+            var source = new Texture2D(3, 2, sourceFormat, false, !srgb)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapModeU = TextureWrapMode.Repeat,
+                wrapModeV = TextureWrapMode.Clamp
+            };
+            try
+            {
+                if (!SystemInfo.IsFormatSupported(source.graphicsFormat, GraphicsFormatUsage.Sample) ||
+                    !SystemInfo.IsFormatSupported(source.graphicsFormat, GraphicsFormatUsage.Linear))
+                    Assert.Ignore("The source texture must support the same linear sampling used by grass deformation.");
+                // Distinct texels expose shifted/flipped pixel-center copies.
+                // .5002 rounds to .5 in half storage; ordinary UNorm values also
+                // change when unnecessarily stored as half floats.
+                source.SetPixels(new[]
+                {
+                    new Color(0.5002f, 0.8f, 0.1f, 0.7f),
+                    new Color(0.37f, 0.6123f, 0.3f, 0.45f),
+                    new Color(0.8123f, 0.21f, 0.2f, 0.33f),
+                    new Color(0.65f, 0.5002f, 0.5f, 0.8f),
+                    new Color(0.1345f, 0.89f, 0.7f, 0.61f),
+                    new Color(0.78f, 0.3456f, 0.9f, 0.5002f)
+                });
+                source.Apply(false, false);
+                fixture.EnsureAllocation(wind ? source : null, wind ? null : source);
+                RTHandle snapshot = (RTHandle)GetField(fixture.Snapshots.GetValue(0), wind ? "Wind" : "Slope");
+                Assert.That(snapshot.rt.width, Is.EqualTo(source.width));
+                Assert.That(snapshot.rt.height, Is.EqualTo(source.height));
+                Assert.That(snapshot.rt.wrapModeU, Is.EqualTo(source.wrapModeU));
+                Assert.That(snapshot.rt.wrapModeV, Is.EqualTo(source.wrapModeV));
+                Assert.That(snapshot.rt.filterMode, Is.EqualTo(source.filterMode));
+                CopyDeformation(source, snapshot.rt);
+
+                Vector4[] samples = SampleDeformation(source, snapshot.rt);
+                int channels = wind ? 2 : 4;
+                for (int pair = 0; pair < samples.Length / 2; pair++)
+                    for (int channel = 0; channel < channels; channel++)
+                        Assert.That(samples[pair * 2 + 1][channel],
+                            Is.EqualTo(samples[pair * 2][channel]).Within(pair < 6 ? 0.000001f : 0.00001f),
+                            "Snapshot sample " + pair + " channel " + channel +
+                            " must retain the current texture's sampled-space value.");
+
+                // A changed source must diverge from the already captured history.
+                // This rejects aliased inputs, zero results and a blank copy pass.
+                source.SetPixel(0, 0, new Color(0.125f, 0.875f, 0.5f, 0.5f));
+                source.Apply(false, false);
+                Vector4[] changed = SampleDeformation(source, snapshot.rt);
+                Assert.That(Mathf.Abs(changed[0].x - changed[1].x), Is.GreaterThan(0.05f));
+                Assert.That(changed[1].x, Is.EqualTo(samples[1].x).Within(0.000001f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(source);
+            }
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SameTextureFormatChangeInvalidatesLosslessSnapshots(bool wind)
+    {
+        if (!SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm) ||
+            !SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat))
+            Assert.Ignore("The format transition regression requires exact UNorm and float snapshot storage.");
+        using (var fixture = new HistoryFixture())
+        {
+            var source = new RenderTexture(new RenderTextureDescriptor(4, 4)
+            {
+                graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
+                depthBufferBits = 0,
+                msaaSamples = 1,
+                sRGB = false
+            });
+            try
+            {
+                Assert.That(source.Create(), Is.True);
+                fixture.EnsureAllocation(wind ? source : null, wind ? null : source);
+                string field = wind ? "Wind" : "Slope";
+                foreach (object snapshot in fixture.Snapshots)
+                {
+                    Assert.That(((RTHandle)GetField(snapshot, field)).rt.graphicsFormat,
+                        Is.EqualTo(GraphicsFormat.R8G8B8A8_UNorm));
+                    SetField(snapshot, "FrameNumber", 28);
+                }
+                SetField(fixture.History, "RenderedFrame", 28);
+                SetField(fixture.History, "PreviousValid", true);
+
+                source.Release();
+                source.graphicsFormat = GraphicsFormat.R32G32B32A32_SFloat;
+                Assert.That(source.Create(), Is.True);
+                Assert.That(fixture.EnsureAllocation(wind ? source : null, wind ? null : source), Is.True);
+                foreach (object snapshot in fixture.Snapshots)
+                {
+                    Assert.That(((RTHandle)GetField(snapshot, field)).rt.graphicsFormat,
+                        Is.EqualTo(SelectSnapshotFormat(source, wind)));
+                    Assert.That(GetField(snapshot, "FrameNumber"), Is.EqualTo(-1));
+                }
+                Assert.That(GetField(fixture.History, "RenderedFrame"), Is.EqualTo(-1));
+                Assert.That(GetField(fixture.History, "PreviousValid"), Is.False);
+                Assert.That(fixture.EnsureAllocation(wind ? source : null, wind ? null : source), Is.False);
+            }
+            finally
+            {
+                source.Release();
+                Object.DestroyImmediate(source);
+            }
+        }
+    }
+
+    [Test]
+    public void UnsupportedSnapshotFormatsReleaseExistingCameraHistory()
+    {
+        using (var fixture = new HistoryFixture())
+        {
+            SetField(fixture.Renderer, "unormSnapshotsSupported", false);
+            SetField(fixture.Renderer, "rg32SnapshotsSupported", false);
+            SetField(fixture.Renderer, "rgba32SnapshotsSupported", false);
+            GraphicsBuffer[] buffers = fixture.Buffers;
+            RTHandle[] textures = fixture.Textures;
+            LogAssert.Expect(LogType.Warning,
+                "Grass motion history cannot preserve these deformation textures on this device. It requires matching linear RGBA8 UNorm or 32-bit floating-point snapshot formats supporting rendering and linear sampling.");
+            var arguments = new object[] { fixture.Camera, Texture2D.whiteTexture, Texture2D.whiteTexture, null, null };
+            MethodInfo resolve = typeof(GrassMotionVectors).GetMethod("TryGetSnapshotFormats", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(resolve.Invoke(fixture.Renderer, arguments), Is.False);
+            Assert.That(arguments[3], Is.EqualTo(GraphicsFormat.None));
+            Assert.That(arguments[4], Is.EqualTo(GraphicsFormat.None));
+            Assert.That(fixture.Histories.Count, Is.Zero);
+            AssertReleased(buffers, textures);
+            // An unsupported source should not repeat its warning every frame.
+            Assert.That(resolve.Invoke(fixture.Renderer, arguments), Is.False);
+        }
+    }
+
+    private static void CopyDeformation(Texture source, RenderTexture destination)
+    {
+        Shader shader = Resources.Load<Shader>("InfiniteGrassMotionCopy");
+        Assert.That(shader, Is.Not.Null);
+        Assert.That(shader.isSupported, Is.True);
+        var material = new Material(shader);
+        var commands = new CommandBuffer { name = "Grass Deformation Snapshot Regression" };
+        bool previousSRGBWrite = GL.sRGBWrite;
+        RenderTexture previousTarget = RenderTexture.active;
+        try
+        {
+            Assert.That(material.FindPass("CopyDeformation"), Is.EqualTo(0));
+            ShaderUtil.CompilePass(material, 0, true);
+            Assert.That(ShaderUtil.IsPassCompiled(material, 0), Is.True);
+            var properties = new MaterialPropertyBlock();
+            properties.SetTexture("_GrassHistorySource", source);
+            properties.SetVector("_BlitScaleBias", new Vector4(1f, 1f, 0f, 0f));
+            commands.SetRenderTarget(destination);
+            commands.SetViewport(new Rect(0f, 0f, destination.width, destination.height));
+            commands.ClearRenderTarget(false, true, Color.clear);
+            commands.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3, 1, properties);
+            GL.sRGBWrite = false;
+            Graphics.ExecuteCommandBuffer(commands);
+        }
+        finally
+        {
+            GL.sRGBWrite = previousSRGBWrite;
+            RenderTexture.active = previousTarget;
+            commands.Release();
+            Object.DestroyImmediate(material);
+        }
+    }
+
+    private static Vector4[] SampleDeformation(Texture source, Texture history)
+    {
+        ComputeShader resource = Resources.Load<ComputeShader>("GrassMotionHistoryQuery");
+        Assert.That(resource, Is.Not.Null);
+        ComputeShader shader = Object.Instantiate(resource);
+        GraphicsBuffer queries = null, results = null;
+        try
+        {
+            Vector4[] coordinates =
+            {
+                new Vector4(0.5f / 3f, 0.25f, 0f, 0f), new Vector4(1.5f / 3f, 0.25f, 0f, 0f), new Vector4(2.5f / 3f, 0.25f, 0f, 0f),
+                new Vector4(0.5f / 3f, 0.75f, 0f, 0f), new Vector4(1.5f / 3f, 0.75f, 0f, 0f), new Vector4(2.5f / 3f, 0.75f, 0f, 0f),
+                new Vector4(0.35f, 0.4f, 0f, 0f), new Vector4(-0.1f, 1.2f, 0f, 0f), new Vector4(1.1f, -0.2f, 0f, 0f)
+            };
+            queries = new GraphicsBuffer(GraphicsBuffer.Target.Structured, coordinates.Length, sizeof(float) * 4);
+            results = new GraphicsBuffer(GraphicsBuffer.Target.Structured, coordinates.Length * 2, sizeof(float) * 4);
+            queries.SetData(coordinates);
+            int kernel = shader.FindKernel("QueryDeformationSamples");
+            shader.SetInt("_QueryCount", coordinates.Length);
+            shader.SetBuffer(kernel, "_Queries", queries);
+            shader.SetBuffer(kernel, "_Results", results);
+            shader.SetTexture(kernel, "_DeformationSource", source);
+            shader.SetTexture(kernel, "_DeformationHistory", history);
+            shader.Dispatch(kernel, 1, 1, 1);
+            var sampled = new Vector4[coordinates.Length * 2];
+            results.GetData(sampled);
+            return sampled;
+        }
+        finally
+        {
+            queries?.Dispose();
+            results?.Dispose();
+            Object.DestroyImmediate(shader);
+        }
+    }
+
+    private static bool SupportsSnapshotFormat(GraphicsFormat format) =>
+        SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render) &&
+        SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Sample) &&
+        SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Linear);
+
+    private static GraphicsFormat SelectSnapshotFormat(Texture source, bool wind)
+    {
+        var select = (Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
+            .GetMethod("SelectSnapshotFormat", BindingFlags.Static | BindingFlags.NonPublic)
+            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>));
+        return select(source.graphicsFormat, wind,
+            SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm),
+            SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat),
+            SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat));
+    }
+
     private static void AssertReleased(GraphicsBuffer[] buffers, RTHandle[] textures)
     {
         foreach (GraphicsBuffer buffer in buffers)
@@ -193,7 +424,6 @@ public sealed class GrassMotionLifecycleTests
         public readonly IDictionary Histories;
         public readonly object History;
         public readonly Array Snapshots;
-        private readonly GraphicsFormat format;
 
         public HistoryFixture()
         {
@@ -202,12 +432,6 @@ public sealed class GrassMotionLifecycleTests
                 Assert.Ignore("Motion lifetime regression requires actual graphics buffers and render textures.");
             if (!(RenderPipelineManager.currentPipeline is UniversalRenderPipeline))
                 Assert.Ignore("Motion lifetime regression requires an initialized URP instance and its RTHandle pool.");
-            format = GraphicsFormat.R16G16B16A16_SFloat;
-            if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render) ||
-                !SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Sample) ||
-                !SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Linear))
-                Assert.Ignore("Motion lifetime regression requires renderable, sampleable floating-point history textures.");
-
             Camera = new GameObject("Grass motion lifetime test").AddComponent<Camera>();
             try
             {
@@ -225,8 +449,17 @@ public sealed class GrassMotionLifecycleTests
             }
         }
 
-        public bool EnsureAllocation(Texture wind = null) => (bool)History.GetType().GetMethod("EnsureAllocation")
-            .Invoke(History, new object[] { 3, Texture2D.whiteTexture, wind ? wind : Texture2D.whiteTexture, format });
+        public bool EnsureAllocation(Texture wind = null, Texture slope = null)
+        {
+            wind = wind ? wind : Texture2D.whiteTexture;
+            slope = slope ? slope : Texture2D.whiteTexture;
+            GraphicsFormat windFormat = SelectSnapshotFormat(wind, true);
+            GraphicsFormat slopeFormat = SelectSnapshotFormat(slope, false);
+            if (windFormat == GraphicsFormat.None || slopeFormat == GraphicsFormat.None)
+                Assert.Ignore("Motion lifetime regression requires compatible lossless snapshot texture formats.");
+            return (bool)History.GetType().GetMethod("EnsureAllocation")
+                .Invoke(History, new object[] { 3, slope, wind, slopeFormat, windFormat });
+        }
 
         public GraphicsBuffer[] Buffers
         {
@@ -266,6 +499,30 @@ public sealed class GrassMotionLifecycleTests
             if (Camera)
                 Object.DestroyImmediate(Camera.gameObject);
         }
+    }
+}
+
+[NonParallelizable]
+public sealed class GrassMotionSnapshotFormatTests
+{
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, true, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, true, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, false, true, false, GraphicsFormat.R32G32_SFloat)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, false, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, true, true, true, true, GraphicsFormat.R32G32_SFloat)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, false, true, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, true, true, GraphicsFormat.R32G32_SFloat)]
+    [TestCase(GraphicsFormat.R16G16B16A16_SFloat, false, true, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, true, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, false, GraphicsFormat.None)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, false, true, true, false, GraphicsFormat.None)]
+    public void FormatSelectionPreservesEncodingAndRequiredChannelsOrDeclinesHistory(GraphicsFormat source,
+        bool wind, bool unormSupported, bool rg32Supported, bool rgba32Supported, GraphicsFormat expected)
+    {
+        var select = (Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
+            .GetMethod("SelectSnapshotFormat", BindingFlags.Static | BindingFlags.NonPublic)
+            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>));
+        Assert.That(select(source, wind, unormSupported, rg32Supported, rgba32Supported), Is.EqualTo(expected));
     }
 }
 
