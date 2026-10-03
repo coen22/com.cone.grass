@@ -35,6 +35,8 @@ Assign a Terrain or an explicit paint collider to hit the intended surface. The 
 
 For external density maps, use a linear 2D texture with a normalized or floating-point red channel. Alpha-only, integer and depth formats contribute no coverage. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers must create and populate their RenderTextures before use. An uncreated or released density texture contributes no grass. Call `MarkCoverageDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path. Destroying an explicitly assigned density asset keeps coverage absent until that binding is deliberately cleared or replaced.
 
+Density and ground-color captures require an ordinary 2D texture binding. A RenderTexture with `antiAliasing > 1` and `bindTextureMS` enabled contributes no density, or uses the existing layer/tint fallback for ground color. Disable Bind Texture MS or supply a resolved texture from the producer. Automatically resolved MSAA textures remain eligible. Sampling-configuration changes are observed even when a producer releases and recreates the same object between area updates; the area preserves producer-owned storage and assignments.
+
 `SetDensityAsset(null, ...)` clears a missing assigned asset as well as a live binding. Rebinding or disabling an area removes its old density-change subscription even when the asset's native object has already been destroyed. Configuring an external producer explicitly clears that painted override and invalidates the restored coverage immediately.
 
 ### Mesh surfaces and legacy scenes
@@ -117,6 +119,8 @@ Evaluate grass quality with **TAA disabled**. New renderer settings use **Motion
 - A distance range that fades narrow specular highlights.
 - Shared deformation and per-blade density/width coverage for color and contact depth.
 
+Width compensation uses the original-to-expanded width ratio at every positive world scale. An unexpanded blade retains its full density coverage, and a zero-width blade stays invisible even when the pixel minimum expands its geometry. Scaling blade dimensions and an orthographic viewport together preserves this ratio.
+
 Perspective blades face the viewing ray at each blade row, including roots visible behind the camera in world XZ during steep downward views. Orthographic blades keep parallel facing directions. The shared deformation also keeps contact depth and optional previous-frame motion geometry consistent with this orientation.
 
 Blade color, contact depth and optional motion passes render both sides. Wind can reverse a triangle's projected winding at steep camera angles, especially for the one-triangle far LOD; both sides retain the same authored blade normals so the reversal does not introduce a lighting switch. Missing or released wind textures use the existing gray fallback until their producer supplies a ready texture.
@@ -187,7 +191,7 @@ These are structural reductions, **not measured frame-rate claims**. The richer 
 - `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot.
 - `ArgsBuffer` and the synchronous debug `Buffer` fields are removed. The renderer feature owns per-camera resources. Use `VisibleGrassCount` and `OverflowGrassCount` for asynchronous diagnostics.
 - `GetGrassMeshCache()` remains a near-mesh compatibility accessor; `GetLodMeshes()` returns the three shared meshes.
-- Custom capture shaders should use `_GrassCaptureVP` and put their capture `LightMode` tag and name on the actual pass.
+- Custom capture shaders should use `_GrassCaptureVP` and put their capture `LightMode` tag and name on the actual pass. Expose sampled textures as material texture properties so the renderer can declare their RenderGraph dependencies, including renderer-wide and per-material property-block overrides. Textures supplied solely through custom globals require explicit dependency integration.
 - Custom blade shaders need the `GrassForward` pass and `_GrassInstanceOffset`; contact support additionally needs the `GrassContactDepth` contract.
 - Indirect motion support needs the `GrassMotionVectors` pass and the package history/deformation contracts. Updating a custom color pass alone does not provide temporal motion.
 - Main-light and scene ambient-probe SH lighting are the default; the draw explicitly supplies its SH coefficients and does not sample local light probes per grass root. Optional additional-light shading targets Forward+ clustered lighting; ordinary Forward per-object light indices are unavailable to this indirect draw.

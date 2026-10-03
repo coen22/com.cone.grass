@@ -316,7 +316,16 @@ public static class GrassMicroVerseBridgeUtility
         bool valid = TryResolve(bridge, out Texture2D density, out string message, forceInvalidate);
         Texture2D color = valid ? bridge.GroundColorOverride : null;
         if (valid && bridge.BakeTerrainGroundColor)
-            valid = TryRefreshGroundBake(bridge, forceGroundBake, recordUndo, markSceneDirty, out color, out message);
+        {
+            valid = TryRefreshGroundBake(bridge, forceGroundBake, recordUndo, markSceneDirty,
+                out color, out bool baked, out message);
+            // A completed bake invokes synchronous producer observers. They may
+            // regenerate, remove or rename the independently saved density mask.
+            // Commit its current explicit mapping, never the pre-callback wrapper.
+            // Unchanged polls do not cross this boundary or rediscover twice.
+            if (valid && baked)
+                valid = TryResolve(bridge, out density, out message, true);
+        }
 
         // A synchronous bake observer can delete the authoring object. Its
         // saved output survives, but there is no remaining placement to commit.
@@ -417,8 +426,14 @@ public static class GrassMicroVerseBridgeUtility
     }
 
     private static bool TryRefreshGroundBake(GrassMicroVerseBridge bridge, bool forceBake,
-        bool recordUndo, bool markSceneDirty, out Texture2D texture, out string message)
+        bool recordUndo, bool markSceneDirty, out Texture2D texture, out bool baked, out string message)
     {
+        baked = false;
+        Terrain sourceTerrain = bridge.Terrain;
+        TerrainData sourceData = sourceTerrain ? sourceTerrain.terrainData : null;
+        int resolution = bridge.GroundBakeResolution;
+        string configuredPath = bridge.GroundBakeAssetPath;
+        Texture2D configuredOutput = bridge.BakedGroundColor;
         string path = ResolveGroundBakeOutput(bridge, out texture);
         if (string.IsNullOrEmpty(path))
         {
@@ -480,13 +495,27 @@ public static class GrassMicroVerseBridgeUtility
                 message = GroundOutputConflictMessage;
                 return false;
             }
-            if (!TerrainGrassAlbedoBaker.TryBake(bridge.Terrain, bridge.GroundBakeResolution,
+            if (!TerrainGrassAlbedoBaker.TryBake(sourceTerrain, resolution,
                 path, out texture, out message))
                 return false;
+            baked = true;
             if (!bridge || !bridge.PlacementArea)
             {
                 texture = null;
                 message = "The grass bridge or placement area was removed during the ground bake.";
+                return false;
+            }
+            if (!sourceTerrain || !sourceData || sourceTerrain.terrainData != sourceData || bridge.Terrain != sourceTerrain ||
+                !bridge.BakeTerrainGroundColor || bridge.GroundBakeResolution != resolution ||
+                bridge.GroundBakeAssetPath != configuredPath ||
+                !ReferenceEquals(bridge.BakedGroundColor, configuredOutput))
+            {
+                // Keep a callback's new configuration intact. The completed
+                // image belongs to the terrain and output requested earlier;
+                // it cannot certify a new mapping or replace a new record.
+                // Moving the same output asset does not change these fields.
+                texture = null;
+                message = "The terrain or ground-bake configuration changed during the bake. Refresh again to use the current inputs.";
                 return false;
             }
         }

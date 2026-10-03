@@ -191,8 +191,10 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     float originalFullWidth = width * 0.5;
     float minimumFullWidth = max(0.0, shape.ranges.w) * GrassWorldUnitsPerPixel(root.pivot, view);
     float expandedFullWidth = max(originalFullWidth, minimumFullWidth);
-    root.coverage = saturate(positionData.w) *
-        saturate(originalFullWidth / max(expandedFullWidth, 0.00001));
+    // Preserve the ratio at small world scales too. A fixed denominator floor
+    // would thin even an unexpanded blade that projects to several full pixels.
+    float widthCoverage = expandedFullWidth > 0.0 ? originalFullWidth / expandedFullWidth : 0.0;
+    root.coverage = saturate(positionData.w) * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
     root.height = max(0.0, shape.dimensions.y) *
         (1.0 - GrassRandom(root.seed + 2u) * saturate(shape.dimensions.w));
