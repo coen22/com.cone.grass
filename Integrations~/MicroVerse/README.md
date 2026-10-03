@@ -58,6 +58,8 @@ The optional ground bake also uses a source signature, including terrain texture
 
 A synchronous refresh requested from that bridge's own bake or placement-change callback returns `false` without clearing or rebinding the committed placement. The same protection applies to another bridge sharing the output currently being baked. Queue the refresh after the current callback returns. The baker also prevents a nested operation from overwriting an output that is still being saved or reported to its observers.
 
+If a callback deletes or replaces the completed output, refresh fails and retains the configured output path and previous bake records for recovery. A live nonpersistent reference also falls back to that configured path on the next refresh. Moving the same persistent main asset remains valid and updates its saved path. Failed read-only build validation does not repair these bindings.
+
 A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
 
 The bridge treats path casing and Windows-style separators as aliases of the same output asset. Before writing a bake, it also checks loaded scenes for inactive bridge objects and disabled bridges retaining a saved bake, so those outputs cannot be overwritten at another Terrain or resolution. Use separate output assets for separate tiles or resolutions. Unchanged polls do not scan scene hierarchies.
