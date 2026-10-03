@@ -31,6 +31,8 @@ public struct GrassPlacementDrawData
     public Bounds WorldBounds;
     public Terrain Terrain;
     public Vector4 TerrainRect;
+    /// <summary>CPU occupancy for painted maps; querying it never requests a texture upload.</summary>
+    public GrassDensityAsset DensityAsset;
     public Texture DensityTexture;
     public GrassPlacementShape Shape;
     public float Density;
@@ -44,6 +46,51 @@ public struct GrassPlacementDrawData
     public Vector4 GroundLayerUV;
     public Vector4 GroundLayerRemapMin;
     public Vector4 GroundLayerRemapMax;
+
+    /// <summary>
+    /// Conservative XZ occupancy using this capture's bounds and mapping. Painted pixel data
+    /// remains owned by DensityAsset; discard the snapshot when its source revision changes.
+    /// </summary>
+    public readonly bool IntersectsCoverage(Bounds worldBounds)
+    {
+        return Density > 0f && IntersectsCoverage(worldBounds, WorldBounds, WorldToMask,
+            Shape, DensityAsset, DensityTexture);
+    }
+
+    internal static bool IntersectsCoverage(Bounds worldBounds, Bounds sourceBounds,
+        Matrix4x4 worldToMask, GrassPlacementShape shape, GrassDensityAsset densityAsset, Texture densityTexture)
+    {
+        Vector3 queryMin = worldBounds.min, queryMax = worldBounds.max;
+        Vector3 sourceMin = sourceBounds.min, sourceMax = sourceBounds.max;
+        if (sourceMax.x < queryMin.x || sourceMin.x > queryMax.x ||
+            sourceMax.z < queryMin.z || sourceMin.z > queryMax.z)
+            return false;
+        if (shape == GrassPlacementShape.Texture && !densityAsset)
+            return densityTexture && densityTexture.dimension == TextureDimension.Tex2D;
+
+        Vector3 a = worldToMask.MultiplyPoint3x4(new Vector3(queryMin.x, 0f, queryMin.z));
+        Vector3 b = worldToMask.MultiplyPoint3x4(new Vector3(queryMax.x, 0f, queryMin.z));
+        Vector3 c = worldToMask.MultiplyPoint3x4(new Vector3(queryMin.x, 0f, queryMax.z));
+        Vector3 d = worldToMask.MultiplyPoint3x4(new Vector3(queryMax.x, 0f, queryMax.z));
+        float xMin = Mathf.Min(Mathf.Min(a.x, b.x), Mathf.Min(c.x, d.x));
+        float xMax = Mathf.Max(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x));
+        float yMin = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
+        float yMax = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
+        if (shape == GrassPlacementShape.Texture)
+            return densityAsset.HasCoverageIn(Rect.MinMaxRect(xMin, yMin, xMax, yMax));
+        if (shape == GrassPlacementShape.Circle)
+        {
+            // The transformed query's bounding rectangle contains its full footprint.
+            // Reject only when even that rectangle misses the unit circle; keeping
+            // equality and the full radius preserves the caller's filter margin.
+            float nearestX = Mathf.Clamp(0.5f, xMin, xMax) - 0.5f;
+            float nearestY = Mathf.Clamp(0.5f, yMin, yMax) - 0.5f;
+            return nearestX * nearestX + nearestY * nearestY <= 0.25f;
+        }
+        // World X/Z overlap was checked above. These local axes complete the
+        // conservative rectangle overlap check for a rotated or narrow box.
+        return xMax >= 0f && xMin <= 1f && yMax >= 0f && yMin <= 1f;
+    }
 }
 
 /// <summary>
@@ -248,6 +295,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
             WorldBounds = bounds,
             Terrain = terrain,
             TerrainRect = terrainRect,
+            DensityAsset = densityAsset,
             DensityTexture = coverage,
             Shape = shape,
             Density = density,
@@ -267,8 +315,9 @@ public sealed class GrassPlacementArea : MonoBehaviour
     }
 
     /// <summary>
-    /// Conservative XZ occupancy. External GPU textures use their whole area; painted assets
-    /// can omit completely empty regions without synchronous texture readback.
+    /// Conservative XZ occupancy for a live source. External GPU textures use their authored
+    /// coverage bounds; painted assets omit empty regions without synchronous texture readback.
+    /// Use the captured draw data for repeated tile queries in the same capture.
     /// </summary>
     public bool IntersectsCoverage(Bounds worldBounds)
     {
@@ -276,25 +325,10 @@ public sealed class GrassPlacementArea : MonoBehaviour
             !TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out Bounds frameBounds) ||
             frameBounds.max.x < worldBounds.min.x || frameBounds.min.x > worldBounds.max.x ||
             frameBounds.max.z < worldBounds.min.z || frameBounds.min.z > worldBounds.max.z ||
-            !TryGetCoverageExtent(localToWorld, frameBounds, out _, out Bounds ownBounds) ||
-            ownBounds.max.x < worldBounds.min.x || ownBounds.min.x > worldBounds.max.x ||
-            ownBounds.max.z < worldBounds.min.z || ownBounds.min.z > worldBounds.max.z)
+            !TryGetCoverageExtent(localToWorld, frameBounds, out _, out Bounds ownBounds))
             return false;
-
-        if (shape != GrassPlacementShape.Texture)
-            return true;
-        if (!densityAsset)
-            return densityTexture && densityTexture.dimension == TextureDimension.Tex2D;
-
-        Vector3 a = worldToMask.MultiplyPoint3x4(new Vector3(worldBounds.min.x, 0f, worldBounds.min.z));
-        Vector3 b = worldToMask.MultiplyPoint3x4(new Vector3(worldBounds.max.x, 0f, worldBounds.min.z));
-        Vector3 c = worldToMask.MultiplyPoint3x4(new Vector3(worldBounds.min.x, 0f, worldBounds.max.z));
-        Vector3 d = worldToMask.MultiplyPoint3x4(new Vector3(worldBounds.max.x, 0f, worldBounds.max.z));
-        float xMin = Mathf.Min(Mathf.Min(a.x, b.x), Mathf.Min(c.x, d.x));
-        float xMax = Mathf.Max(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x));
-        float yMin = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
-        float yMax = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
-        return densityAsset.HasCoverageIn(Rect.MinMaxRect(xMin, yMin, xMax, yMax));
+        return GrassPlacementDrawData.IntersectsCoverage(worldBounds, ownBounds, worldToMask,
+            shape, densityAsset, densityTexture);
     }
 
     public bool Paint(Vector3 worldPosition, float radius, float strength, float hardness, bool erase)
@@ -574,9 +608,20 @@ public sealed class GrassPlacementArea : MonoBehaviour
         Vector3 frameSize = new Vector3(Mathf.Abs(transform.lossyScale.x) * size.x, 1f,
             Mathf.Abs(transform.lossyScale.z) * size.y);
 
-        if ((!ReferenceEquals(terrain, null) && !terrain) ||
-            (terrain && (!terrain.terrainData || !terrain.isActiveAndEnabled)))
-            return false;
+        if (!ReferenceEquals(terrain, null))
+        {
+            if (!terrain || !terrain.terrainData || !terrain.isActiveAndEnabled)
+                return false;
+            var supportingScene = terrain.gameObject.scene;
+            if (!supportingScene.IsValid() || !supportingScene.isLoaded)
+                return false;
+#if UNITY_EDITOR
+            // The area may live in a normal scene while an assigned terrain is moved
+            // into a preview scene. Its geometry must not leak into the main scene.
+            if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(supportingScene))
+                return false;
+#endif
+        }
         if (useTerrainBounds)
         {
             if (!terrain || !terrain.terrainData)

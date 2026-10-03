@@ -25,7 +25,7 @@ def main():
     marker = output / ".grass-validation-project"
     if output == root or output in root.parents:
         parser.error("output cannot replace the repository or its parent")
-    for source in (root / "Integrations~/MicroVerse", root / "Tools~/UnityProject/Editor"):
+    for source in (root / "Integrations~/MicroVerse", root / "Tools~/UnityProject"):
         source = source.resolve()
         if output == source or source in output.parents:
             parser.error("output cannot be inside a copied source directory")
@@ -52,6 +52,9 @@ def main():
             "com.unity.modules.physics": "1.0.0",
             "com.unity.modules.terrain": "1.0.0",
             "com.unity.modules.terrainphysics": "1.0.0",
+            "com.unity.modules.jsonserialize": "1.0.0",
+            "com.unity.modules.screencapture": "1.0.0",
+            "com.unity.modules.imageconversion": "1.0.0",
         },
         "testables": [package["name"]],
     }
@@ -61,9 +64,16 @@ def main():
     if sample.exists():
         shutil.rmtree(sample)
     shutil.copytree(root / "Integrations~/MicroVerse", sample)
-    shutil.copytree(root / "Tools~/UnityProject/Editor", output / "Assets/Editor", dirs_exist_ok=True)
+    for name in ("Editor", "Runtime"):
+        source = root / "Tools~/UnityProject" / name
+        destination = output / "Assets" / ("Editor" if name == "Editor" else "ValidationRuntime")
+        if destination.exists():
+            shutil.rmtree(destination)
+        if source.is_dir():
+            shutil.copytree(source, destination)
     print(f"Created {output} for Unity {args.unity}, URP {args.urp}.")
     print("Includes package EditMode tests and synthetic saved-mask bridge tests. Proprietary MicroVerse assemblies are not included.")
+    print("GrassValidationBuild.BuildCurrent creates a real grass scene and clean/incremental standalone players; its optional smoke mode writes GPU results and captures.")
 
 
 if __name__ == "__main__":

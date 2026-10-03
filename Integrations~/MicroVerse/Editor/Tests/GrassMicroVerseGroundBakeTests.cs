@@ -207,6 +207,67 @@ public sealed class GrassMicroVerseGroundBakeTests
         Assert.That(bakeCount, Is.EqualTo(1), "Conflicting outputs must not alternate between resolutions on every poll.");
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SharedOutputAliasesCannotOverwriteAnotherResolution(bool changeCase)
+    {
+        Texture2D original = Refresh();
+        string originalGuid = AssetDatabase.AssetPathToGUID(outputPath);
+        GameObject otherObject = Own(new GameObject("Aliased ground output"));
+        GrassMicroVerseBridge other = AddBridge(otherObject, 128, true);
+        var serialized = new SerializedObject(other);
+        serialized.FindProperty("groundBakeAssetPath").stringValue = changeCase
+            ? outputPath.Replace("Ground.asset", "GROUND.asset")
+            : outputPath.Replace('/', '\\');
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(other, false, false, false), Is.False);
+        Assert.That(other.LastRefreshMessage, Does.Contain("Terrain and resolution"));
+        Assert.That(other.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(original.width, Is.EqualTo(64));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(originalGuid));
+        Assert.That(bakeCount, Is.EqualTo(1), "An alias must be rejected before overwriting the existing bake.");
+    }
+
+    [Test]
+    public void WindowsOutputPathIsSavedCanonicallyAndReused()
+    {
+        var serialized = new SerializedObject(bridge);
+        serialized.FindProperty("groundBakeAssetPath").stringValue = outputPath.Replace('/', '\\');
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+
+        Texture2D output = Refresh();
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(AssetDatabase.GetAssetPath(output)));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath));
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        uint revision = bridge.PlacementArea.SourceRevision;
+        for (int i = 0; i < 3; i++)
+            Assert.That(Refresh(), Is.SameAs(output));
+        Assert.That(bakeCount, Is.EqualTo(1));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void DeactivatedOwnerKeepsItsSavedOutput(bool disableComponent)
+    {
+        Texture2D original = Refresh();
+        if (disableComponent)
+            bridge.enabled = false;
+        else
+            bridge.gameObject.SetActive(false);
+        Assert.That(GrassMicroVerseBridge.ActiveBridges, Does.Not.Contain(bridge));
+        GameObject otherObject = Own(new GameObject("Conflicting inactive bake owner"));
+        GrassMicroVerseBridge other = AddBridge(otherObject, 128, true);
+
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(other, false, false, false), Is.False);
+        Assert.That(other.LastRefreshMessage, Does.Contain("Terrain and resolution"));
+        Assert.That(other.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(original.width, Is.EqualTo(64));
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(1), "An inactive saved scene binding still owns its baked texture.");
+    }
+
     private GrassMicroVerseBridge AddBridge(GameObject gameObject, int resolution, bool enableBaking)
     {
         GrassMicroVerseBridge added = gameObject.AddComponent<GrassMicroVerseBridge>();

@@ -69,6 +69,27 @@ jobs:
                             '**Unity validation was not run:** repository Unity licensing credentials are not configured. GPU and Unity acceptance remain unverified.\n')
           PY
 
+  shaders:
+    name: Compile HLSL to DXIL and SPIR-V
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Verify shader compiler tooling
+        run: python3 -B -m unittest discover -s Tools~/ShaderChecks -p 'test_*.py' -v
+      - name: Compile shipped kernels and shader passes
+        run: python3 -B Tools~/ShaderChecks/check.py
+      - name: Upload shader compiler output and provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-shader-validation
+          path: artifacts/shaders
+          if-no-files-found: warn
+
   unity:
     name: Unity import and EditMode tests
     needs: source
@@ -106,4 +127,38 @@ jobs:
         with:
           name: unity-validation
           path: artifacts/unity
+          if-no-files-found: warn
+
+  player:
+    name: Unity clean and incremental player builds
+    needs: [source, unity]
+    if: needs.source.outputs.unity_available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create validation project
+        env:
+          GRASS_UNITY_VERSION: ${{ inputs.unity_version || '6000.6.0f1' }}
+          GRASS_URP_VERSION: ${{ inputs.urp_version || '17.6.0' }}
+        run: python3 Tools~/create_validation_project.py --unity "$GRASS_UNITY_VERSION" --urp "$GRASS_URP_VERSION"
+      - name: Build the same grass scene cleanly and incrementally
+        uses: game-ci/unity-builder@4423ee75828dff56037d1d1cfdac6b68e3a6ba00 # v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          projectPath: Validation~/Project
+          targetPlatform: StandaloneLinux64
+          buildMethod: GrassValidationBuild.BuildCurrent
+          versioning: None
+          unityLicensingServer: ${{ secrets.UNITY_LICENSE_SERVER }}
+      - name: Upload standalone player and both build reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unity-linux-player
+          path: Validation~/Project/Builds
           if-no-files-found: warn

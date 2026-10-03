@@ -50,7 +50,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         bool contacts = GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
         bool motion = grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
             renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,
-            owner.motionVectors);
+            owner.motionVectors, owner.grassMaterial);
         ScriptableRenderPassInput inputs = contacts || motion ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None;
         if (motion)
             inputs |= ScriptableRenderPassInput.Motion;
@@ -267,7 +267,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             bool ownerChanged = state.Owner != owner;
             bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
             bool materialChanged = state.UpdateMaterial(owner,
-                graph.GetTextureDesc(resources.activeColorTexture).msaaSamples != MSAASamples.None);
+                graph.GetRenderTargetInfo(resources.activeColorTexture).msaaSamples > 1);
             int forwardPass = state.BladeMaterial.FindPass("GrassForward");
             if (forwardPass < 0)
             {
@@ -405,7 +405,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.SurfaceDirty = false;
             state.HadDensitySources = state.ActiveGroups.Count > 0;
 
-            float scaledHeight = Mathf.Max(1, cameraData.scaledHeight);
+            // Match the target-size input URP uses for _ScaledScreenParams.
+            float scaledHeight = Mathf.Max(1, cameraData.cameraTargetDescriptor.height);
             if (camera.allowDynamicResolution)
                 scaledHeight *= Mathf.Clamp(ScalableBufferManager.heightScaleFactor, 0.01f, 1f);
             float bladeRadius = CalculateBladeRadius(state.BladeMaterial, owner, camera, scaledHeight);
@@ -419,6 +420,15 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             BuildDispatches(graph, state, owner, cameraBounds, spacing, authored, density);
             BuildGeneration(graph, state, owner, height, density, mask, positions, counts, arguments,
                 center, cameraPosition, spacing, distanceLimit, capturePadding, bladeRadius, authored);
+            if (state.DispatchCount == 0)
+            {
+                // Counts and indirect instance counts still reset to zero, but
+                // there is no grass to draw, snapshot, or ray-march this frame.
+                motion.Release(camera);
+                BuildReadback(graph, state, counts, owner);
+                state.PruneTextureWrappers();
+                return;
+            }
 
             Texture windTexture = state.BladeMaterial.GetTexture(Id.Wind);
             if (!windTexture || windTexture.dimension != TextureDimension.Tex2D)
@@ -462,7 +472,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             }
 
             if (WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
-                    cameraData.cameraTargetDescriptor.msaaSamples, owner.motionVectors))
+                    cameraData.cameraTargetDescriptor.msaaSamples, owner.motionVectors, state.BladeMaterial))
                 motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
                     state.Counts, state.Arguments, meshes, state.BladeMaterial, state.DrawProperties,
                     state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing);
@@ -474,9 +484,10 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         }
 
         public bool WantsMotion(Camera camera, bool postProcessEnabled, AntialiasingMode antialiasing,
-            int msaaSamples, GrassMotionVectors.Settings settings)
+            int msaaSamples, GrassMotionVectors.Settings settings, Material material)
         {
-            bool requested = GrassMotionVectors.IsRequested(camera, postProcessEnabled, antialiasing, msaaSamples, settings);
+            bool requested = GrassMotionVectors.IsRequested(camera, postProcessEnabled, antialiasing, msaaSamples, settings) &&
+                motion.PrepareCamera(camera, material);
             if (!requested)
                 motion.Release(camera);
             return requested;
@@ -974,10 +985,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
             if (valid && authored)
             {
+                var cameraGrid = new GrassGridRange(minX, minZ, maxX - minX, maxZ - minZ);
                 for (int g = 0; g < state.ActiveGroups.Count && valid; g++)
                 {
                     TerrainGroup group = state.ActiveGroups[g];
                     group.Tiles.Clear();
+                    long projectedCandidates = state.CandidateCount;
                     for (int a = 0; a < group.Sources.Count && valid; a++)
                     {
                         PlacementSource source = group.Sources[a];
@@ -1011,14 +1024,17 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                                 new Vector3((tx + 0.5f) * TileCells * spacing, 0f, (tz + 0.5f) * TileCells * spacing),
                                 new Vector3((TileCells + 1) * spacing, 0f, (TileCells + 1) * spacing));
                             tileBounds = GrassDispatchMath.ExpandXZ(tileBounds, densityFootprint);
-                            if (!source.Area.IntersectsCoverage(tileBounds))
+                            if (!source.Data.IntersectsCoverage(tileBounds))
                                 continue;
-                            group.Tiles.Add(tile);
-                            if ((long)group.Tiles.Count * TileCells * TileCells > MaximumCandidates)
+                            if (!GrassDispatchMath.TryClipTile(cameraGrid, tx, tz, TileCells, out GrassGridRange clipped))
+                                continue;
+                            if (!GrassDispatchMath.TryAddCandidateBudget(projectedCandidates, clipped.Width, clipped.Height,
+                                    MaximumCandidates, out projectedCandidates))
                             {
                                 valid = false;
                                 break;
                             }
+                            group.Tiles.Add(tile);
                         }
                     }
                     group.SortedTiles.Clear();

@@ -9,7 +9,7 @@ if (args.Length != 1 || !File.Exists(Path.Combine(args[0], "package.json")))
 }
 
 string root = Path.GetFullPath(args[0]);
-string[] ignoredDirectories = { ".git", "Validation~", "bin", "obj", "Library", "Temp" };
+string[] ignoredDirectories = { ".git", "Validation~", "bin", "obj", "Library", "Temp", "artifacts" };
 string[] files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
     .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
         .Any(segment => ignoredDirectories.Contains(segment, StringComparer.Ordinal)))

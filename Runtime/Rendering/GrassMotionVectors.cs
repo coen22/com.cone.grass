@@ -72,6 +72,7 @@ public sealed class GrassMotionVectors : IDisposable
     private int storeKernel;
     private bool warnedResources;
     private bool warnedCapacity;
+    private bool disposed;
     private GraphicsFormat snapshotFormat;
 
     /// <summary>
@@ -110,6 +111,22 @@ public sealed class GrassMotionVectors : IDisposable
         return Mathf.NextPowerOfTwo(rootCapacity * 2);
     }
 
+    /// <summary>
+    /// Check readiness before asking URP to produce motion/depth inputs. A custom
+    /// forward-only material cannot use grass motion and must release old history.
+    /// This creates shared helper resources, never per-camera history buffers.
+    /// </summary>
+    public bool PrepareCamera(Camera camera, Material bladeMaterial)
+    {
+        if (disposed || !camera || !bladeMaterial || bladeMaterial.FindPass("GrassMotionVectors") < 0 ||
+            !EnsureResources())
+        {
+            Release(camera);
+            return false;
+        }
+        return true;
+    }
+
     public void Record(RenderGraph graph, ContextContainer frameData,
         BufferHandle positionsHandle, BufferHandle countsHandle, BufferHandle argumentsHandle,
         GraphicsBuffer positions, GraphicsBuffer counts, GraphicsBuffer arguments,
@@ -119,21 +136,33 @@ public sealed class GrassMotionVectors : IDisposable
         UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
         UniversalResourceData resources = frameData.Get<UniversalResourceData>();
         Camera camera = cameraData.camera;
-        if (!camera || camera.stereoEnabled || !resources.motionVectorColor.IsValid() ||
+        if (disposed || !camera || camera.stereoEnabled || !resources.motionVectorColor.IsValid() ||
             !resources.motionVectorDepth.IsValid() || positions == null || counts == null || arguments == null ||
             !positionsHandle.IsValid() || !countsHandle.IsValid() || !argumentsHandle.IsValid() ||
             !bladeMaterial || lodMeshes == null || lodMeshes.Length != 3 || drawProperties == null || drawProperties.Length != 3 ||
             lodOffsets == null || lodOffsets.Length < 4 || lodCapacities == null || lodCapacities.Length < 4 ||
             vertexTextureHandles == null || vertexTextureHandles.Length < 5)
+        {
+            Release(camera);
             return;
+        }
+        for (int lod = 0; lod < 3; lod++)
+            if (!lodMeshes[lod] || drawProperties[lod] == null)
+            {
+                Release(camera);
+                return;
+            }
 
-        int shaderPass = bladeMaterial.FindPass("GrassMotionVectors");
-        if (shaderPass < 0 || !EnsureResources())
+        if (!PrepareCamera(camera, bladeMaterial))
             return;
+        int shaderPass = bladeMaterial.FindPass("GrassMotionVectors");
         Texture slope = drawProperties[0].GetTexture(Id.Slope);
         Texture wind = drawProperties[0].GetTexture(Id.Wind);
         if (!slope || !wind || slope.dimension != TextureDimension.Tex2D || wind.dimension != TextureDimension.Tex2D)
+        {
+            Release(camera);
             return;
+        }
 
         if (!cameras.TryGetValue(camera, out CameraHistory history))
         {
@@ -397,6 +426,9 @@ public sealed class GrassMotionVectors : IDisposable
 
     public void Dispose()
     {
+        if (disposed)
+            return;
+        disposed = true;
         foreach (CameraHistory history in cameras.Values)
             history.Dispose();
         cameras.Clear();
@@ -530,9 +562,22 @@ public sealed class GrassMotionVectors : IDisposable
 
         private static bool AllocateTexture(ref RTHandle handle, Texture source, GraphicsFormat format, string name)
         {
+            // Matching descriptors do not prove that an RT still has GPU contents.
+            // Recover from lost/released textures and invalidate both frame snapshots.
+            bool lost = handle != null && (!handle.rt || !handle.rt.IsCreated());
+            if (lost)
+            {
+                handle.Release();
+                handle = null;
+            }
             bool samplerChanged = handle != null && (handle.rt.wrapModeU != source.wrapModeU ||
                 handle.rt.wrapModeV != source.wrapModeV || handle.rt.filterMode != source.filterMode);
-            var descriptor = new RenderTextureDescriptor(source.width, source.height)
+            // Texture.width/height retain the asset dimensions when quality
+            // settings omit high-resolution mips. Match the actual GPU mip 0:
+            // upscaling it with a point copy changes later bilinear wind samples.
+            int mipLimit = source is Texture2D texture ? texture.activeMipmapLimit : 0;
+            var descriptor = new RenderTextureDescriptor(Mathf.Max(1, source.width >> mipLimit),
+                Mathf.Max(1, source.height >> mipLimit))
             {
                 graphicsFormat = format,
                 depthStencilFormat = GraphicsFormat.None,
@@ -546,7 +591,7 @@ public sealed class GrassMotionVectors : IDisposable
             bool changed = RenderingUtils.ReAllocateHandleIfNeeded(ref handle, descriptor, source.filterMode, source.wrapMode, name: name);
             handle.rt.wrapModeU = source.wrapModeU;
             handle.rt.wrapModeV = source.wrapModeV;
-            return changed || samplerChanged;
+            return lost || changed || samplerChanged;
         }
 
         public void Dispose()

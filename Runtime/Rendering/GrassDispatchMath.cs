@@ -55,6 +55,27 @@ public static class GrassDispatchMath
         return bounds;
     }
 
+    /// <summary>Clips an integer tile before counting or dispatching its candidate cells.</summary>
+    public static bool TryClipTile(GrassGridRange bounds, int tileX, int tileZ, int tileSize,
+        out GrassGridRange clipped)
+    {
+        clipped = default;
+        if (tileSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(tileSize));
+        long boundsMaxX = (long)bounds.MinX + bounds.Width;
+        long boundsMaxZ = (long)bounds.MinZ + bounds.Height;
+        if (bounds.Width <= 0 || bounds.Height <= 0 || boundsMaxX > int.MaxValue || boundsMaxZ > int.MaxValue)
+            return false;
+        long minX = Math.Max(bounds.MinX, (long)tileX * tileSize);
+        long minZ = Math.Max(bounds.MinZ, (long)tileZ * tileSize);
+        long maxX = Math.Min(boundsMaxX, ((long)tileX + 1L) * tileSize);
+        long maxZ = Math.Min(boundsMaxZ, ((long)tileZ + 1L) * tileSize);
+        if (minX >= maxX || minZ >= maxZ)
+            return false;
+        clipped = new GrassGridRange((int)minX, (int)minZ, (int)(maxX - minX), (int)(maxZ - minZ));
+        return true;
+    }
+
     /// <summary>A failed reservation leaves the existing budget unchanged.</summary>
     public static bool TryAddCandidateBudget(long current, int width, int height, long limit, out long updated)
     {

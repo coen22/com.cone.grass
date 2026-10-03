@@ -7,6 +7,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 /// <summary>
@@ -15,6 +16,9 @@ using Object = UnityEngine.Object;
 /// </summary>
 public static class GrassMicroVerseBridgeUtility
 {
+    private const string GroundOutputConflictMessage =
+        "Use a different ground-albedo output asset for each Terrain and resolution. Another bridge already uses this path.";
+
     private sealed class MaskAssets
     {
         public ScriptableObject Target;
@@ -26,6 +30,8 @@ public static class GrassMicroVerseBridgeUtility
     private struct TextureState : IEquatable<TextureState>
     {
         public EntityId Entity;
+        // Cache ownership only; moving an unchanged asset is not a pixel edit.
+        public string AssetPath;
         public int Width, Height, DirtyCount, ImportRevision, Format;
         public uint UpdateCount;
         public Hash128 Dependency;
@@ -58,6 +64,10 @@ public static class GrassMicroVerseBridgeUtility
     private static readonly Dictionary<GrassMicroVerseBridge, GroundBakeState> groundBakes =
         new Dictionary<GrassMicroVerseBridge, GroundBakeState>();
     private static readonly List<string> unusedMaskPaths = new List<string>();
+    private static readonly HashSet<ScriptableObject> liveMaskTargets = new HashSet<ScriptableObject>();
+    private static readonly List<GrassMicroVerseBridge> unusedBridges = new List<GrassMicroVerseBridge>();
+    private static readonly HashSet<string> usedImportPaths = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly List<string> unusedImportPaths = new List<string>();
     private static int assetRevision;
 
     /// <summary>Returns the cached list; callers must not modify the array.</summary>
@@ -117,6 +127,11 @@ public static class GrassMicroVerseBridgeUtility
         observed.Clear();
         groundBakes.Clear();
         importRevisions.Clear();
+        unusedMaskPaths.Clear();
+        liveMaskTargets.Clear();
+        unusedBridges.Clear();
+        usedImportPaths.Clear();
+        unusedImportPaths.Clear();
         assetRevision = 0;
     }
 
@@ -127,21 +142,55 @@ public static class GrassMicroVerseBridgeUtility
         PruneUnusedMaskCaches();
     }
 
+    /// <summary>
+    /// Releases observations made by manual refresh as well as automatic polls.
+    /// Called periodically by the editor watcher; it performs no texture reads.
+    /// </summary>
+    public static void PruneInactiveCaches()
+    {
+        unusedBridges.Clear();
+        foreach (GrassMicroVerseBridge bridge in observed.Keys)
+            if (!OwnsLiveCache(bridge)) unusedBridges.Add(bridge);
+        foreach (GrassMicroVerseBridge bridge in groundBakes.Keys)
+            if (!OwnsLiveCache(bridge) && !observed.ContainsKey(bridge)) unusedBridges.Add(bridge);
+        foreach (GrassMicroVerseBridge bridge in unusedBridges)
+        {
+            observed.Remove(bridge);
+            groundBakes.Remove(bridge);
+        }
+        unusedBridges.Clear();
+        PruneUnusedMaskCaches();
+
+        usedImportPaths.Clear();
+        foreach (string path in masks.Keys)
+            usedImportPaths.Add(path);
+        foreach (ObservedInputs inputs in observed.Values)
+        {
+            if (!string.IsNullOrEmpty(inputs.Density.AssetPath)) usedImportPaths.Add(inputs.Density.AssetPath);
+            if (!string.IsNullOrEmpty(inputs.GroundColor.AssetPath)) usedImportPaths.Add(inputs.GroundColor.AssetPath);
+        }
+        unusedImportPaths.Clear();
+        foreach (string path in importRevisions.Keys)
+            if (!usedImportPaths.Contains(path)) unusedImportPaths.Add(path);
+        foreach (string path in unusedImportPaths)
+            importRevisions.Remove(path);
+        unusedImportPaths.Clear();
+        usedImportPaths.Clear();
+    }
+
+    private static bool OwnsLiveCache(GrassMicroVerseBridge bridge) =>
+        bridge && bridge.isActiveAndEnabled && bridge.gameObject.scene.IsValid() &&
+        !EditorSceneManager.IsPreviewScene(bridge.gameObject.scene);
+
     internal static void PruneUnusedMaskCaches()
     {
+        liveMaskTargets.Clear();
+        foreach (GrassMicroVerseBridge bridge in GrassMicroVerseBridge.ActiveBridges)
+            if (OwnsLiveCache(bridge) && bridge.MaskTarget) liveMaskTargets.Add(bridge.MaskTarget);
         unusedMaskPaths.Clear();
         foreach (KeyValuePair<string, MaskAssets> entry in masks)
         {
-            bool used = false;
-            foreach (GrassMicroVerseBridge bridge in GrassMicroVerseBridge.ActiveBridges)
-            {
-                if (bridge && bridge.MaskTarget && bridge.MaskTarget == entry.Value.Target)
-                {
-                    used = true;
-                    break;
-                }
-            }
-            if (!used)
+            if (!liveMaskTargets.Contains(entry.Value.Target))
                 unusedMaskPaths.Add(entry.Key);
         }
         foreach (string path in unusedMaskPaths)
@@ -149,6 +198,8 @@ public static class GrassMicroVerseBridgeUtility
             masks.Remove(path);
             importRevisions.Remove(path);
         }
+        unusedMaskPaths.Clear();
+        liveMaskTargets.Clear();
     }
 
     public static bool TryResolve(GrassMicroVerseBridge bridge, out Texture2D texture,
@@ -310,7 +361,7 @@ public static class GrassMicroVerseBridgeUtility
         texture = bridge.BakedGroundColor;
         // Preserve an output's GUID when its asset is moved. The inspector clears
         // the old output reference when the author explicitly chooses a new path.
-        string path = texture ? AssetDatabase.GetAssetPath(texture) : bridge.GroundBakeAssetPath;
+        string path = texture ? AssetDatabase.GetAssetPath(texture) : CanonicalAssetPath(bridge.GroundBakeAssetPath);
         if (string.IsNullOrEmpty(path))
         {
             message = "Choose a ground-albedo output .asset under Assets before enabling automatic baking.";
@@ -318,12 +369,9 @@ public static class GrassMicroVerseBridgeUtility
         }
         foreach (GrassMicroVerseBridge other in GrassMicroVerseBridge.ActiveBridges)
         {
-            if (other != bridge && other && other.BakeTerrainGroundColor &&
-                (other.Terrain != bridge.Terrain || other.GroundBakeResolution != bridge.GroundBakeResolution) &&
-                ((other.BakedGroundColor && AssetDatabase.GetAssetPath(other.BakedGroundColor) == path) ||
-                    other.GroundBakeAssetPath == path))
+            if (ConflictsWithGroundOutput(bridge, other, path))
             {
-                message = "Use a different ground-albedo output asset for each Terrain and resolution. Another bridge already uses this path.";
+                message = GroundOutputConflictMessage;
                 return false;
             }
         }
@@ -355,10 +403,26 @@ public static class GrassMicroVerseBridgeUtility
             (!known && !sourcesSaved) || (known && previous.SourcesSaved != sourcesSaved) ||
             bridge.GroundBakeOutputKey != outputKey ||
             texture.width != bridge.GroundBakeResolution || texture.height != bridge.GroundBakeResolution;
-        if (needsBake && !TerrainGrassAlbedoBaker.TryBake(bridge.Terrain, bridge.GroundBakeResolution,
-            path, out texture, out message))
-            return false;
+        if (needsBake)
+        {
+            // Inactive scene objects can still be enabled in the player. They
+            // do not enter ActiveBridges, but their saved output must not be
+            // overwritten by another terrain or resolution. Scan only before
+            // an actual bake, rather than on every unchanged editor poll.
+            if (HasLoadedSceneOutputConflict(bridge, path))
+            {
+                message = GroundOutputConflictMessage;
+                return false;
+            }
+            if (!TerrainGrassAlbedoBaker.TryBake(bridge.Terrain, bridge.GroundBakeResolution,
+                path, out texture, out message))
+                return false;
+        }
 
+        // The baker normalizes separators and Unity resolves paths without case
+        // sensitivity. Persist the actual asset path, including after creation,
+        // so a pasted Windows path cannot bypass ownership checks or stay stale.
+        path = AssetDatabase.GetAssetPath(texture);
         outputKey = AssetDatabase.GetAssetDependencyHash(path).ToString();
         if (bridge.BakedGroundColor != texture || bridge.GroundBakeAssetPath != path ||
             bridge.GroundBakeSourceKey != sourceKey || bridge.GroundBakeOutputKey != outputKey)
@@ -471,6 +535,42 @@ public static class GrassMicroVerseBridgeUtility
     private static Material GetTerrainMaterial(Terrain terrain) =>
         terrain.materialTemplate ? terrain.materialTemplate : GraphicsSettings.currentRenderPipeline.defaultTerrainMaterial;
 
+    private static string CanonicalAssetPath(string path)
+    {
+        string normalized = (path ?? string.Empty).Replace('\\', '/');
+        if (string.IsNullOrEmpty(normalized))
+            return normalized;
+        string guid = AssetDatabase.AssetPathToGUID(normalized, AssetPathToGUIDOptions.OnlyExistingAssets);
+        return string.IsNullOrEmpty(guid) ? normalized : AssetDatabase.GUIDToAssetPath(guid);
+    }
+
+    private static bool SameAssetPath(string left, string right) =>
+        !string.IsNullOrEmpty(left) && !string.IsNullOrEmpty(right) &&
+        string.Equals(left.Replace('\\', '/'), right.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+    private static bool ConflictsWithGroundOutput(GrassMicroVerseBridge bridge,
+        GrassMicroVerseBridge other, string path) =>
+        other && other != bridge && other.BakeTerrainGroundColor &&
+        (other.enabled || other.BakedGroundColor) && other.gameObject.scene.IsValid() &&
+        !EditorSceneManager.IsPreviewScene(other.gameObject.scene) &&
+        (other.Terrain != bridge.Terrain || other.GroundBakeResolution != bridge.GroundBakeResolution) &&
+        ((other.BakedGroundColor && SameAssetPath(AssetDatabase.GetAssetPath(other.BakedGroundColor), path)) ||
+            SameAssetPath(other.GroundBakeAssetPath, path));
+
+    private static bool HasLoadedSceneOutputConflict(GrassMicroVerseBridge bridge, string path)
+    {
+        for (int index = 0; index < SceneManager.sceneCount; index++)
+        {
+            Scene scene = SceneManager.GetSceneAt(index);
+            if (!scene.isLoaded || EditorSceneManager.IsPreviewScene(scene))
+                continue;
+            foreach (GameObject root in scene.GetRootGameObjects())
+                foreach (GrassMicroVerseBridge other in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
+                    if (ConflictsWithGroundOutput(bridge, other, path)) return true;
+        }
+        return false;
+    }
+
     private static void AppendFloat(StringBuilder state, float value) =>
         state.Append(value.ToString("R", CultureInfo.InvariantCulture)).Append('|');
 
@@ -505,7 +605,7 @@ public static class GrassMicroVerseBridgeUtility
             importRevisions.Add(path, 0);
         return new TextureState
         {
-            Entity = texture.GetEntityId(), Width = texture.width, Height = texture.height,
+            Entity = texture.GetEntityId(), AssetPath = path, Width = texture.width, Height = texture.height,
             DirtyCount = EditorUtility.GetDirtyCount(texture), ImportRevision = revision,
             UpdateCount = texture.updateCount, Format = (int)texture.graphicsFormat,
             Dependency = string.IsNullOrEmpty(path) ? default : AssetDatabase.GetAssetDependencyHash(path)
