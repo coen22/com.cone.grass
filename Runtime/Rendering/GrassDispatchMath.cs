@@ -74,6 +74,66 @@ public static class GrassDispatchMath
         return (float)((double)jittered * spacing);
     }
 
+    /// <summary>
+    /// Bounds the actual float32 roots of a clipped cell range, including a
+    /// world-space filtering margin. Center/extents conversion rounds outward.
+    /// </summary>
+    public static bool TryGetCandidateBounds(GrassGridRange range, float spacing, float margin, out Bounds bounds)
+    {
+        bounds = default;
+        long endX = (long)range.MinX + range.Width;
+        long endZ = (long)range.MinZ + range.Height;
+        if (!Finite(spacing) || spacing <= 0f || !Finite(margin) || margin < 0f ||
+            range.Width <= 0 || range.Height <= 0 ||
+            range.MinX < -MaximumCellCoordinate || range.MinZ < -MaximumCellCoordinate ||
+            endX > MaximumCellCoordinate || endZ > MaximumCellCoordinate)
+            return false;
+
+        if (!TryGetCandidateAxis(range.MinX, (int)endX - 1, spacing, margin, out float centerX, out float extentX) ||
+            !TryGetCandidateAxis(range.MinZ, (int)endZ - 1, spacing, margin, out float centerZ, out float extentZ))
+            return false;
+
+        bounds.center = new Vector3(centerX, 0f, centerZ);
+        // Setting extents avoids an unnecessary size = extent * 2 overflow.
+        bounds.extents = new Vector3(extentX, 0f, extentZ);
+        return true;
+    }
+
+    private static bool TryGetCandidateAxis(int first, int last, float spacing, float margin,
+        out float center, out float extent)
+    {
+        center = extent = 0f;
+        double minimum = (double)CandidateEndpoint(first, spacing, false) - margin;
+        double maximum = (double)CandidateEndpoint(last, spacing, true) + margin;
+        if (minimum < -float.MaxValue || maximum > float.MaxValue ||
+            double.IsNaN(minimum) || double.IsNaN(maximum))
+            return false;
+
+        float lower = RoundOutward(minimum, false);
+        float upper = RoundOutward(maximum, true);
+        center = (float)(((double)lower + upper) * 0.5);
+        double requiredExtent = Math.Max((double)center - lower, (double)upper - center);
+        extent = RoundOutward(requiredExtent, true);
+        // A range crossing zero can lose a tiny endpoint even in the double
+        // midpoint/distance arithmetic. Check the actual Bounds representation.
+        if (center - extent > lower || center + extent < upper)
+            extent = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(extent) + 1);
+        return Finite(center - extent) && Finite(center + extent) &&
+            center - extent <= lower && center + extent >= upper;
+    }
+
+    private static float RoundOutward(double value, bool upper)
+    {
+        float rounded = (float)value;
+        if (upper ? (double)rounded >= value : (double)rounded <= value)
+            return rounded;
+        if (rounded == 0f)
+            return upper ? float.Epsilon : -float.Epsilon;
+        int bits = BitConverter.SingleToInt32Bits(rounded);
+        bits += (rounded > 0f) == upper ? 1 : -1;
+        return BitConverter.Int32BitsToSingle(bits);
+    }
+
     public static int FloorDivide(int value, int divisor)
     {
         if (divisor <= 0)
