@@ -40,6 +40,8 @@ public sealed class GrassPlacementAreaEditor : Editor
 
         if (area.Shape == GrassPlacementShape.Texture && !area.DensityAsset && area.DensityTexture)
         {
+            if (!GrassPlacementDrawData.SupportsDensityFormat(area.DensityTexture))
+                EditorGUILayout.HelpBox("Density needs a normalized or floating-point red channel. Use R8 or linear RGBA; alpha-only, integer and depth formats cannot provide grass coverage.", MessageType.Warning);
             if (area.DensityTexture is RenderTexture densityTarget && !densityTarget.IsCreated())
                 EditorGUILayout.HelpBox("The density RenderTexture has no allocated contents. Its producer must create and populate it before this area can provide grass coverage.", MessageType.Warning);
             string path = AssetDatabase.GetAssetPath(area.DensityTexture);

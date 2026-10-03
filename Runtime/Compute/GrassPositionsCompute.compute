@@ -235,7 +235,9 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod)
     int2 cell = _GridStartIndex + int2(id);
     uint seed = GrassCellSeed(cell);
     float2 jitter = float2(GrassRandom(seed, 0xa511e9b3u), GrassRandom(seed, 0x63d83595u)) - 0.5;
-    float2 positionXZ = (float2(cell) + jitter) * _Spacing;
+    // GrassDispatchMath bounds this written float32 operation order. Prevent
+    // reassociation of cell + random - 0.5 or contraction with the spacing product.
+    precise float2 positionXZ = (float2(cell) + jitter) * _Spacing;
 
     // Cheap conservative rejection before any texture fetch or square root.
     float2 cameraDeltaXZ = positionXZ - _CameraPosition.xz;

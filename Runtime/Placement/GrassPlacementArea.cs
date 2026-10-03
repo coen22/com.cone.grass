@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 
 public enum GrassPlacementShape
@@ -74,7 +75,7 @@ public struct GrassPlacementDrawData
         {
             if (!ReferenceEquals(densityAsset, null) && !densityAsset)
                 return false;
-            if (!densityAsset && !IsReadyTexture(densityTexture))
+            if (!densityAsset && !IsReadyDensityTexture(densityTexture))
                 return false;
         }
 
@@ -108,6 +109,22 @@ public struct GrassPlacementDrawData
     internal static bool IsReadyTexture(Texture texture) => texture &&
         texture.dimension == TextureDimension.Tex2D &&
         (!(texture is RenderTexture target) || target.IsCreated());
+
+    /// <summary>
+    /// Whether the format supplies the normalized or floating-point red channel
+    /// used by density sampling. Dimension, GPU storage readiness and color-space
+    /// requirements are separate; this format-only check never creates storage.
+    /// </summary>
+    public static bool SupportsDensityFormat(Texture texture)
+    {
+        if (!texture || (texture is Texture2D image && image.format == TextureFormat.Alpha8))
+            return false;
+        GraphicsFormat format = texture.graphicsFormat;
+        return format != GraphicsFormat.None && !GraphicsFormatUtility.IsAlphaOnlyFormat(format) &&
+            !GraphicsFormatUtility.IsIntegerFormat(format) && !GraphicsFormatUtility.IsDepthStencilFormat(format);
+    }
+
+    internal static bool IsReadyDensityTexture(Texture texture) => IsReadyTexture(texture) && SupportsDensityFormat(texture);
 }
 
 /// <summary>
@@ -310,7 +327,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         if (shape == GrassPlacementShape.Texture)
         {
             coverage = DensityTexture;
-            if (!GrassPlacementDrawData.IsReadyTexture(coverage))
+            if (!GrassPlacementDrawData.IsReadyDensityTexture(coverage))
                 return false;
         }
 
@@ -705,6 +722,10 @@ public sealed class GrassPlacementArea : MonoBehaviour
 
         localToWorld = Matrix4x4.TRS(center, rotation, frameSize);
         worldToMask = Matrix4x4.Translate(new Vector3(0.5f, 0f, 0.5f)) * localToWorld.inverse;
+        if (!IsFinite(localToWorld) || !IsFinite(worldToMask) ||
+            (worldToMask.m00 == 0f && worldToMask.m02 == 0f) ||
+            (worldToMask.m20 == 0f && worldToMask.m22 == 0f))
+            return false;
         bounds = new Bounds(center, Vector3.zero);
         bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(-0.5f, 0f, -0.5f)));
         bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, -0.5f)));
@@ -734,7 +755,9 @@ public sealed class GrassPlacementArea : MonoBehaviour
             maximum.y = paintSurface.bounds.max.y;
             bounds.SetMinMax(minimum, maximum);
         }
-        return true;
+        // Finite inputs can still overflow during corner/bounds construction,
+        // or collapse to a line at large world coordinates.
+        return HasFiniteFootprint(bounds);
     }
 
     private bool HasSupportingGeometry(Renderer renderer)
@@ -778,7 +801,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
             }
             else
             {
-                if (!GrassPlacementDrawData.IsReadyTexture(densityTexture))
+                if (!GrassPlacementDrawData.IsReadyDensityTexture(densityTexture))
                     return false;
                 uvBounds = SanitizeRect(textureCoverageBounds);
             }
@@ -809,10 +832,10 @@ public sealed class GrassPlacementArea : MonoBehaviour
         maximum.z = Mathf.Min(maximum.z, frameBounds.max.z);
         minimum.y = frameBounds.min.y;
         maximum.y = frameBounds.max.y;
-        if (minimum.x >= maximum.x || minimum.z >= maximum.z)
+        if (!IsFinite(minimum) || !IsFinite(maximum) || minimum.x >= maximum.x || minimum.z >= maximum.z)
             return false;
         bounds.SetMinMax(minimum, maximum);
-        return true;
+        return HasFiniteFootprint(bounds);
     }
 
     private Matrix4x4 GetGroundWorldToMask(Matrix4x4 sourceWorldToMask)
@@ -1005,6 +1028,8 @@ public sealed class GrassPlacementArea : MonoBehaviour
             hash = hash * 397 ^ texture.width;
             hash = hash * 397 ^ texture.height;
             hash = hash * 397 ^ (int)texture.dimension;
+            hash = hash * 397 ^ (int)texture.graphicsFormat;
+            hash = hash * 397 ^ (texture is Texture2D image && image.format == TextureFormat.Alpha8).GetHashCode();
             if (texture is RenderTexture target)
                 hash = hash * 397 ^ target.IsCreated().GetHashCode();
             return hash;
@@ -1093,6 +1118,21 @@ public sealed class GrassPlacementArea : MonoBehaviour
         !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
         !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
         !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+
+    private static bool IsFinite(Matrix4x4 value)
+    {
+        for (int index = 0; index < 16; index++)
+            if (float.IsNaN(value[index]) || float.IsInfinity(value[index]))
+                return false;
+        return true;
+    }
+
+    private static bool HasFiniteFootprint(Bounds bounds)
+    {
+        Vector3 minimum = bounds.min, maximum = bounds.max;
+        return IsFinite(minimum) && IsFinite(maximum) &&
+            minimum.x < maximum.x && minimum.z < maximum.z && minimum.y <= maximum.y;
+    }
 
     private static Rect SanitizeRect(Rect value)
     {

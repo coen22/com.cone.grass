@@ -76,6 +76,10 @@ Finish MicroVerse generation and save its source assets. Refresh the bridge, bak
 
 The player build preflight runs for **every build**, including incremental builds. It inspects the requested saved scenes in preview scenes and checks explicit mask resolution, saved assets, current core bindings, and the persisted source/output hashes of an enabled ground bake. For direct TerrainLayer color, save both the selected diffuse and the first layer/diffuse in its four-layer group: that separate source supplies native sampler state. A saved ground-color override takes precedence and does not consume those sampler settings. Preflight fails with the scene, object and corrective action if the saved bindings or bake are stale. This check neither saves open scenes nor repairs only a temporary build copy; an unsaved correction cannot silently pass the cached build path.
 
+The saved bake key includes both the native TerrainLit shader and the grass albedo capture shader. Updating the capture shader invalidates older outputs as well as source-asset changes; refresh the bridge to rebuild them, then save the scene.
+
+Bake-completion callbacks can remove authoring objects. Refresh checks that its bridge and placement area still exist before committing results, and watcher/scene-save iteration skips removed consumers while continuing with the remaining objects.
+
 When using a single Grass Terrain Layer without a baked or overridden color map, save that layer's diffuse texture as well as the TerrainLayer asset. They are separate assets, and unsaved diffuse pixels now fail preflight. A saved Ground Color Override takes precedence, so edits to an unused layer diffuse do not block that configuration.
 
 The versioned scene processor validates those same inputs and removes the authoring bridge component from the built scene copy. It never generates terrain or bakes textures during a build. Disabled bridges retain their last serialized placement data.

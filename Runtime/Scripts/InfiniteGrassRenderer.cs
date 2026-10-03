@@ -96,6 +96,13 @@ public class InfiniteGrassRenderer : MonoBehaviour
         // isLoaded. Register now; rendering starts after scene activation.
         if (!IsSceneInstance(false))
             return;
+        // Moving the current owner into a preview scene need not invoke
+        // OnDisable. A replacement can enable before that owner's next Update.
+        if (Instance && Instance != this && !Instance.IsSceneInstance(false))
+        {
+            Instance.ReleaseMeshes();
+            Instance = null;
+        }
         if (Instance != null && Instance != this)
         {
             Debug.LogWarning("Only one enabled Infinite Grass Renderer can own the scene settings.", this);

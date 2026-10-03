@@ -19,7 +19,7 @@ public static class TerrainGrassAlbedoBaker
     public const int MinimumResolution = 16;
     public const int MaximumResolution = 4096;
     public const string NativeTerrainShaderName = "Universal Render Pipeline/Terrain/Lit";
-    private const string BakeShaderName = "Hidden/InfiniteGrass/Editor/TerrainAlbedoBake";
+    public const string BakeShaderName = "Hidden/InfiniteGrass/Editor/TerrainAlbedoBake";
     // Increment when the output contract changes, invalidating adapter caches.
     public const int BakerVersion = 1;
     private const double SignatureRetentionSeconds = 600d;
@@ -85,6 +85,9 @@ public static class TerrainGrassAlbedoBaker
         Append(state, data.size.z.GetHashCode());
         AppendObject(state, material, tracked);
         AppendObject(state, material.shader, tracked);
+        // The capture shader also defines the produced pixels. Track its own
+        // asset/imports, not only the native TerrainLit source it includes.
+        AppendObject(state, Shader.Find(BakeShaderName), tracked);
         Append(state, material.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT") ? 1 : 0);
         Append(state, material.GetFloat("_HeightTransition").GetHashCode());
         Append(state, layers.Length);

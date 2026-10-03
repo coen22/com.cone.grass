@@ -63,6 +63,39 @@ public class GrassDispatchMathTests
         Assert.That(range.CandidateCount, Is.EqualTo(4));
     }
 
+    [TestCase(290, 0.4999920725822449f, 0.1f, true, 1f)]
+    [TestCase(-95, 0.4999975562095642f, 0.1f, true, 1f)]
+    [TestCase(163, -0.4999997019767761f, 0.1f, false, 1f)]
+    [TestCase(-44, -0.49999868869781494f, 0.1f, false, 1f)]
+    [TestCase(16777219, 0f, 0.125f, true, 32f)]
+    [TestCase(16777217, 0f, 0.125f, false, 32f)]
+    [TestCase(-16777219, 0f, 0.125f, false, 32f)]
+    [TestCase(-16777217, 0f, 0.125f, true, 32f)]
+    [TestCase(1000000033, 0f, 0.125f, true, 32f)]
+    [TestCase(1000000003, 0f, 0.125f, false, 32f)]
+    [TestCase(-1000000033, 0f, 0.125f, false, 32f)]
+    [TestCase(-1000000003, 0f, 0.125f, true, 32f)]
+    [TestCase(1073741311, 0f, 0.125f, true, 16f)]
+    [TestCase(-1073741311, 0f, 0.125f, false, 16f)]
+    public void FloatRoundedCandidateOnEitherWorldBoundRetainsItsCell(
+        int cell, float jitter, float spacing, bool minimum, float width)
+    {
+        // Evaluate a candidate independently of the inverse range calculation.
+        // The first four jitters come from seeded cells (290,6), (-95,602),
+        // (163,483), (-44,-253); later cases also exercise int-to-float rounding.
+        float coordinate = (float)((double)(float)cell + jitter);
+        float world = (float)((double)coordinate * spacing);
+        float center = world + (minimum ? width * 0.5f : -width * 0.5f);
+        Bounds bounds = new Bounds(new Vector3(center, 0f, 0f), new Vector3(width, 0f, width));
+        Assert.That(minimum ? bounds.min.x : bounds.max.x, Is.EqualTo(world),
+            "Bounds construction must preserve the endpoint that exposed the omitted cell.");
+
+        Assert.That(GrassDispatchMath.TryGetGridRange(bounds, spacing, out GrassGridRange range), Is.True);
+        Assert.That(cell, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
+        Assert.That(range.Width, Is.GreaterThan(0));
+        Assert.That(range.Height, Is.GreaterThan(0));
+    }
+
     [TestCase(1f, 16f)]
     [TestCase(0.25f, 2f)]
     public void SparseTilesIncludePositiveBilinearDensityAcrossAnAuthoredBoundary(float spacing, float captureTexel)

@@ -5,6 +5,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
@@ -110,6 +111,90 @@ public sealed class GrassSettingsLifecycleTests
                 Object.DestroyImmediate(gameObject);
             if (preview.IsValid())
                 EditorSceneManager.ClosePreviewScene(preview);
+            if (previous)
+                previous.enabled = previousEnabled;
+        }
+    }
+
+    [Test]
+    public void NewSceneSettingsReplaceAPreviewOwnerBeforeItsNextUpdate()
+    {
+        InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
+        bool previousEnabled = previous && previous.enabled;
+        if (previous)
+            previous.enabled = false;
+        Scene preview = default;
+        GameObject originalObject = null;
+        GameObject replacementObject = null;
+        try
+        {
+            originalObject = new GameObject("Grass owner leaving the scene");
+            InfiniteGrassRenderer original = originalObject.AddComponent<InfiniteGrassRenderer>();
+            Assert.That(original.IsReadyForRendering, Is.True);
+            Mesh[] meshes = original.GetLodMeshes();
+            preview = EditorSceneManager.NewPreviewScene();
+            SceneManager.MoveGameObjectToScene(originalObject, preview);
+            Assert.That(original.isActiveAndEnabled, Is.True);
+            Assert.That(original.IsReadyForRendering, Is.False);
+            Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(original),
+                "Registration must encounter the stale owner before its deferred Update cleanup.");
+
+            // Do not yield an Update between the scene move and registration.
+            replacementObject = new GameObject("Replacement grass scene owner");
+            InfiniteGrassRenderer replacement = replacementObject.AddComponent<InfiniteGrassRenderer>();
+
+            Assert.That(replacement.enabled, Is.True);
+            Assert.That(replacement.IsReadyForRendering, Is.True);
+            Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(replacement));
+            foreach (Mesh mesh in meshes)
+                Assert.That(mesh == null, Is.True, "The invalidated owner's generated meshes must be released.");
+            LogAssert.NoUnexpectedReceived();
+        }
+        finally
+        {
+            if (replacementObject)
+                Object.DestroyImmediate(replacementObject);
+            if (originalObject)
+                Object.DestroyImmediate(originalObject);
+            if (preview.IsValid())
+                EditorSceneManager.ClosePreviewScene(preview);
+            if (previous)
+                previous.enabled = previousEnabled;
+        }
+    }
+
+    [Test]
+    public void EligibleCurrentOwnerStillRejectsAdditionalSceneSettings()
+    {
+        InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
+        bool previousEnabled = previous && previous.enabled;
+        if (previous)
+            previous.enabled = false;
+        GameObject originalObject = null;
+        GameObject duplicateObject = null;
+        try
+        {
+            originalObject = new GameObject("Eligible grass scene owner");
+            InfiniteGrassRenderer original = originalObject.AddComponent<InfiniteGrassRenderer>();
+            Mesh[] meshes = original.GetLodMeshes();
+            duplicateObject = new GameObject("Duplicate grass scene owner");
+            LogAssert.Expect(LogType.Warning, "Only one enabled Infinite Grass Renderer can own the scene settings.");
+
+            InfiniteGrassRenderer duplicate = duplicateObject.AddComponent<InfiniteGrassRenderer>();
+
+            Assert.That(duplicate.enabled, Is.False);
+            Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(original));
+            Assert.That(original.IsReadyForRendering, Is.True);
+            foreach (Mesh mesh in meshes)
+                Assert.That(mesh != null, Is.True, "Rejecting a duplicate must preserve the eligible owner's meshes.");
+            LogAssert.NoUnexpectedReceived();
+        }
+        finally
+        {
+            if (duplicateObject)
+                Object.DestroyImmediate(duplicateObject);
+            if (originalObject)
+                Object.DestroyImmediate(originalObject);
             if (previous)
                 previous.enabled = previousEnabled;
         }
@@ -553,6 +638,54 @@ public sealed class GrassRendererLifecycleTests
                 Object.DestroyImmediate(surfaceObject);
                 Object.DestroyImmediate(mesh);
             }
+        }
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    public void InPlaceBladeIndexRangeEditsRefreshArgumentsWithoutChangingTheMesh(int changedField)
+    {
+        using (var fixture = new RendererFixture())
+        {
+            Mesh[] meshes = fixture.Owner.GetLodMeshes();
+            Mesh mesh = fixture.Owner.GetGrassMeshCache();
+            Assert.That(mesh, Is.SameAs(meshes[0]));
+            // Retain the original index buffer while restricting its first
+            // submesh, leaving room to move that range without replacing it.
+            mesh.SetSubMesh(0, new SubMeshDescriptor(0, 6));
+            object state = fixture.CameraStates[0];
+            Assert.That(InvokePrivate(state, "UpdateArgumentData", (object)meshes), Is.True);
+            Assert.That(InvokePrivate(state, "UpdateArgumentData", (object)meshes), Is.False,
+                "An unchanged mesh layout must not request another CPU upload.");
+
+            SubMeshDescriptor subset = mesh.GetSubMesh(0);
+            if (changedField == 0)
+                subset.indexCount = 3;
+            else if (changedField == 1)
+                subset.indexStart = 3;
+            else
+                subset.baseVertex = 1;
+            mesh.SetSubMesh(0, subset);
+
+            Assert.That(fixture.Owner.GetGrassMeshCache(), Is.SameAs(mesh));
+            Assert.That(InvokePrivate(state, "UpdateArgumentData", (object)meshes), Is.True,
+                "Changing a native index range must refresh arguments even when its Mesh identity is unchanged.");
+            var arguments = (GraphicsBuffer.IndirectDrawIndexedArgs[])GetField(state, "argumentData");
+            Assert.That(arguments[0].indexCountPerInstance, Is.EqualTo(mesh.GetIndexCount(0)));
+            Assert.That(arguments[0].startIndex, Is.EqualTo(mesh.GetIndexStart(0)));
+            Assert.That(arguments[0].baseVertexIndex, Is.EqualTo(mesh.GetBaseVertex(0)));
+            foreach (GraphicsBuffer.IndirectDrawIndexedArgs argument in arguments)
+            {
+                Assert.That(argument.instanceCount, Is.Zero,
+                    "Visible instance counts remain owned by the generation reset/finalize kernels.");
+                Assert.That(argument.startInstance, Is.Zero);
+            }
+            Assert.That(InvokePrivate(state, "UpdateArgumentData", (object)meshes), Is.False);
+            Assert.That(GetField(state, "Positions"), Is.Null);
+            Assert.That(GetField(state, "Counts"), Is.Null);
+            Assert.That(GetField(state, "Arguments"), Is.Null,
+                "Refreshing index metadata does not allocate or recreate GPU buffers.");
         }
     }
 
