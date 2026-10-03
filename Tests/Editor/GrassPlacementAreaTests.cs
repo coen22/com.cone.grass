@@ -351,6 +351,112 @@ public sealed class GrassPlacementAreaTests
         Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    [Category("GrassGPU")]
+    public void RecreatedTextureSamplingViewsInvalidateOnlyTheirDependentCaptures(bool densitySource)
+    {
+        RequireRenderTextureDevice();
+        if (SystemInfo.supportsMultisampledTextures == 0)
+            Assert.Ignore("Sampling-view transitions require multisampled texture storage.");
+        var descriptor = new RenderTextureDescriptor(16, 16)
+        {
+            graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
+            depthBufferBits = 0,
+            msaaSamples = 4,
+            bindMS = true,
+            sRGB = false
+        };
+        if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != 4)
+            Assert.Ignore("The active graphics device must support the requested 4x MSAA texture.");
+
+        descriptor.bindMS = false;
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        var texture = new RenderTexture(descriptor);
+        assets.Add(texture);
+        Assert.That(texture.Create(), Is.True);
+        Assert.That(texture.antiAliasing, Is.EqualTo(4));
+        Assert.That(texture.bindTextureMS, Is.False);
+        if (densitySource)
+            BindLocalTexture(area, texture);
+        else
+            area.SetGroundColorTexture(texture, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Bounds query = original.WorldBounds;
+        var changes = new List<GrassPlacementChange>();
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, change) =>
+        {
+            if (source == area)
+                changes.Add(change);
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            var configurations = new[]
+            {
+                (Samples: 4, BindMS: true, Reject: true),
+                (Samples: 4, BindMS: false, Reject: false),
+                (Samples: 1, BindMS: true, Reject: false),
+                (Samples: 4, BindMS: true, Reject: true),
+                (Samples: 1, BindMS: true, Reject: false),
+                (Samples: 1, BindMS: false, Reject: false)
+            };
+            foreach (var configuration in configurations)
+            {
+                uint densityRevision = area.DensityRevision;
+                uint groundRevision = area.GroundColorRevision;
+                uint surfaceRevision = area.SurfaceRevision;
+                changes.Clear();
+                // The area never observes the released interval. Reconfiguration
+                // must be detected on this same, created producer object.
+                texture.Release();
+                texture.antiAliasing = configuration.Samples;
+                texture.bindTextureMS = configuration.BindMS;
+                Assert.That(texture.Create(), Is.True);
+                Assert.That(texture.antiAliasing, Is.EqualTo(configuration.Samples));
+                Assert.That(texture.bindTextureMS, Is.EqualTo(configuration.BindMS));
+
+                bool hasCapture = !densitySource || !configuration.Reject;
+                Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData captured), Is.EqualTo(hasCapture));
+                Assert.That(area.IntersectsCoverage(query), Is.EqualTo(hasCapture));
+                Assert.That(original.IntersectsCoverage(query), Is.EqualTo(hasCapture));
+                if (densitySource)
+                {
+                    Assert.That(area.DensityTexture, Is.SameAs(texture));
+                    if (hasCapture)
+                        Assert.That(captured.DensityTexture, Is.SameAs(texture));
+                    Assert.That(area.DensityRevision, Is.GreaterThan(densityRevision));
+                }
+                else
+                {
+                    Assert.That(area.GroundColorTexture, Is.SameAs(texture));
+                    if (configuration.Reject)
+                        Assert.That(captured.GroundColorTexture, Is.Null);
+                    else
+                        Assert.That(captured.GroundColorTexture, Is.SameAs(texture));
+                    Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
+                }
+                Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
+                Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+                Assert.That(changes, Is.EqualTo(new[] { densitySource
+                    ? GrassPlacementChange.Density | GrassPlacementChange.GroundColor
+                    : GrassPlacementChange.GroundColor }));
+                Assert.That(texture.IsCreated(), Is.True, "Capture queries must preserve producer-owned storage.");
+
+                uint settledRevision = area.SourceRevision;
+                Assert.That(area.TryGetCaptureData(out _), Is.EqualTo(hasCapture));
+                Assert.That(area.SourceRevision, Is.EqualTo(settledRevision));
+                Assert.That(changes.Count, Is.EqualTo(1), "An unchanged sampling view must not repeatedly invalidate captures.");
+            }
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+            texture.Release();
+        }
+    }
+
     [Test]
     public void DestroyedPaintedAssetDoesNotActivateAnExternalTextureUntilTheBindingIsCleared()
     {
