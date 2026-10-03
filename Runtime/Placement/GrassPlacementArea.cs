@@ -1009,7 +1009,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         {
             int hash = terrain ? terrain.GetEntityId().GetHashCode() : 0;
             hash = hash * 397 ^ useTerrainBounds.GetHashCode();
-            hash = hash * 397 ^ gameObject.scene.handle;
+            hash = hash * 397 ^ gameObject.scene.handle.GetRawData().GetHashCode();
             if (terrain && terrain.terrainData)
             {
                 Vector3 origin = terrain.transform.position;
