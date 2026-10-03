@@ -12,6 +12,7 @@ using UnityEngine.SceneManagement;
 public static class GrassMicroVerseBridgeWatcher
 {
     private const double DebounceSeconds = 0.35;
+    private const double CacheCleanupIntervalSeconds = 1d;
     private static readonly Dictionary<GrassMicroVerseBridge, double> nextPoll =
         new Dictionary<GrassMicroVerseBridge, double>();
     private static readonly List<GrassMicroVerseBridge> staleEntries =
@@ -19,6 +20,7 @@ public static class GrassMicroVerseBridgeWatcher
     private static readonly List<GrassMicroVerseBridge> activeSnapshot =
         new List<GrassMicroVerseBridge>();
     private static double refreshAfter = -1;
+    private static double nextCacheCleanup;
 
     static GrassMicroVerseBridgeWatcher()
     {
@@ -68,6 +70,14 @@ public static class GrassMicroVerseBridgeWatcher
             return;
 
         double now = EditorApplication.timeSinceStartup;
+        if (now >= nextCacheCleanup)
+        {
+            // Manual refresh with Auto Refresh disabled never enters nextPoll.
+            // Clean all observations so closing those scenes does not retain
+            // their bridge objects and generated texture metadata indefinitely.
+            GrassMicroVerseBridgeUtility.PruneInactiveCaches();
+            nextCacheCleanup = now + CacheCleanupIntervalSeconds;
+        }
         if (refreshAfter >= 0 && now < refreshAfter)
             return;
 

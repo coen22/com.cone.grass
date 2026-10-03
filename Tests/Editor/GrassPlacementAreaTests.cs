@@ -142,6 +142,103 @@ public sealed class GrassPlacementAreaTests
     }
 
     [Test]
+    public void CapturedOccupancyUsesItsOriginalFrameAndDoesNotUploadPendingPaint()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(64f, 64f));
+        area.transform.position = new Vector3(100f, 5f, -30f);
+        area.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
+        area.transform.localScale = new Vector3(-2f, 1f, 3f);
+        GrassDensityAsset density = NewDensity();
+        Vector2 radius = Vector2.one * (0.25f / 64f);
+        density.Paint(new Vector2(8.5f / 64f, 48.5f / 64f), radius, 1f, 1f, false);
+        density.Paint(new Vector2(48.5f / 64f, 8.5f / 64f), radius, 1f, 1f, false);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+        Assert.That(snapshot.DensityAsset, Is.SameAs(density));
+
+        var first = new Bounds(new Vector3(149.5f, 0f, 17f), Vector3.one * 0.01f);
+        var second = new Bounds(new Vector3(29.5f, 0f, -63f), Vector3.one * 0.01f);
+        var empty = new Bounds(new Vector3(101.5f, 0f, -31f), Vector3.one * 0.01f);
+        Assert.That(snapshot.IntersectsCoverage(first), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(second), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(empty), Is.False,
+            "The two painted islands enclose this point in their combined bounds, but its pixels are empty.");
+        Assert.That(snapshot.IntersectsCoverage(first), Is.EqualTo(area.IntersectsCoverage(first)));
+        Assert.That(snapshot.IntersectsCoverage(empty), Is.EqualTo(area.IntersectsCoverage(empty)));
+
+        uint uploads = density.TextureUploadCount;
+        density.Paint(new Vector2(32.5f / 64f, 32.5f / 64f), radius, 1f, 1f, false);
+        RectInt pending = density.PendingUploadRegion;
+        Assert.That(pending.width, Is.GreaterThan(0));
+        Assert.That(snapshot.IntersectsCoverage(empty), Is.True,
+            "The snapshot retains the mapping, while the asset still owns the CPU pixel data.");
+        Assert.That(density.TextureUploadCount, Is.EqualTo(uploads));
+        Assert.That(density.PendingUploadRegion, Is.EqualTo(pending));
+
+        area.transform.position += Vector3.right * 1000f;
+        Assert.That(area.IntersectsCoverage(first), Is.False);
+        Assert.That(snapshot.IntersectsCoverage(first), Is.True,
+            "Tile queries must use the same frame as the captured draw, without rereading the scene transform.");
+        density.Fill(0f);
+        Assert.That(snapshot.IntersectsCoverage(first), Is.False);
+        Assert.That(density.TextureUploadCount, Is.EqualTo(uploads));
+    }
+
+    [Test]
+    public void CapturedOccupancyRejectsMissingOrUnsupportedTexturesAndDefaultData()
+    {
+        var query = new Bounds(Vector3.zero, Vector3.one);
+        Assert.That(default(GrassPlacementDrawData).IntersectsCoverage(query), Is.False);
+        var snapshot = new GrassPlacementDrawData
+        {
+            Shape = GrassPlacementShape.Texture,
+            Density = 1f,
+            WorldBounds = new Bounds(Vector3.zero, Vector3.one * 10f),
+            WorldToMask = Matrix4x4.identity
+        };
+        Assert.That(snapshot.IntersectsCoverage(query), Is.False);
+        var cubemap = new Cubemap(16, TextureFormat.RGBA32, false);
+        assets.Add(cubemap);
+        snapshot.DensityTexture = cubemap;
+        Assert.That(snapshot.IntersectsCoverage(query), Is.False);
+        Texture2D unreadable = NewTexture();
+        unreadable.Apply(false, true);
+        snapshot.DensityTexture = unreadable;
+        Assert.That(snapshot.IntersectsCoverage(query), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(new Bounds(Vector3.right * 20f, Vector3.one)), Is.False);
+    }
+
+    [TestCase(GrassPlacementShape.Box)]
+    [TestCase(GrassPlacementShape.Circle)]
+    public void RotatedShapeOccupancyRejectsEmptyOuterBoundsWithoutDroppingItsBoundary(GrassPlacementShape shape)
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(4f, 80f));
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("shape").enumValueIndex = (int)shape;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        area.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+
+        var offStrip = new Bounds(new Vector3(20f, 0f, -20f), Vector3.one * 0.1f);
+        var onStrip = new Bounds(new Vector3(25f, 0f, 25f), Vector3.one * 0.1f);
+        Assert.That(snapshot.WorldBounds.Contains(offStrip.center), Is.True,
+            "The empty tile is inside the loose world bounds of the long rotated area.");
+        Assert.That(snapshot.IntersectsCoverage(offStrip), Is.False);
+        Assert.That(area.IntersectsCoverage(offStrip), Is.False);
+        Assert.That(snapshot.IntersectsCoverage(onStrip), Is.True);
+
+        Matrix4x4 maskToWorld = snapshot.WorldToMask.inverse;
+        Vector3 nearCorner = maskToWorld.MultiplyPoint3x4(new Vector3(0.95f, 0f, 0.95f));
+        Assert.That(snapshot.IntersectsCoverage(new Bounds(nearCorner, Vector3.one * 0.01f)),
+            Is.EqualTo(shape == GrassPlacementShape.Box));
+        Vector3 justOutsideEdge = maskToWorld.MultiplyPoint3x4(new Vector3(1.001f, 0f, 0.5f));
+        Assert.That(snapshot.IntersectsCoverage(new Bounds(justOutsideEdge, Vector3.one * 0.02f)), Is.True,
+            "A query straddling the geometric edge must remain eligible after the caller adds its filter margin.");
+    }
+
+    [Test]
     public void MovingAnAreaInvalidatesBothItsPreviousAndCurrentExtent()
     {
         GrassPlacementArea area = NewArea();
@@ -297,6 +394,8 @@ public sealed class GrassPlacementAreaTests
         AssertUv(data.WorldToMask, firstCorner, 0.2f, 0.6f);
         Assert.That(area.IntersectsCoverage(new Bounds(new Vector3(15f, 10f, -20f), Vector3.one)), Is.False);
         Assert.That(area.IntersectsCoverage(new Bounds(new Vector3(35f, 10f, 100f), Vector3.one)), Is.True);
+        Assert.That(data.IntersectsCoverage(new Bounds(new Vector3(15f, 10f, -20f), Vector3.one)), Is.False);
+        Assert.That(data.IntersectsCoverage(new Bounds(new Vector3(35f, 10f, 100f), Vector3.one)), Is.True);
 
         area.SetTextureCoverageBounds(new Rect(float.NaN, 0f, 1f, 1f));
         Assert.That(area.TryGetCaptureData(out _), Is.False);
@@ -347,6 +446,41 @@ public sealed class GrassPlacementAreaTests
         Object.DestroyImmediate(terrain.gameObject);
         Assert.That(area.TryGetCaptureData(out _), Is.False);
         Assert.That(area.IntersectsCoverage(new Bounds(area.transform.position, Vector3.one)), Is.False);
+    }
+
+    [Test]
+    public void MovingAnExplicitTerrainIntoAPreviewSceneDisablesCoverageAndPaintingUntilItReturns()
+    {
+        Terrain terrain = NewTerrain(Vector3.zero, new Vector3(100f, 10f, 100f));
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f), terrain);
+        area.transform.position = new Vector3(50f, 0f, 50f);
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        Scene originalScene = terrain.gameObject.scene;
+        Scene preview = EditorSceneManager.NewPreviewScene();
+        try
+        {
+            SceneManager.MoveGameObjectToScene(terrain.gameObject, preview);
+            Assert.That(area.gameObject.scene, Is.EqualTo(originalScene));
+            Assert.That(area.TryGetCaptureData(out _), Is.False);
+            Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
+            uint revision = density.Revision;
+            Assert.That(area.Paint(area.transform.position, 2f, 1f, 1f, true), Is.False);
+            Assert.That(density.Revision, Is.EqualTo(revision));
+
+            SceneManager.MoveGameObjectToScene(terrain.gameObject, originalScene);
+            Assert.That(area.TryGetCaptureData(out _), Is.True);
+            Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
+        }
+        finally
+        {
+            if (terrain && terrain.gameObject.scene == preview)
+                SceneManager.MoveGameObjectToScene(terrain.gameObject, originalScene);
+            EditorSceneManager.ClosePreviewScene(preview);
+        }
     }
 
     [Test]

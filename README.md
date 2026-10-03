@@ -126,7 +126,9 @@ The old near mesh duplicated row vertices and used 23 vertices. Its distance def
 
 Generation checks dispatch boundaries, surface/area coverage, distance density, and a conservative frustum radius before writing bounded queues. Each 8x8 workgroup combines accepted roots before reserving up to three global LOD ranges, reducing counter contention. Rounded edge threads still participate in every group barrier. Distance density remains full only to **Full Density Distance**, then fades toward **Draw Distance**. Overflow is safely dropped and available in diagnostics. Tune queue weights/capacity if diagnostics show overflow.
 
-Density, ground color and surface revisions are tracked separately. A paint stroke or replaced MicroVerse mask can refresh the affected density capture while height remains cached. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Empty painted blocks skip dispatch tiles, and cropped draw bounds retain the original mask UVs. Scene inventory is shared across cameras instead of rediscovered on each camera movement or stroke.
+Density, ground color and surface revisions are tracked separately. A paint stroke or replaced MicroVerse mask can refresh the affected density capture while height remains cached. Different supporting surfaces keep separate positive-density maps to prevent coverage leaking between their dispatches. Empty painted blocks and tiles outside rotated box/circle areas skip dispatch work. Tile checks reuse captured placement mappings, and the candidate budget counts actual clipped cells so long, narrow regions do not exceed it merely because they touch many edge tiles. Cropped draw bounds retain the original mask UVs. Scene inventory is shared across cameras instead of rediscovered on each camera movement or stroke.
+
+When no dispatch remains, the renderer resets counts and indirect arguments, releases motion history, and skips grass color, contact and motion passes. Direct camera output uses the actual attachment metadata for MSAA and format decisions, including URP backbuffers without a texture descriptor. Motion history also releases on unsupported material changes, recreates lost GPU texture storage, and preserves wind sampling when texture-quality settings reduce the active mip level.
 
 Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
 
@@ -155,10 +157,14 @@ Run the license-independent checks from the repository root:
 ```sh
 python3 Tools~/validate_source.py .
 python3 -B -m unittest discover -s Tools~/tests -v
+python3 -B -m unittest discover -s Tools~/ShaderChecks -p 'test_*.py' -v
+python3 -B Tools~/ShaderChecks/check.py
 dotnet run --project Tools~/SourceChecks -- .
 ```
 
 The last command needs .NET 8 and restores a pinned Roslyn package. It parses C# 9 editor/player branches, including the optional sample. It does not bind Unity APIs or compile shaders.
+
+The separate shader check runs the official Microsoft DXC compiler against pinned, unmodified Unity Graphics headers. It compiles 51 entry-point/keyword configurations to each of DXIL and SPIR-V and writes binaries, diagnostics and source provenance to `artifacts/shaders`. All 102 compiler invocations passed locally. This catches HLSL compilation errors; Unity import, variant stripping, runtime bindings, target shader-model support and rendered correctness still need Editor/player validation. See the [shader compiler guide](Tools~/ShaderChecks/README.md).
 
 Create a disposable project with the package tests, optional bridge sample and native URP setup:
 
@@ -166,7 +172,9 @@ Create a disposable project with the package tests, optional bridge sample and n
 python3 Tools~/create_validation_project.py --unity 6000.6.0f1 --urp 17.6.0
 ```
 
-Open the generated project with that installed Unity version and run EditMode tests. A graphics device is required for compute, shader-pass and albedo tests. The GitHub workflow runs the same project when Unity licensing credentials are configured, saves logs/results, and explicitly reports skipped GPU cases. See [validation](Documentation~/Validation.md) for licensing configuration, the 6.7 target and rendered acceptance cases.
+Open the generated project with that installed Unity version and run EditMode tests. A graphics device is required for compute, shader-pass and albedo tests. `GrassValidationBuild.BuildCurrent` creates a reproducible real-grass scene with a saved synthetic mask and makes both clean and incremental standalone builds. The built player has an opt-in `-grassSmoke` mode that records functional observations and screenshots.
+
+The GitHub workflow runs source and shader checks independently of licensing, then Editor tests and the player builds when Unity licensing credentials are configured. It saves compiler output, logs, results and the standalone player, and explicitly reports skipped GPU cases. See [validation](Documentation~/Validation.md) for CLI commands, licensing configuration, the 6.7 target and the remaining rendered acceptance cases.
 
 ## Implementation tracking
 

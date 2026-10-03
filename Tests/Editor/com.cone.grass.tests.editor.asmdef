@@ -1,7 +1,10 @@
 {
   "name": "com.cone.grass.tests.editor",
   "references": [
-    "com.cone.grass"
+    "com.cone.grass",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime",
+    "Unity.Collections"
   ],
   "includePlatforms": [
     "Editor"

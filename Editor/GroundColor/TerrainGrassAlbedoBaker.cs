@@ -367,8 +367,17 @@ public static class TerrainGrassAlbedoBaker
         existing = null;
         if (!normalized.StartsWith("Assets/", StringComparison.Ordinal) ||
             !normalized.EndsWith(".asset", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("/../") || normalized.Contains("/./") || normalized.Contains("//") ||
-            !AssetDatabase.IsValidFolder(Path.GetDirectoryName(normalized)?.Replace('\\', '/')))
+            normalized.Contains("/../") || normalized.Contains("/./") || normalized.Contains("//"))
+        {
+            error = "Choose a Texture2D .asset path in an existing folder below Assets/.";
+            return false;
+        }
+        // AssetDatabase resolves existing assets without regard to path casing. Resolve
+        // its canonical path before checking whether this output is a source texture.
+        string guid = AssetDatabase.AssetPathToGUID(normalized, AssetPathToGUIDOptions.OnlyExistingAssets);
+        if (!string.IsNullOrEmpty(guid))
+            normalized = AssetDatabase.GUIDToAssetPath(guid);
+        if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(normalized)?.Replace('\\', '/')))
         {
             error = "Choose a Texture2D .asset path in an existing folder below Assets/.";
             return false;
@@ -381,8 +390,9 @@ public static class TerrainGrassAlbedoBaker
         }
         foreach (TerrainLayer layer in layers)
         {
-            if ((layer.diffuseTexture && AssetDatabase.GetAssetPath(layer.diffuseTexture) == normalized) ||
-                (layer.maskMapTexture && AssetDatabase.GetAssetPath(layer.maskMapTexture) == normalized))
+            if (IsSourceTexture(layer.diffuseTexture, current, normalized) ||
+                IsSourceTexture(layer.maskMapTexture, current, normalized) ||
+                IsSourceTexture(layer.normalMapTexture, current, normalized))
             {
                 error = "The baked texture cannot replace one of the Terrain's source textures.";
                 return false;
@@ -392,6 +402,9 @@ public static class TerrainGrassAlbedoBaker
         error = null;
         return true;
     }
+
+    private static bool IsSourceTexture(Texture2D source, Object output, string outputPath) => source &&
+        (source == output || string.Equals(AssetDatabase.GetAssetPath(source), outputPath, StringComparison.OrdinalIgnoreCase));
 
     private static void Append(StringBuilder state, int value) => state.Append(value).Append('|');
     private static void AppendVector(StringBuilder state, Vector4 value)

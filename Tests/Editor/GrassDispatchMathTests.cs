@@ -127,6 +127,48 @@ public class GrassDispatchMathTests
         Assert.That(unchanged, Is.EqualTo(used));
     }
 
+    [TestCase(0, 0, 7)]
+    [TestCase(-1000, -2, 5)]
+    public void NarrowCameraWindowsCountClippedCellsInsteadOfWholeTiles(int minX, int minZ, int height)
+    {
+        var cameraGrid = new GrassGridRange(minX, minZ, 300000, height);
+        int firstTileX = GrassDispatchMath.FloorDivide(cameraGrid.MinX, 256);
+        int lastTileX = GrassDispatchMath.FloorDivide(cameraGrid.MaxX - 1, 256);
+        int firstTileZ = GrassDispatchMath.FloorDivide(cameraGrid.MinZ, 256);
+        int lastTileZ = GrassDispatchMath.FloorDivide(cameraGrid.MaxZ - 1, 256);
+        long oldWholeTileEstimate = (long)(lastTileX - firstTileX + 1) * (lastTileZ - firstTileZ + 1) * 256 * 256;
+        Assert.That(oldWholeTileEstimate, Is.GreaterThan(GrassDispatchMath.MaximumCandidates),
+            "The regression must exercise a window the former estimate rejected.");
+        long candidates = 0;
+        for (int tileZ = firstTileZ; tileZ <= lastTileZ; tileZ++)
+        for (int tileX = firstTileX; tileX <= lastTileX; tileX++)
+        {
+            Assert.That(GrassDispatchMath.TryClipTile(cameraGrid, tileX, tileZ, 256, out GrassGridRange clipped), Is.True);
+            Assert.That(clipped.MinX, Is.GreaterThanOrEqualTo(cameraGrid.MinX));
+            Assert.That(clipped.MinZ, Is.GreaterThanOrEqualTo(cameraGrid.MinZ));
+            Assert.That(clipped.MaxX, Is.LessThanOrEqualTo(cameraGrid.MaxX));
+            Assert.That(clipped.MaxZ, Is.LessThanOrEqualTo(cameraGrid.MaxZ));
+            Assert.That(GrassDispatchMath.TryAddCandidateBudget(candidates, clipped.Width, clipped.Height,
+                GrassDispatchMath.MaximumCandidates, out candidates), Is.True);
+        }
+        Assert.That(candidates, Is.EqualTo(300000L * height));
+    }
+
+    [Test]
+    public void ClippingOutsideAndExtremeTilesDoesNotWrapCoordinates()
+    {
+        var grid = new GrassGridRange(-2, -3, 5, 7);
+        Assert.That(GrassDispatchMath.TryClipTile(grid, int.MaxValue, 0, int.MaxValue, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryClipTile(grid, int.MinValue, 0, int.MaxValue, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryClipTile(grid, 2, 0, 256, out _), Is.False);
+        Assert.That(GrassDispatchMath.TryClipTile(grid, -1, -1, 256, out GrassGridRange clipped), Is.True);
+        Assert.That(clipped.MinX, Is.EqualTo(-2));
+        Assert.That(clipped.MinZ, Is.EqualTo(-3));
+        Assert.That(clipped.Width, Is.EqualTo(2));
+        Assert.That(clipped.Height, Is.EqualTo(3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => GrassDispatchMath.TryClipTile(grid, 0, 0, 0, out _));
+    }
+
     [Test]
     public void BudgetRejectsHugeOrNegativeInputWithoutIntegerOverflow()
     {

@@ -23,7 +23,7 @@ def main():
     args = parser.parse_args()
     root = args.root.resolve()
     errors = []
-    excluded = {".git", "Validation~", "Library", "Temp", "bin", "obj", "__pycache__"}
+    excluded = {".git", "Validation~", "Library", "Temp", "bin", "obj", "__pycache__", "artifacts"}
     paths = sorted(p for p in root.rglob("*") if p.is_file() and not excluded.intersection(p.relative_to(root).parts))
     if not (root / "package.json").is_file():
         parser.error("root must contain package.json")

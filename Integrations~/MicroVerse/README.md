@@ -58,11 +58,15 @@ The optional ground bake also uses a source signature, including terrain texture
 
 A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
 
+The bridge treats path casing and Windows-style separators as aliases of the same output asset. Before writing a bake, it also checks loaded scenes for inactive bridge objects and disabled bridges retaining a saved bake, so those outputs cannot be overwritten at another Terrain or resolution. Use separate output assets for separate tiles or resolutions. Unchanged polls do not scan scene hierarchies.
+
 Automatic refresh does not know whether MicroVerse is generating, has completed, or has canceled an update. During editing, coverage can lag by the debounce/poll interval and can observe an intermediate producer output. A GPU producer is also allowed to write a texture without incrementing `Texture.updateCount` or raising an asset event. Such unreported writes cannot be detected by cheap polling. After generation finishes, **Refresh Saved Mask** explicitly invalidates density even if counters did not change; **Bake Terrain Albedo and Refresh** also forces a ground bake. Both preserve cached terrain height.
 
 Changes to mask format or resolution can replace the generated texture subasset. The bridge resolves its selected **unique full texture name** again, so it can replace an obsolete reference when the replacement retains that name. If the name changes, select the new output explicitly. If multiple subassets have the same name, resolve the naming conflict before proceeding. The bridge never silently chooses one.
 
 Changing the Terrain or MaskTarget in the inspector clears the selected density output and requires a new explicit mapping. Changing the Terrain also clears the ground-bake path so a different tile cannot overwrite the previous tile's bake accidentally. Moving an existing bake asset preserves its reference and updates its saved path. Disabling the bridge stops automatic authoring updates; the adjacent placement area retains the last resolved runtime inputs. Disable the placement area to stop drawing its grass.
+
+Editor cache housekeeping also releases manually refreshed bindings after their bridge is disabled or destroyed. It preserves the caches of live manual bindings, performs no texture readback and schedules no grass capture.
 
 ## Saving and player builds
 
@@ -78,7 +82,7 @@ There is no MicroVerse lookup or polling in the player. Keep the generated textu
 
 ## Validation in the target project
 
-After importing the sample with Unity Test Framework available, run `GrassMicroVerseBridgeTests` in Test Runner. The tests cover explicit tile selection, empty configuration, texture replacement, duplicate names, sRGB rejection, TerrainLayer ownership, no-op polling, narrow density/color invalidation, cached discovery and read-only player preflight over saved scenes. The core editor baker has separate rendering tests. These tests exercise generic Unity subassets; they do not replace validation against the installed MicroVerse version.
+After importing the sample with Unity Test Framework available, run `GrassMicroVerseBridgeTests` and `GrassMicroVerseGroundBakeTests` in Test Runner. They cover explicit tile selection, empty configuration, texture replacement, duplicate names, sRGB rejection, TerrainLayer ownership, no-op polling, narrow density/color invalidation, manual-cache cleanup, saved-bake reuse, output-path aliases, inactive output owners and read-only player preflight over saved scenes. Ground-bake cases require a graphics device and native URP. These tests exercise generic Unity subassets; they do not replace validation against the installed MicroVerse version.
 
 - Start with a black mask and confirm no grass appears. Add one spline area and check that blades appear only within its white/gray coverage.
 - Check the same spline falloff and filters on the Texture Stamp and Mask Stamp. Inspect both density preview and terrain texture weights, especially on slopes and near the edge.

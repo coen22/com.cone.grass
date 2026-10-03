@@ -10,21 +10,36 @@ This document separates implemented source changes from results that require a U
 | Package and assembly-definition JSON, shader source links | Checked locally and in GitHub Actions |
 | C# 9 syntax, editor/player and 6.6/6.7 conditional branches | Automated in GitHub Actions; consult the PR checks for the exact commit |
 | New source metadata and whitespace | Checked locally |
+| HLSL compilation against pinned public URP 17.6 headers | 102/102 DXC invocations passed locally: DXIL and SPIR-V; separate CI job added |
 | Density, grid boundaries, Terrain decoding, LOD geometry, premultiplied edge math, projection/depth round trips | Mathematical/source checks performed |
 | Core placement, settings, mesh and dispatch EditMode cases | Authored; not executed in Unity |
 | Shipped compute kernels, shader passes, motion history and albedo GPU cases | Authored; not executed in Unity |
 | Optional MicroVerse bridge EditMode cases | Authored; not executed in Unity |
-| Unity 6.6 shader/C# import | Not run |
+| Unity 6.6 shader/C# import | Actual Editor CLI attempted; licensing rejected startup before import/tests |
 | Unity 6.6 standalone build | Not run |
 | Unity 6.7 import/build | Not run |
 | GPU timings, allocations in Unity, RenderGraph viewer, rendered comparisons | Not run |
 | Installed MicroVerse Core/Splines/Masks generation cycle | Not run |
 
-The local implementation environment has no Unity Editor, .NET compiler, DXC, or glslang. GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. Source checks are not Unity API compilation or GPU validation. Shader helper definitions and RenderGraph/motion scheduling were checked against Unity's public Graphics source; this was not a locally installed, pinned URP 17.6 package.
+GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. The separate offline shader check downloads the official Microsoft DXC release and uses unmodified Unity Graphics headers at an exact source commit whose URP manifest declares 17.6.0. Its 102 configurations compile successfully to DXIL and SPIR-V without a Unity license. This does not establish Unity ShaderLab import, C# API binding, runtime resource binding, original shader-model compatibility, or rendered correctness. See the [compiler scope and provenance](../Tools~/ShaderChecks/README.md).
 
 The first [GitHub workflow run](https://github.com/coen22/com.cone.grass/actions/runs/37128243485) passed source checks for commit `8280ce1ab2950b86a63e97d295cf4744feaf8b33`. Its Unity job was **skipped**, because the repository had no configured Unity licensing credentials. This records a checkpoint; it does not certify subsequent commits or any Unity acceptance case below.
 
 The [PR checks](https://github.com/coen22/com.cone.grass/pull/35/checks) and [package validation workflow](https://github.com/coen22/com.cone.grass/actions/workflows/validation.yml) identify subsequent checked commits. The API review also replaced Unity 6.6's obsolete `GetInstanceID()` calls with `GetEntityId()`, retaining full identity for dictionary keys. Roslyn now rejects that known obsolete invocation as a regression guard; it remains a narrow source check rather than Unity API binding.
+
+### Actual Unity CLI attempt — 2026-10-03
+
+[PR #36](https://github.com/coen22/com.cone.grass/pull/36) adds a dedicated CLI availability probe. [Run 37132852610](https://github.com/coen22/com.cone.grass/actions/runs/37132852610) downloaded the official Unity 6000.6.0f1 Linux Editor, verified the archive's 4,167,231,268-byte size and SHA-256, extracted it, generated the test project, and launched the actual Editor with `-batchmode -nographics -runTests -testPlatform EditMode`.
+
+The Editor exited with **198** and reported no valid Unity Editor license. Its result is **blocked_by_license**, with **tests_executed: false** and no test XML. [The run artifact](https://github.com/coen22/com.cone.grass/actions/runs/37132852610/artifacts/11276874299) contains the launcher log, Editor log and `cli-attempt.json`. The probe workflow completed because it recognized an explicit environment block; this is not a passing Unity test result. No license credentials are supplied by this availability probe. The licensed test and build jobs remain the engine acceptance gate.
+
+The same probe can run against an installed Editor locally:
+
+```sh
+python3 Tools~/probe_unity_cli.py --editor /path/to/Editor/Unity --project Validation~/Project --output artifacts/unity-cli
+```
+
+It removes previous XML and Editor logs before each attempt so stale results or a stale license error cannot conceal a new startup failure. Unexpected startup errors, missing results after a successful process exit, failed tests and timeouts fail the command.
 
 ## Reproducible test setup
 
@@ -33,6 +48,8 @@ Use the included generator from the repository root:
 ```sh
 python3 Tools~/validate_source.py .
 python3 -B -m unittest discover -s Tools~/tests -v
+python3 -B -m unittest discover -s Tools~/ShaderChecks -p 'test_*.py' -v
+python3 -B Tools~/ShaderChecks/check.py
 dotnet run --project Tools~/SourceChecks -- .
 python3 Tools~/create_validation_project.py --unity 6000.6.0f1 --urp 17.6.0
 ```
@@ -41,7 +58,7 @@ It creates `Validation~/Project` with a local package dependency, Unity Test Fra
 
 1. Record the full editor/package versions and graphics API.
 2. Run all grass EditMode tests. Core tests cover placement, painting, additive scene registration, mesh topology, culling/grid math and contact projection parameters.
-3. Run the `GrassGPU` cases with a graphics device. These execute rounded compute groups, capacity overflow, zero-after-populated reset, Terrain height/holes, mesh-boundary height normalization, default shader passes, representative blade variants, motion-history lookup/triangle reconstruction, regional density uploads and native terrain albedo baking.
+3. Run the `GrassGPU` cases with a graphics device. These execute rounded compute groups, capacity overflow, zero-after-populated reset, perspective/orthographic culling, mixed LOD transitions, the full-density plateau, Terrain height/holes, mesh-boundary height normalization, default shader passes, representative blade variants, motion-history lookup/triangle reconstruction and resource lifetime, regional density uploads and native terrain albedo baking. Motion resource tests also require an initialized URP instance; render a camera after opening the generated project if those tests report that precondition missing.
 4. The imported MicroVerse bridge tests exercise synthetic saved-output assets, no-op polling, replacement and stale build inputs. They do not require proprietary MicroVerse assemblies and do not validate native producer events.
 5. Create the rendering acceptance scene described below, save the scene and generated sources, then run clean and incremental standalone builds.
 
@@ -51,7 +68,7 @@ Example batch invocation, using the actual Unity executable and project path:
 Unity -batchmode -projectPath /path/to/project -runTests -testPlatform EditMode -testResults /path/to/results/editmode.xml -logFile /path/to/results/editmode.log
 ```
 
-Run rendering tests on a machine with the target graphics API and GPU available. Do not infer graphics support from a headless import alone.
+Use `-nographics` for a headless C# import and non-GPU run. Do not add `-quit` to a Test Runner invocation: the runner exits after writing results. Run rendering tests on a machine with the target graphics API and GPU available. Do not infer graphics support from a headless import alone.
 
 After a test run, inspect the result scope explicitly:
 
@@ -61,16 +78,30 @@ python3 Tools~/report_unity_results.py /path/to/results --require-gpu
 
 The reporter fails a required GPU run if GPU cases are absent, skipped or incomplete. Omit `--require-gpu` for a headless import run; skipped graphics cases still appear in the report.
 
+### Reproducible standalone scene and builds
+
+The generated project contains `GrassValidationBuild`, which operates only in a project carrying the generator's marker. **Tools > Cone > Grass Validation > Create Rendering Scene** creates a flat native URP TerrainLit terrain, a saved synthetic density-mask asset consumed by the actual MicroVerse bridge, the production renderer feature, a directional light, an obstacle and a direct-output game camera. This synthetic mask exercises saved-output binding without pretending to execute MicroVerse generation.
+
+To build the same scene twice, with the standalone target already installed:
+
+```sh
+Unity -batchmode -nographics -quit -buildTarget StandaloneLinux64 -projectPath /path/to/project -executeMethod GrassValidationBuild.BuildCurrent -logFile /path/to/results/build.log
+```
+
+`BuildCurrent` creates a clean development player and then rebuilds it incrementally without changing the scene or its assets. Both must succeed. It saves `Builds/build-results.json` and the executable under `Builds/<target>/` inside the generated project. Selecting the target on the command line lets Unity reload its platform configuration before the build method executes. Windows and macOS standalone targets are also accepted when installed and selected by the host Editor.
+
+Launch the built player with `-grassSmoke -grassSmokeOutput /path/to/results/player` to run its opt-in rendering probe. A normal launch leaves the generated scene available for inspection. The probe records device information, observed asynchronous counts, requested render settings, logs and PNG captures while exercising grass enable/disable, contact and motion requests, render scale, requested MSAA, empty coverage and restoration. It exits nonzero on missing required graphics capabilities, timeouts, detected rendering errors or failed observations. This is a functional smoke test; its images and requested settings do not certify contact-shadow quality, correct temporal vectors, actual attachment MSAA counts, or performance gains. Do not use `-nographics` for this player probe.
+
 ### GitHub Actions
 
-`Package validation` runs metadata checks, Python validation-tool tests, C# 9 parsing, and project generation on pull requests. The separate Unity job runs only when the repository has a usable license configuration. Configure secrets in GitHub using the organization's approved Unity license method:
+`Package validation` runs metadata checks, Python validation-tool tests, C# 9 parsing, project generation and actual offline HLSL compilation on pull requests. The separate Unity test job and dependent clean/incremental Linux player-build job run only when the repository has a usable license configuration. Configure secrets in GitHub using the organization's approved Unity license method:
 
 - A floating-license endpoint in `UNITY_LICENSE_SERVER`; or
 - `UNITY_EMAIL` and `UNITY_PASSWORD`, with `UNITY_LICENSE` for an activated license file or `UNITY_SERIAL` for the applicable serial-based license.
 
 Do not paste license credentials into issue bodies or logs. The workflow tests only whether a configuration is present and never prints its contents. Action revisions, GameCI CLI and the Roslyn package are pinned. Follow [GameCI's licensing instructions](https://game.ci/docs/github/activation/) for the selected account/license.
 
-The workflow saves Unity results and logs as artifacts. A source-job success with a skipped Unity job is not Unity validation. A Unity test-job success with skipped GPU cases is not rendering validation.
+The workflow saves compiler provenance, Unity results/logs, the standalone player and both build reports as artifacts. The build job does not execute its player. A source/shader success with skipped Unity jobs is not Unity validation. A Unity test-job success with skipped GPU cases is not rendering validation.
 
 ### Unity 6.7 target
 

@@ -1,8 +1,129 @@
+using System;
+using System.Reflection;
 using NUnit.Framework;
+using Unity.Collections;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.RenderGraphModule;
+using UnityEngine.Rendering.Universal;
 
 public class GrassContactMathTests
 {
+    [TestCase(1)]
+    [TestCase(4)]
+    [NonParallelizable]
+    [Category("GrassGPU")]
+    public void RecordAcceptsImportedBackbufferWithoutTextureDescriptor(int samples)
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
+            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsIndirectArgumentsBuffer)
+            Assert.Ignore("The backbuffer regression requires a graphics device with indirect buffers.");
+
+        GraphicsFormat colorFormat = SystemInfo.GetGraphicsFormat(DefaultFormat.LDR);
+        bool depthCoverageSupported = SupportsContactFormat(GraphicsFormat.R32G32_SFloat) ||
+            SupportsContactFormat(GraphicsFormat.R32G32B32A32_SFloat);
+        GraphicsFormat depthFormat = SystemInfo.IsFormatSupported(GraphicsFormat.D32_SFloat,
+            GraphicsFormatUsage.Render)
+            ? GraphicsFormat.D32_SFloat : SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil);
+        if (!depthCoverageSupported || !GraphicsFormatUtility.IsDepthFormat(depthFormat) ||
+            !SystemInfo.IsFormatSupported(depthFormat, GraphicsFormatUsage.Render) ||
+            !SystemInfo.IsFormatSupported(colorFormat, GraphicsFormatUsage.Blend))
+            Assert.Ignore("The backbuffer regression requires contact-shadow attachment formats.");
+
+        Shader shader = Shader.Find("Hidden/InternalErrorShader");
+        Assert.That(shader, Is.Not.Null);
+        var cameraObject = new GameObject("Grass Contact Backbuffer Test Camera");
+        var mesh = new Mesh();
+        var material = new Material(shader);
+        var graph = new RenderGraph("Grass Contact Backbuffer Test");
+        RTHandle backbuffer = null;
+        try
+        {
+            // Stop after attachment validation, before creating or executing passes.
+            // The old descriptor query throws before this missing-pass guard.
+            Assert.That(material.FindPass("GrassContactDepth"), Is.EqualTo(-1));
+            Camera camera = cameraObject.AddComponent<Camera>();
+            camera.enabled = false;
+            camera.stereoTargetEye = StereoTargetEyeMask.None;
+            Assert.That(camera.stereoEnabled, Is.False);
+            using var frameData = new ContextContainer();
+            using var contacts = new GrassContactShadows();
+            using var positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 3, 16);
+            using var arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments,
+                3, GraphicsBuffer.IndirectDrawIndexedArgs.size);
+            using var lights = new NativeArray<VisibleLight>(new[]
+            {
+                new VisibleLight { lightType = LightType.Directional, finalColor = Color.white }
+            }, Allocator.Temp);
+
+            // This is the same RTIdentifier + explicit metadata import used by URP
+            // for the system backbuffer. It intentionally has no TextureDesc.
+            backbuffer = RTHandles.Alloc(new RenderTargetIdentifier(BuiltinRenderTextureType.CameraTarget));
+            var targetInfo = new RenderTargetInfo
+            {
+                width = 64, height = 64, volumeDepth = 1,
+                msaaSamples = samples, format = colorFormat
+            };
+            TextureHandle cameraColor = graph.ImportTexture(backbuffer, targetInfo);
+            Assert.Throws<ArgumentException>(() => graph.GetTextureDesc(cameraColor));
+            Assert.That(graph.GetRenderTargetInfo(cameraColor), Is.EqualTo(targetInfo));
+            TextureHandle sceneDepth = graph.CreateTexture(new TextureDesc(64, 64)
+            {
+                name = "Grass Contact Test Scene Depth",
+                format = GraphicsFormat.R32_SFloat,
+                dimension = TextureDimension.Tex2D,
+                msaaSamples = MSAASamples.None
+            });
+            BufferHandle positionsHandle = graph.ImportBuffer(positions);
+            BufferHandle argumentsHandle = graph.ImportBuffer(arguments);
+            Assert.That(positionsHandle.IsValid() && argumentsHandle.IsValid(), Is.True);
+            Assert.That(cameraColor.IsValid() && sceneDepth.IsValid(), Is.True);
+
+            UniversalCameraData cameraData = frameData.Create<UniversalCameraData>();
+            cameraData.camera = camera;
+            cameraData.cameraTargetDescriptor = new RenderTextureDescriptor(64, 64)
+            {
+                graphicsFormat = colorFormat,
+                dimension = TextureDimension.Tex2D,
+                msaaSamples = samples
+            };
+            UniversalResourceData resources = frameData.Create<UniversalResourceData>();
+            // URP owns these frame setters. Reflection is confined to this fixture;
+            // it opens the same accessibility window as URP's frame setup.
+            MethodInfo initFrame = typeof(UniversalResourceDataBase).GetMethod("InitFrame",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(initFrame, Is.Not.Null);
+            initFrame.Invoke(resources, null);
+            SetFrameTexture(resources, "backBufferColor", cameraColor);
+            SetFrameTexture(resources, "cameraDepthTexture", sceneDepth);
+            resources.SwitchActiveTexturesToBackbuffer();
+            Assert.That(resources.isActiveTargetBackBuffer, Is.True);
+            Assert.That(resources.activeColorTexture, Is.EqualTo(cameraColor));
+            Assert.That(resources.cameraDepthTexture, Is.EqualTo(sceneDepth));
+            UniversalLightData lightData = frameData.Create<UniversalLightData>();
+            lightData.mainLightIndex = 0;
+            lightData.visibleLights = lights;
+
+            var properties = new[]
+            {
+                new MaterialPropertyBlock(), new MaterialPropertyBlock(), new MaterialPropertyBlock()
+            };
+            Assert.DoesNotThrow(() => contacts.Record(graph, frameData,
+                positionsHandle, argumentsHandle, positions, arguments,
+                new[] { mesh, mesh, mesh }, material, properties,
+                new GrassContactShadows.Settings { enabled = true }));
+        }
+        finally
+        {
+            graph.Cleanup();
+            backbuffer?.Release();
+            UnityEngine.Object.DestroyImmediate(material);
+            UnityEngine.Object.DestroyImmediate(mesh);
+            UnityEngine.Object.DestroyImmediate(cameraObject);
+        }
+    }
+
     [TestCase(float.NaN)]
     [TestCase(float.PositiveInfinity)]
     [TestCase(float.NegativeInfinity)]
@@ -196,4 +317,17 @@ public class GrassContactMathTests
 
     private static Vector2 ApplyScaleBias(Vector2 uv, Vector4 scaleBias) =>
         new Vector2(uv.x * scaleBias.x + scaleBias.z, uv.y * scaleBias.y + scaleBias.w);
+
+    private static bool SupportsContactFormat(GraphicsFormat format) =>
+        SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render) &&
+        SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Sample);
+
+    private static void SetFrameTexture(UniversalResourceData resources, string propertyName,
+        TextureHandle texture)
+    {
+        MethodInfo setter = typeof(UniversalResourceData).GetProperty(propertyName,
+            BindingFlags.Instance | BindingFlags.Public)?.GetSetMethod(true);
+        Assert.That(setter, Is.Not.Null, $"URP frame texture setter {propertyName} must exist.");
+        setter.Invoke(resources, new object[] { texture });
+    }
 }

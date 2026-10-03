@@ -242,6 +242,44 @@ public sealed class GrassMicroVerseBridgeTests
     }
 
     [Test]
+    public void ManualRefreshCacheIsReleasedWhenBridgeIsDisabled()
+    {
+        AddTexture("Tile 1 Grass", 8);
+        SelectTexture("Tile 1 Grass");
+        Assert.That(bridge.AutoRefresh, Is.False);
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false), Is.True);
+        Texture2D[] cached = GrassMicroVerseBridgeUtility.GetTextureSubAssets(bridge);
+        bridge.enabled = false;
+
+        GrassMicroVerseBridgeUtility.PruneInactiveCaches();
+
+        bridge.enabled = true;
+        Assert.That(GrassMicroVerseBridgeUtility.GetTextureSubAssets(bridge), Is.Not.SameAs(cached),
+            "A manually refreshed bridge must not retain its subasset cache after deactivation.");
+        uint revision = bridge.PlacementArea.DensityRevision;
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false), Is.True);
+        Assert.That(bridge.PlacementArea.DensityRevision, Is.Not.EqualTo(revision),
+            "Reactivation must establish a new observation instead of reusing a disabled bridge's cache.");
+    }
+
+    [Test]
+    public void CacheCleanupPreservesLiveManualObservationsWithoutRecapture()
+    {
+        AddTexture("Tile 1 Grass", 8);
+        SelectTexture("Tile 1 Grass");
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false), Is.True);
+        Texture2D[] cached = GrassMicroVerseBridgeUtility.GetTextureSubAssets(bridge);
+        uint revision = bridge.PlacementArea.SourceRevision;
+
+        GrassMicroVerseBridgeUtility.PruneInactiveCaches();
+
+        Assert.That(GrassMicroVerseBridgeUtility.GetTextureSubAssets(bridge), Is.SameAs(cached));
+        Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false), Is.True);
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision),
+            "Housekeeping must not turn a live manual binding into new capture work.");
+    }
+
+    [Test]
     public void BuildValidationRejectsStaleBindingWithoutRepairingIt()
     {
         Texture2D original = AddTexture("Tile 1 Grass", 8);

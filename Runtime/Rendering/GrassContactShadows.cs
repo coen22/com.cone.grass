@@ -104,14 +104,18 @@ public sealed class GrassContactShadows : IDisposable
             return;
 
         TextureHandle cameraColor = resources.activeColorTexture;
-        TextureDesc cameraDescriptor = renderGraph.GetTextureDesc(cameraColor);
+        // Imported system backbuffers have RenderTargetInfo but deliberately no
+        // TextureDesc. Query the actual attachment's format without assuming an
+        // intermediate camera texture exists.
+        RenderTargetInfo cameraTarget = renderGraph.GetRenderTargetInfo(cameraColor);
         TextureDesc sceneDepthDescriptor = renderGraph.GetTextureDesc(resources.cameraDepthTexture);
         // Each camera depth texture spans that camera's viewport, even when its
         // final target is a larger shared backbuffer. Match that sampling domain.
-        if (cameraDescriptor.dimension != TextureDimension.Tex2D ||
+        if (cameraData.cameraTargetDescriptor.dimension != TextureDimension.Tex2D ||
+            cameraTarget.volumeDepth != 1 ||
             sceneDepthDescriptor.dimension != TextureDimension.Tex2D ||
             sceneDepthDescriptor.msaaSamples != MSAASamples.None ||
-            !TryGetFormats(cameraDescriptor.format))
+            !TryGetFormats(cameraTarget.format))
             return;
 
         int depthPassIndex = bladeMaterial.FindPass("GrassContactDepth");
