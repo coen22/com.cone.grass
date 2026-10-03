@@ -1,11 +1,8 @@
 name: Unity CLI availability probe
 
 on:
+  # Manual environment diagnostic; licensed acceptance remains in validation.yml.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/unity-cli.yml'
-      - 'Tools~/probe_unity_cli.py'
 
 permissions:
   contents: read
