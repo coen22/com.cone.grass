@@ -1,5 +1,6 @@
 #pragma kernel Query
 #pragma kernel QueryTriangles
+#pragma kernel QueryDeformationSamples
 #include "Packages/com.cone.grass/Runtime/Shaders/GrassMotionHistoryLookup.hlsl"
 #include "Packages/com.cone.grass/Runtime/Shaders/GrassMotionInterpolation.hlsl"
 StructuredBuffer<float4> _Queries;
@@ -8,6 +9,10 @@ RWStructuredBuffer<float4> _Results;
 RWStructuredBuffer<uint> _Found;
 int _QueryCount;
 int _HashMask;
+Texture2D<float4> _DeformationSource;
+SamplerState sampler_DeformationSource;
+Texture2D<float4> _DeformationHistory;
+SamplerState sampler_DeformationHistory;
 
 [numthreads(64, 1, 1)]
 void Query(uint3 id : SV_DispatchThreadID)
@@ -29,4 +34,14 @@ void QueryTriangles(uint3 id : SV_DispatchThreadID)
     uint start = id.x * 4u;
     _Results[id.x] = float4(GrassInterpolatePreviousTriangle(query.xy, query.z, query.w,
         _Edges[start].xyz, _Edges[start + 1u].xyz, _Edges[start + 2u].xyz, _Edges[start + 3u].xyz), 1.0);
+}
+
+[numthreads(64, 1, 1)]
+void QueryDeformationSamples(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_QueryCount)
+        return;
+    float2 uv = _Queries[id.x].xy;
+    _Results[id.x * 2u] = _DeformationSource.SampleLevel(sampler_DeformationSource, uv, 0);
+    _Results[id.x * 2u + 1u] = _DeformationHistory.SampleLevel(sampler_DeformationHistory, uv, 0);
 }

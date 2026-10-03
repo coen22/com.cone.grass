@@ -818,9 +818,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             int pass = material.FindPass(lightMode);
             if (pass < 0)
             {
+                ShaderTagId expected = new ShaderTagId(lightMode);
                 for (int i = 0; i < material.passCount; i++)
                 {
-                    if (material.shader.FindPassTagValue(i, LightMode).name != lightMode)
+                    // Most modifiers implement only one capture pass. Compare
+                    // IDs so scanning the absent passes does not allocate tag names.
+                    if (material.shader.FindPassTagValue(i, LightMode) != expected)
                         continue;
                     pass = i;
                     break;
@@ -1488,16 +1491,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private static bool IntersectsXZ(Bounds a, Bounds b) =>
             a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.z <= b.max.z && a.max.z >= b.min.z;
 
-        private static bool IntersectXZ(Bounds a, Bounds b, out Bounds intersection)
-        {
-            Vector3 min = new Vector3(Mathf.Max(a.min.x, b.min.x), 0f, Mathf.Max(a.min.z, b.min.z));
-            Vector3 max = new Vector3(Mathf.Min(a.max.x, b.max.x), 0f, Mathf.Min(a.max.z, b.max.z));
-            intersection = default;
-            if (min.x >= max.x || min.z >= max.z)
-                return false;
-            intersection.SetMinMax(min, max);
-            return true;
-        }
+        private static bool IntersectXZ(Bounds a, Bounds b, out Bounds intersection) =>
+            GrassDispatchMath.TryIntersectXZ(a, b, out intersection);
 
         private static TextureHandle ImportTexture(RenderGraph graph, CameraState state, Texture texture)
         {

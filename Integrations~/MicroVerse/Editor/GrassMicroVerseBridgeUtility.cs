@@ -53,6 +53,9 @@ public static class GrassMicroVerseBridgeUtility
         public string AssetPath, SavedKey;
         public int AssetRevision;
         public bool SourcesSaved;
+        public EntityId OutputEntity;
+        public uint OutputUpdateCount;
+        public int OutputDirtyCount;
     }
 
     private static readonly Dictionary<string, MaskAssets> masks =
@@ -388,7 +391,7 @@ public static class GrassMicroVerseBridgeUtility
             if (bridge.GroundBakeSourceKey != sourceKey ||
                 AssetDatabase.GetAssetPath(groundColor) != bridge.GroundBakeAssetPath ||
                 bridge.GroundBakeOutputKey != AssetDatabase.GetAssetDependencyHash(bridge.GroundBakeAssetPath).ToString() ||
-                groundColor.width != bridge.GroundBakeResolution || groundColor.height != bridge.GroundBakeResolution)
+                !MatchesGroundBakeSettings(groundColor, bridge.GroundBakeResolution))
             {
                 message = "The saved ground-albedo bake is stale. Finish generation, save its source assets, bake, then save the scene.";
                 return false;
@@ -437,9 +440,17 @@ public static class GrassMicroVerseBridgeUtility
         bool known = groundBakes.TryGetValue(bridge, out GroundBakeState previous);
         bool sourcesSaved = GroundSourcesAreSaved(bridge, out _);
         string outputKey = texture ? AssetDatabase.GetAssetDependencyHash(path).ToString() : string.Empty;
+        // The dependency hash describes the saved asset. An output can retain
+        // that hash and its dimensions after an in-memory pixel or sampler edit.
+        // A dirty output also needs rebuilding after the session cache is lost.
+        bool outputChanged = texture && (EditorUtility.IsDirty(texture) ||
+            !MatchesGroundBakeSettings(texture, bridge.GroundBakeResolution) ||
+            (known && (previous.OutputEntity != texture.GetEntityId() ||
+                previous.OutputUpdateCount != texture.updateCount ||
+                previous.OutputDirtyCount != EditorUtility.GetDirtyCount(texture))));
         if (!forceBake && known && texture && previous.AssetPath == path &&
             previous.SourceSignature == signature && previous.SavedKey == bridge.GroundBakeSourceKey &&
-            bridge.GroundBakeOutputKey == outputKey &&
+            bridge.GroundBakeOutputKey == outputKey && !outputChanged &&
             previous.AssetRevision == assetRevision &&
             previous.SourcesSaved == sourcesSaved &&
             path == bridge.GroundBakeAssetPath && texture.width == bridge.GroundBakeResolution &&
@@ -456,7 +467,7 @@ public static class GrassMicroVerseBridgeUtility
         bool sourceChanged = known && previous.SourceSignature != signature;
         bool needsBake = forceBake || !texture || sourceChanged || bridge.GroundBakeSourceKey != sourceKey ||
             (!known && !sourcesSaved) || (known && previous.SourcesSaved != sourcesSaved) ||
-            bridge.GroundBakeOutputKey != outputKey ||
+            bridge.GroundBakeOutputKey != outputKey || outputChanged ||
             texture.width != bridge.GroundBakeResolution || texture.height != bridge.GroundBakeResolution;
         if (needsBake)
         {
@@ -501,10 +512,27 @@ public static class GrassMicroVerseBridgeUtility
         groundBakes[bridge] = new GroundBakeState
         {
             SourceSignature = signature, AssetPath = path, SavedKey = sourceKey, AssetRevision = assetRevision,
-            SourcesSaved = sourcesSaved
+            SourcesSaved = sourcesSaved, OutputEntity = texture.GetEntityId(),
+            OutputUpdateCount = texture.updateCount, OutputDirtyCount = EditorUtility.GetDirtyCount(texture)
         };
         message = null;
         return true;
+    }
+
+    private static bool MatchesGroundBakeSettings(Texture2D texture, int resolution)
+    {
+        // Match the output produced by TerrainGrassAlbedoBaker without reading
+        // pixels or changing the asset. These metadata checks survive a reload;
+        // per-session counters alone cannot identify an edited output then.
+        if (!texture || texture.width != resolution || texture.height != resolution ||
+            texture.format != TextureFormat.RGBAHalf || GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat) ||
+            texture.filterMode != FilterMode.Trilinear || texture.wrapModeU != TextureWrapMode.Clamp ||
+            texture.wrapModeV != TextureWrapMode.Clamp || texture.anisoLevel != 1 || texture.mipMapBias != 0f)
+            return false;
+        int mipCount = 1;
+        for (int size = resolution; size > 1; size >>= 1)
+            mipCount++;
+        return texture.mipmapCount == mipCount;
     }
 
     private static bool TryGetSavedGroundSourceKey(GrassMicroVerseBridge bridge,

@@ -300,6 +300,50 @@ public sealed class GrassPopulationSettingsTests
 [NonParallelizable]
 public sealed class GrassRendererLifecycleTests
 {
+    [TestCase("InfiniteGrass/Modifiers/GrassMaskShader", "GrassMask", "GrassMask")]
+    [TestCase("InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", null)]
+    [TestCase("InfiniteGrass/Modifiers/GrassMaskShader", "GrassSlope", null)]
+    [TestCase("InfiniteGrass/GrassBladeShader", "UniversalForwardOnly", "GrassForward")]
+    [TestCase("InfiniteGrass/GrassBladeShader", "MotionVectors", "GrassMotionVectors")]
+    public void ModifierPassLookupPreservesNamesAndTagsWithoutSteadyStateAllocations(
+        string shaderName, string lightMode, string expectedPassName)
+    {
+        Shader shader = Shader.Find(shaderName);
+        Assert.That(shader, Is.Not.Null);
+        var material = new Material(shader);
+        try
+        {
+            Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+            var findPass = (Func<Material, string, int>)passType.GetMethod("FindModifierPass",
+                BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(Func<Material, string, int>));
+            Assert.That(material.passCount, Is.GreaterThan(0));
+            int expected = expectedPassName == null ? -1 : material.FindPass(expectedPassName);
+            if (expectedPassName != null)
+                Assert.That(expected, Is.GreaterThanOrEqualTo(0));
+            if (expectedPassName != lightMode)
+                Assert.That(material.FindPass(lightMode), Is.LessThan(0),
+                    "The regression must exercise the LightMode fallback after a pass-name miss.");
+            Assert.That(findPass(material, lightMode), Is.EqualTo(expected));
+            for (int i = 0; i < 32; i++)
+                findPass(material, lightMode);
+
+            const int iterations = 128;
+            int result = 0;
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterations; i++)
+                result += findPass(material, lightMode);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.That(result, Is.EqualTo(expected * iterations));
+            Assert.That(allocated, Is.Zero,
+                "Per-frame capture pass lookup must not convert ShaderTagId values to managed tag-name strings.");
+        }
+        finally
+        {
+            Object.DestroyImmediate(material);
+        }
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public void UnavailableGrassInputsReleaseEveryCameraWithoutWaitingForIdleTimeout(bool missingMaterial)
