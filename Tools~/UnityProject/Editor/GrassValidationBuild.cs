@@ -256,6 +256,8 @@ public static class GrassValidationBuild
                 throw new InvalidOperationException("The validation build could not select the Checked managed code variant.");
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.Mono2x);
             PlayerSettings.productName = "GrassValidation";
+            // Windowed mode makes these bounded defaults apply instead of the display's native resolution.
+            PlayerSettings.fullScreenMode = FullScreenMode.Windowed;
             PlayerSettings.defaultScreenWidth = 960;
             PlayerSettings.defaultScreenHeight = 540;
             PlayerSettings.runInBackground = true;
