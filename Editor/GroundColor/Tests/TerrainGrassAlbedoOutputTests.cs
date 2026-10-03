@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-/// <summary>Output guards execute before rendering and can run without a graphics device.</summary>
+/// <summary>Output guards and source notifications can run without a graphics device.</summary>
 [NonParallelizable]
 public sealed class TerrainGrassAlbedoOutputTests
 {
@@ -79,6 +81,35 @@ public sealed class TerrainGrassAlbedoOutputTests
         Assert.That(source.GetPixels(), Is.EqualTo(before));
         Assert.That(AssetDatabase.GetAssetPath(source), Is.EqualTo(sourcePath));
         Assert.That(AssetDatabase.AssetPathToGUID(sourcePath), Is.EqualTo(guid));
+    }
+
+    [Test]
+    public void FailingSourceObserverDoesNotInterruptInvalidationOrLaterObservers()
+    {
+        Terrain terrain = Own(new GameObject("Terrain source notification")).AddComponent<Terrain>();
+        Terrain received = null;
+        int observations = 0;
+        Action<Terrain> failingObserver = source =>
+            throw new InvalidOperationException("Injected ground-albedo source observer failure.");
+        Action<Terrain> laterObserver = source =>
+        {
+            received = source;
+            observations++;
+        };
+        TerrainGrassAlbedoBaker.SourceChanged += failingObserver;
+        TerrainGrassAlbedoBaker.SourceChanged += laterObserver;
+        try
+        {
+            LogAssert.Expect(LogType.Exception, new Regex("Injected ground-albedo source observer failure"));
+            Assert.DoesNotThrow(() => TerrainGrassAlbedoBaker.Invalidate(terrain));
+            Assert.That(received, Is.SameAs(terrain));
+            Assert.That(observations, Is.EqualTo(1), "A failed observer must not suppress later source-change notifications.");
+        }
+        finally
+        {
+            TerrainGrassAlbedoBaker.SourceChanged -= failingObserver;
+            TerrainGrassAlbedoBaker.SourceChanged -= laterObserver;
+        }
     }
 
     private T Own<T>(T value) where T : Object { owned.Add(value); return value; }

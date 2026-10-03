@@ -280,6 +280,57 @@ public sealed class GrassRendererLifecycleTests
         }
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ContextsWithoutGrassPassesReleaseInactiveFeaturesAndPruneIdleCameras(bool inactiveFeature)
+    {
+        using (var fixture = new RendererFixture())
+        {
+            ScriptableRendererFeature feature = fixture.Feature;
+            feature.SetActive(!inactiveFeature);
+            if (!inactiveFeature)
+                SetField(fixture.CameraStates[0], "LastUsedTime", Time.realtimeSinceStartupAsDouble - 11.0);
+            typeof(InfiniteGrassRenderer).GetProperty(nameof(InfiniteGrassRenderer.VisibleGrassCount))
+                .SetValue(fixture.Owner, 123u);
+            MethodInfo beginContext = typeof(GrassDataRendererFeature).GetMethod("OnBeginContextRendering",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            // Inactive features never receive AddRenderPasses. Exercise the
+            // context callback even when no camera uses this renderer at all.
+            beginContext.Invoke(feature, new object[] { default(UnityEngine.Rendering.ScriptableRenderContext), null });
+
+            int remaining = inactiveFeature ? 0 : 1;
+            Assert.That(fixture.States.Count, Is.EqualTo(remaining));
+            Assert.That(fixture.Histories.Count, Is.EqualTo(remaining));
+            Assert.That(GetField(fixture.CameraStates[0], "Disposed"), Is.True);
+            Assert.That(GetField(fixture.CameraStates[1], "Disposed"), Is.EqualTo(inactiveFeature));
+            Assert.That(GetField(fixture.Pass, "disposed"), Is.False,
+                "Feature inactivity only releases camera resources; helper materials remain reusable.");
+            Assert.That(fixture.Owner.VisibleGrassCount, Is.EqualTo(123u),
+                "Cleanup cannot overwrite diagnostics another active renderer may have supplied.");
+
+            feature.SetActive(true);
+            beginContext.Invoke(feature, new object[] { default(UnityEngine.Rendering.ScriptableRenderContext), null });
+            Assert.That(GetField(fixture.Feature, "grassPass"), Is.SameAs(fixture.Pass));
+            Assert.That(fixture.States.Count, Is.EqualTo(remaining));
+        }
+    }
+
+    [Test]
+    public void DestroyingFeatureDisposesItsPassAndCameraState()
+    {
+        using (var fixture = new RendererFixture())
+        {
+            Object.DestroyImmediate(fixture.Feature);
+
+            Assert.That(GetField(fixture.Pass, "disposed"), Is.True);
+            Assert.That(fixture.States.Count, Is.Zero);
+            Assert.That(fixture.Histories.Count, Is.Zero);
+            foreach (object state in fixture.CameraStates)
+                Assert.That(GetField(state, "Disposed"), Is.True);
+        }
+    }
+
     private static object GetField(object owner, string name) =>
         owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(owner);
 
@@ -351,6 +402,39 @@ public sealed class GrassRendererLifecycleTests
 [NonParallelizable]
 public sealed class GrassCaptureTextureTests
 {
+    [Test]
+    public void UncreatedWindTextureUsesNeutralFallbackWithoutAllocatingOrReplacingTheSource()
+    {
+        Shader shader = Shader.Find("InfiniteGrass/GrassBladeShader");
+        Assert.That(shader, Is.Not.Null);
+        var material = new Material(shader);
+        var source = new RenderTexture(4, 4, 0);
+        try
+        {
+            int wind = Shader.PropertyToID("_WindTexture");
+            material.SetTexture(wind, source);
+            Assert.That(source.IsCreated(), Is.False);
+            Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+            var resolve = (Func<Material, Texture>)passType.GetMethod("ResolveWindTexture",
+                BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(Func<Material, Texture>));
+
+            Assert.That(resolve(material), Is.SameAs(Texture2D.grayTexture));
+            Assert.That(material.GetTexture(wind), Is.SameAs(source));
+            Assert.That(source.IsCreated(), Is.False,
+                "The consumer cannot restore pixels by allocating a producer's missing GPU storage.");
+
+            material.SetTexture(wind, Texture2D.whiteTexture);
+            Assert.That(resolve(material), Is.SameAs(Texture2D.whiteTexture));
+            material.SetTexture(wind, null);
+            Assert.That(resolve(material), Is.SameAs(Texture2D.grayTexture));
+        }
+        finally
+        {
+            Object.DestroyImmediate(material);
+            Object.DestroyImmediate(source);
+        }
+    }
+
     [Test]
     public void CaptureDeclarationsIncludeRendererAndMaterialTextureOverridesWithoutStaleEntries()
     {

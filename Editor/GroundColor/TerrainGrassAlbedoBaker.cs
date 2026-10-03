@@ -119,7 +119,16 @@ public static class TerrainGrassAlbedoBaker
         // Generation callbacks must not retain every terrain ever opened.
         if (terrainSources.TryGetValue(id, out TerrainSourceState tracked) && tracked.Terrain == terrain)
             tracked.Revision = unchecked(tracked.Revision + 1);
-        SourceChanged?.Invoke(terrain);
+        Action<Terrain> subscribers = SourceChanged;
+        if (subscribers == null)
+            return;
+        // Keep producer invalidation and the other consumers independent of a
+        // failed observer, just as for notification of a completed bake.
+        foreach (Action<Terrain> subscriber in subscribers.GetInvocationList())
+        {
+            try { subscriber(terrain); }
+            catch (Exception exception) { Debug.LogException(exception); }
+        }
     }
 
     /// <summary>
@@ -501,8 +510,12 @@ public static class TerrainGrassAlbedoBaker
             return;
         Append(state, texture.updateCount.GetHashCode());
         Append(state, texture.width); Append(state, texture.height);
-        Append(state, (int)texture.filterMode); Append(state, (int)texture.wrapMode);
+        Append(state, (int)texture.filterMode);
+        // Texture.wrapMode reads only U. A V-only sampler edit still changes the
+        // terrain albedo when its diffuse or mask coordinates leave 0..1.
+        Append(state, (int)texture.wrapModeU); Append(state, (int)texture.wrapModeV);
         Append(state, texture.mipMapBias.GetHashCode());
+        Append(state, texture.anisoLevel);
     }
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     private static bool Finite(Vector4 value) => Finite(value.x) && Finite(value.y) && Finite(value.z) && Finite(value.w);

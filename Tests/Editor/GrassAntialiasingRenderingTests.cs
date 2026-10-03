@@ -119,9 +119,53 @@ public sealed class GrassAntialiasingRenderingTests
             "Perspective blades must face their own viewing ray, including visible roots behind the camera in world XZ.");
     }
 
+    [TestCase(0)]
+    [TestCase(2)]
+    [TestCase(5)]
+    public void WindBentBladesRemainVisibleWhenTheirTrianglesTurnAwayFromTheCamera(int subdivisions)
+    {
+        Matrix4x4 cameraToWorld = Matrix4x4.TRS(new Vector3(0f, 4f, 0f),
+            Quaternion.Euler(80f, 0f, 0f), Vector3.one);
+        Color[] calm = Render(subdivisions, 4, 1f, BladePixelWidth, 0f,
+            rootPosition: Vector3.zero, cameraToWorld: cameraToWorld);
+        Assert.That(CoveredArea(calm), Is.GreaterThan(4f), "Calm blades are the camera and lighting positive control.");
+
+        var wind = new Texture2D(1, 1, TextureFormat.RGBA32, false, true);
+        try
+        {
+            wind.SetPixel(0, 0, new Color(0.5f, 0f, 0f, 1f));
+            wind.Apply(false, false);
+            material.SetFloat("_WindStrength", 0.5f);
+            Color[] bent = Render(subdivisions, 4, 1f, BladePixelWidth, 0f,
+                rootPosition: Vector3.zero, cameraToWorld: cameraToWorld, windTexture: wind);
+            Assert.That(CoveredArea(bent), Is.GreaterThan(4f),
+                "A thin blade must remain visible when wind bends its triangles away from the camera.");
+
+            if (subdivisions == 0)
+            {
+                // The far LOD is one triangle with its base span on world X.
+                // Its bent tip projects below the root in this downward view;
+                // it has reversed winding but still covers about 36.5 pixels.
+                // Use the quantized source texel to include its small X error.
+                Color encoded = wind.GetPixel(0, 0);
+                Vector3 tip = new Vector3((encoded.r * 2f - 1f) * 0.5f,
+                    1f, (encoded.g * 2f - 1f) * 0.5f).normalized;
+                float projectedHeight = Mathf.Abs(Vector3.Dot(tip, cameraToWorld.GetColumn(1))) * Size * 0.5f;
+                float geometricArea = BladePixelWidth * projectedHeight * 0.5f;
+                Assert.That(CoveredArea(bent), Is.EqualTo(geometricArea).Within(4f),
+                    "The far triangle's projected area must not disappear at a geometry LOD boundary.");
+            }
+        }
+        finally
+        {
+            material.SetFloat("_WindStrength", 0f);
+            Object.DestroyImmediate(wind);
+        }
+    }
+
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
         float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
-        Matrix4x4? cameraToWorld = null, bool perspective = false)
+        Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -169,7 +213,7 @@ public sealed class GrassAntialiasingRenderingTests
             properties.SetTexture("_GrassGroundColorRT", empty);
             properties.SetTexture("_GrassSlopeRT", empty);
             properties.SetTexture("_GrassHeightMapRT", empty);
-            properties.SetTexture("_WindTexture", Texture2D.grayTexture);
+            properties.SetTexture("_WindTexture", windTexture ? windTexture : Texture2D.grayTexture);
             properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
             properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
             properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));

@@ -153,6 +153,127 @@ public sealed class TerrainGrassAlbedoBakerTests
         Assert.That(afterInvalidation, Is.Not.EqualTo(afterEdit));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SourceSignatureTracksVOnlyWrappingForDiffuseAndMaskTextures(bool maskTexture)
+    {
+        TerrainLayer layer = Layer(Color.red, true);
+        Texture2D source = Own(new Texture2D(2, 2, TextureFormat.RGBA32, false, true));
+        source.wrapMode = TextureWrapMode.Repeat;
+        source.filterMode = FilterMode.Point;
+        source.SetPixels(new[] { Color.red, Color.red, Color.blue, Color.blue });
+        source.Apply(false, true);
+        layer.tileSize = new Vector2(16f, 8f);
+        if (maskTexture)
+        {
+            layer.maskMapTexture = source;
+            terrain.materialTemplate.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
+            terrain.materialTemplate.SetFloat("_HeightTransition", 0.01f);
+            SetLayers(new[] { layer, Layer(Color.blue, true) }, new[] { 0.5f, 0.5f });
+        }
+        else
+        {
+            layer.diffuseTexture = source;
+            SetLayers(new[] { layer }, new[] { 1f });
+        }
+
+        // Sampler metadata must be part of the signature even when a producer
+        // keeps temporary sampling edits outside the asset's dirty state.
+        EditorUtility.ClearDirty(source);
+        uint updateCount = source.updateCount;
+        int dirtyCount = EditorUtility.GetDirtyCount(source);
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 repeated, out string error), Is.True, error);
+        AssertColor(Bake().GetPixel(2, 10), maskTexture ? Color.blue : Color.red, 0.015f);
+        source.wrapModeV = TextureWrapMode.Clamp;
+        EditorUtility.ClearDirty(source);
+        Assert.That(source.wrapMode, Is.EqualTo(TextureWrapMode.Repeat), "The combined getter still exposes the unchanged U axis.");
+        Assert.That(source.updateCount, Is.EqualTo(updateCount), "Changing addressing must not require a pixel upload.");
+        Assert.That(EditorUtility.GetDirtyCount(source), Is.EqualTo(dirtyCount), "The sampler edit must be detected independently of dirty counters.");
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 clamped, out error), Is.True, error);
+        Assert.That(clamped, Is.Not.EqualTo(repeated));
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 unchanged, out error), Is.True, error);
+        Assert.That(unchanged, Is.EqualTo(clamped), "Unchanged sampler settings must settle after the edit.");
+        AssertColor(Bake().GetPixel(2, 10), maskTexture ? Color.red : Color.blue, 0.015f);
+    }
+
+    [Test]
+    public void SourceSignatureTracksAnisotropyWithoutPixelEdits()
+    {
+        TerrainLayer layer = Layer(Color.green, true);
+        Texture2D source = Own(new Texture2D(8, 8, TextureFormat.RGBA32, true, true));
+        source.filterMode = FilterMode.Trilinear;
+        source.anisoLevel = 1;
+        source.Apply(true, true);
+        layer.diffuseTexture = source;
+        SetLayers(new[] { layer }, new[] { 1f });
+        EditorUtility.ClearDirty(source);
+        uint updateCount = source.updateCount;
+        int dirtyCount = EditorUtility.GetDirtyCount(source);
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 original, out string error), Is.True, error);
+
+        source.anisoLevel = 8;
+        EditorUtility.ClearDirty(source);
+        Assert.That(source.anisoLevel, Is.EqualTo(8));
+        Assert.That(source.updateCount, Is.EqualTo(updateCount));
+        Assert.That(EditorUtility.GetDirtyCount(source), Is.EqualTo(dirtyCount));
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 changed, out error), Is.True, error);
+        Assert.That(changed, Is.Not.EqualTo(original));
+        Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            out Hash128 unchanged, out error), Is.True, error);
+        Assert.That(unchanged, Is.EqualTo(changed), "An unchanged sampler must not keep invalidating the bake.");
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(5)]
+    public void SelectedLayerCaptureMatchesNativeGroupSampler(int selectedIndex)
+    {
+        TerrainLayer[] layers = new TerrainLayer[selectedIndex + 1];
+        float[] weights = new float[layers.Length];
+        for (int i = 0; i < layers.Length; i++)
+            layers[i] = Layer(Color.white, true);
+        weights[selectedIndex] = 1f;
+        Texture2D selectedTexture = Own(new Texture2D(2, 2, TextureFormat.RGBA32, false, true));
+        selectedTexture.SetPixels(new[] { Color.red, Color.green, Color.blue, Color.white });
+        selectedTexture.filterMode = FilterMode.Bilinear;
+        selectedTexture.wrapMode = TextureWrapMode.Repeat;
+        selectedTexture.Apply(false, true);
+        TerrainLayer selectedLayer = layers[selectedIndex];
+        selectedLayer.diffuseTexture = selectedTexture;
+        selectedLayer.tileSize = new Vector2(16f, 8f);
+        SetLayers(layers, weights);
+
+        Texture2D samplerSource = layers[(selectedIndex / 4) * 4].diffuseTexture;
+        var areaObject = Own(new GameObject("Native selected-layer comparison"));
+        GrassPlacementArea area = areaObject.AddComponent<GrassPlacementArea>();
+        area.ConfigureTexture(terrain, Texture2D.whiteTexture, selectedLayer);
+        for (int variant = 0; variant < 2; variant++)
+        {
+            // In later-layer cases the selected texture keeps Bilinear/Repeat.
+            // Native TerrainLit uses the first diffuse sampler in its group,
+            // even when that first layer contributes no color at this point.
+            samplerSource.filterMode = variant == 0 ? FilterMode.Point : FilterMode.Bilinear;
+            samplerSource.wrapModeU = TextureWrapMode.Repeat;
+            samplerSource.wrapModeV = variant == 0 ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData draw), Is.True);
+            Assert.That(draw.GroundLayerTexture, Is.SameAs(selectedTexture));
+            Assert.That(draw.GroundLayerSamplerTexture, Is.SameAs(samplerSource));
+            Color[] expected = Bake().GetPixels();
+            Color[] actual = CaptureSelectedLayer(draw);
+            Assert.That(actual.Length, Is.EqualTo(expected.Length));
+            for (int pixel = 0; pixel < actual.Length; pixel++)
+            {
+                AssertColor(actual[pixel], expected[pixel], 0.015f);
+                Assert.That(actual[pixel].a, Is.EqualTo(1f).Within(0.015f));
+            }
+        }
+    }
+
     [Test]
     public void CameraMipBiasCannotChangeTheSavedAlbedo()
     {
@@ -324,6 +445,77 @@ public sealed class TerrainGrassAlbedoBakerTests
         bool result = TerrainGrassAlbedoBaker.TryBake(terrain, 16, outputPath, out Texture2D texture, out string error);
         Assert.That(result, Is.True, error);
         return texture;
+    }
+
+    private Color[] CaptureSelectedLayer(GrassPlacementDrawData draw)
+    {
+        Shader shader = Shader.Find("Hidden/InfiniteGrass/Placement");
+        Assert.That(shader, Is.Not.Null);
+        Material material = Own(new Material(shader));
+        int pass = material.FindPass("PlacementGroundColor");
+        Assert.That(pass, Is.GreaterThanOrEqualTo(0));
+        ShaderUtil.CompilePass(material, pass, true);
+        Assert.That(ShaderUtil.ShaderHasError(shader), Is.False);
+        Mesh quad = Own(new Mesh
+        {
+            vertices = new[] { new Vector3(-0.5f, 0f, -0.5f), new Vector3(0.5f, 0f, -0.5f),
+                new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f) },
+            triangles = new[] { 0, 2, 1, 1, 2, 3 }
+        });
+        Vector3 origin = terrain.transform.position;
+        Vector3 size = terrain.terrainData.size;
+        Vector3 cameraPosition = origin + new Vector3(size.x * 0.5f, size.y + 1f, size.z * 0.5f);
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) *
+            Matrix4x4.TRS(cameraPosition, Quaternion.LookRotation(Vector3.down, Vector3.forward), Vector3.one).inverse;
+        Matrix4x4 projection = Matrix4x4.Ortho(-size.x * 0.5f, size.x * 0.5f,
+            -size.z * 0.5f, size.z * 0.5f, 0.01f, size.y + 2f);
+        material.SetMatrix("_GrassCaptureVP", GL.GetGPUProjectionMatrix(projection, true) * view);
+        // Production binds each source with an MPB. Exercise that path for the
+        // texture whose only shader use is supplying native sampler state.
+        var properties = new MaterialPropertyBlock();
+        properties.SetMatrix("_PlacementWorldToMask", draw.WorldToMask);
+        properties.SetMatrix("_PlacementGroundWorldToMask", draw.GroundWorldToMask);
+        properties.SetVector("_PlacementTerrainRect", draw.TerrainRect);
+        properties.SetInteger("_PlacementHasTerrain", 1);
+        properties.SetInteger("_PlacementShape", (int)draw.Shape);
+        properties.SetFloat("_PlacementDensity", draw.Density);
+        properties.SetFloat("_PlacementEdgeFalloff", draw.EdgeFalloff);
+        properties.SetTexture("_PlacementDensityTexture", draw.DensityTexture);
+        properties.SetInteger("_PlacementHasGroundColor", 0);
+        properties.SetInteger("_PlacementHasGroundLayer", 1);
+        properties.SetTexture("_PlacementGroundLayerTexture", draw.GroundLayerTexture);
+        properties.SetTexture("_PlacementGroundLayerSamplerTexture", draw.GroundLayerSamplerTexture);
+        properties.SetVector("_PlacementGroundLayerUV", draw.GroundLayerUV);
+        properties.SetVector("_PlacementGroundRemapMin", draw.GroundLayerRemapMin);
+        properties.SetVector("_PlacementGroundRemapMax", draw.GroundLayerRemapMax);
+        properties.SetColor("_PlacementGroundTint", draw.GroundTint);
+        properties.SetFloat("_PlacementGroundStrength", draw.GroundColorStrength);
+        RenderTexture capture = RenderTexture.GetTemporary(16, 16, 0,
+            RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+        Texture2D readback = Own(new Texture2D(16, 16, TextureFormat.RGBAHalf, false, true));
+        RenderTexture previous = RenderTexture.active;
+        bool previousSRGBWrite = GL.sRGBWrite;
+        var commands = new CommandBuffer();
+        try
+        {
+            GL.sRGBWrite = false;
+            commands.SetRenderTarget(capture);
+            commands.SetViewport(new Rect(0, 0, 16, 16));
+            commands.ClearRenderTarget(false, true, Color.clear);
+            commands.DrawMesh(quad, draw.LocalToWorld, material, 0, pass, properties);
+            Graphics.ExecuteCommandBuffer(commands);
+            RenderTexture.active = capture;
+            readback.ReadPixels(new Rect(0, 0, 16, 16), 0, 0, false);
+            readback.Apply(false, false);
+            return readback.GetPixels();
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            GL.sRGBWrite = previousSRGBWrite;
+            commands.Release();
+            RenderTexture.ReleaseTemporary(capture);
+        }
     }
     private TerrainLayer Layer(Color color, bool nonReadable)
     {

@@ -25,7 +25,7 @@ Select a Placement Area and create a persistent density asset in its inspector. 
 
 Assign a Terrain or an explicit paint collider to hit the intended surface. The brush uses a horizontal plane only when no surface is assigned. The density asset stores editable bytes and derives a reusable linear R8 texture. Small strokes update occupancy counts and upload a bounded pixel rectangle through a reusable staging texture where regional copies are supported. Unsupported copies and full edits use the authoritative whole-map data.
 
-For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers can call `MarkDensityDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path.
+For external density maps, use a linear 2D texture with density in its red channel. Clamp mapping to the intended area. The generic core also accepts GPU textures; producers must create and populate their RenderTextures before use. An uncreated or released density texture contributes no grass. Call `MarkCoverageDirty()` after unreported density writes or `MarkGroundColorDirty()` after color writes. `MarkDirty()` remains the complete refresh path. Destroying an explicitly assigned density asset keeps coverage absent until that binding is deliberately cleared or replaced.
 
 ### Mesh surfaces and legacy scenes
 
@@ -35,7 +35,7 @@ The included old Sample Scene explicitly selects legacy mode. Existing user scen
 
 For an authored mesh patch, assign its **Paint Surface** collider with an associated Renderer. That explicit Renderer is captured independently of the layer mask. Patches without an assigned surface use the feature's height-layer fallback.
 
-An explicit mesh binding stops coverage if its collider is destroyed, its object becomes inactive, its scene is unloaded or opened in a preview, or its associated Renderer is removed. Clear the binding deliberately to return to the height-layer fallback. A disabled physics collider can still identify an active visible Renderer on the same object or a parent.
+An explicit mesh binding stops coverage if its collider is destroyed, its object becomes inactive, its scene is unloaded or opened in a preview, or its associated Renderer is removed, disabled or forced off. Mesh support also needs indexed geometry in a submesh with a material slot; the height pass supplies its own material, so a null slot is allowed. Clear the binding deliberately to return to the height-layer fallback. A disabled physics collider can still identify an active visible Renderer on the same object or a parent.
 
 Assigned mesh transforms, bounds, mesh replacement and enable/disable changes invalidate their surface capture. Call `InfiniteGrassRenderer.Instance.RefreshGrassData()` after other cached mesh edits, or disable **Cache Surface Data** for continuously deformed surfaces whose bounds remain unchanged. Authored terrain/mask changes invalidate through the placement components. Refresh after spawning new runtime modifier renderers or changing their materials so the shared capture inventory includes them; editor hierarchy and scene changes refresh discovery automatically.
 
@@ -58,6 +58,8 @@ This first integration consumes **saved mask outputs**. Native MicroVerse genera
 ## Terrain and blade blending
 
 The ground capture samples unlit albedo using the selected TerrainLayer's world tiling, tile offset, and URP diffuse remap scale. Blades blend their lower color and diffuse response toward that ground color. Color capture uses premultiplied coverage, then decodes it before shading to avoid dark fringes along filtered area edges.
+
+For an assigned native terrain, the selected layer shares the first diffuse texture's sampler in its four-layer group, matching URP Terrain/Lit. Wrapping, filtering, mip bias and anisotropy come from that sampler source. Without a matching terrain layer, the selected texture supplies its own sampler. Sampler edits invalidate ground color alone. The layer lookup is cached; call `MarkGroundColorDirty()` after runtime layer reordering that does not emit a terrain texture notification. An uncreated or released **Ground Color Texture** falls back to the selected layer or tint until its producer restores and populates it.
 
 **Ground Blend Height** is a fraction of blade height; the root transition remains consistent between geometry LODs. The optional material setting **Use Ground Normal** reconstructs a normal from the cached world-height map and helps align root lighting on slopes. It costs extra height samples and is off by default.
 
@@ -103,6 +105,8 @@ Evaluate grass quality with **TAA disabled**. New renderer settings use **Motion
 
 Perspective blades face the viewing ray at each blade row, including roots visible behind the camera in world XZ during steep downward views. Orthographic blades keep parallel facing directions. The shared deformation also keeps contact depth and optional previous-frame motion geometry consistent with this orientation.
 
+Blade color, contact depth and optional motion passes render both sides. Wind can reverse a triangle's projected winding at steep camera angles, especially for the one-triangle far LOD; both sides retain the same authored blade normals so the reversal does not introduce a lighting switch. Missing or released wind textures use the existing gray fallback until their producer supplies a ready texture.
+
 For multisampled color, A2C receives the blade's density and width compensation. The rasterizer covers its tapered geometric silhouette. Applying an analytic edge fade to that output as well would thin the same edge twice, because the [A2C mask is intersected with primitive sample coverage](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-blend-state#alpha-to-coverage). The separate single-sample contact depth keeps its analytic silhouette estimate.
 
 Start with a one-pixel minimum width and restrained distant width expansion. Compare the same camera pans, wind motion, grazing angles, painted edges and LOD transitions with MSAA off, then with actual 2x/4x/8x attachments where supported. Keep camera antialiasing at **None**, motion history **Off**, and contacts both off/on during these checks. A requested URP sample count is insufficient evidence: inspect the color/depth attachments used by the grass draw. The generated standalone probe records those attachments and marks hardware fallbacks explicitly. Unity documents that [AlphaToMask requires MSAA](https://docs.unity3d.com/6000.6/Documentation/Manual/writing-shader-alpha-to-mask.html); enabling it on a single-sample target has platform-dependent results.
@@ -141,9 +145,11 @@ When no dispatch remains, the renderer resets counts and indirect arguments, rel
 
 Removing a required material or compute shader, or assigning a material without a `GrassForward` pass, releases camera resources immediately; a camera becoming unsupported releases its own cache. Capture passes declare `_MainTex` textures supplied through material and renderer property blocks, including per-material overrides. Optional motion snapshots recover invalid GPU buffers and reuse per-pass layout arrays while retaining independent metadata for pending draws. These source paths have regression coverage; steady-state allocation measurements still require Unity execution.
 
+Deactivating the renderer feature releases its camera resources at the next render-context boundary, even though URP no longer calls its pass-enqueue method. An active feature in an unused renderer asset continues to evict idle camera caches. Re-enabling the feature creates camera resources as needed; disabling or destroying the feature object tears down its owned helpers and callback.
+
 Unused terrain density maps and camera resources are evicted after bounded idle periods. Position buffers shrink after a major capacity reduction. Moving modifiers can refresh separately. **Texture Update Threshold** controls capture recentering, and **Capture Resolution** trades small boundary detail against capture memory/work. Increase **Culling Padding** to cover unusually tall, wide, or strongly bent grass.
 
-These are structural reductions, **not measured frame-rate claims**. The richer fragment lighting, extra ground samples, and enabled contact shadows also cost GPU time. Profile the target scene at equal visual coverage. GPU Resident Drawer does not automatically optimize these custom indirect draws.
+These are structural reductions, **not measured frame-rate claims**. The richer fragment lighting, extra ground samples, and enabled contact shadows also cost GPU time. Rendering both blade sides keeps the same geometry and draw count but can shade bent portions that backface culling previously discarded. Profile the target scene at equal visual coverage. GPU Resident Drawer does not automatically optimize these custom indirect draws.
 
 ## Migration notes
 

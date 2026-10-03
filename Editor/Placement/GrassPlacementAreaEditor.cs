@@ -40,11 +40,15 @@ public sealed class GrassPlacementAreaEditor : Editor
 
         if (area.Shape == GrassPlacementShape.Texture && !area.DensityAsset && area.DensityTexture)
         {
+            if (area.DensityTexture is RenderTexture densityTarget && !densityTarget.IsCreated())
+                EditorGUILayout.HelpBox("The density RenderTexture has no allocated contents. Its producer must create and populate it before this area can provide grass coverage.", MessageType.Warning);
             string path = AssetDatabase.GetAssetPath(area.DensityTexture);
             TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
             if (importer && importer.sRGBTexture)
                 EditorGUILayout.HelpBox("Density is linear data. Disable sRGB on this density texture to preserve brush strength and soft boundaries.", MessageType.Warning);
         }
+        if (area.GroundColorTexture is RenderTexture groundTarget && !groundTarget.IsCreated())
+            EditorGUILayout.HelpBox("The ground-color RenderTexture has no allocated contents. This area uses its TerrainLayer and tint until the producer creates and populates the color texture.", MessageType.Info);
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Scene Brush", EditorStyles.boldLabel);
