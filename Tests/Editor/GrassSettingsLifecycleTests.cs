@@ -5,7 +5,9 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
@@ -689,6 +691,94 @@ public sealed class GrassRendererLifecycleTests
         }
     }
 
+    [Test]
+    public void CompletedAndShorterDispatchPlansReleaseGroupsWhilePreservingResolvedInputs()
+    {
+        using (var fixture = new DispatchFixture(4f))
+        {
+            TextureHandle firstDensity = fixture.AddGroup();
+            TextureHandle secondDensity = fixture.AddGroup();
+            fixture.Build();
+            Assert.That(GetField(fixture.State, "DispatchCount"), Is.EqualTo(2));
+            Assert.That(GetField(fixture.State, "CandidateCount"), Is.EqualTo(50L));
+            object first = fixture.Dispatches[0], second = fixture.Dispatches[1];
+            int[] start = (int[])GetField(first, "Start");
+            int[] size = (int[])GetField(first, "SizeInCells");
+            Assert.That(start, Is.EqualTo(new[] { 0, 0 }));
+            Assert.That(size, Is.EqualTo(new[] { 5, 5 }));
+            Assert.That(GetField(first, "Density"), Is.EqualTo(firstDensity));
+            Assert.That(GetField(second, "Density"), Is.EqualTo(secondDensity));
+            foreach (object dispatch in fixture.Dispatches)
+            {
+                Assert.That(GetField(dispatch, "Group"), Is.Null,
+                    "Completed plans cannot retain a group's terrain or sparse tile storage.");
+                Assert.That(GetField(dispatch, "TerrainHeight"), Is.EqualTo(fixture.Black));
+                Assert.That(GetField(dispatch, "TerrainHoles"), Is.EqualTo(fixture.White));
+                Assert.That(GetField(dispatch, "UseTerrain"), Is.False);
+                Assert.That(GetField(dispatch, "HasHoles"), Is.False);
+                Assert.That(GetField(dispatch, "Origin"), Is.EqualTo(Vector3.zero));
+                Assert.That(GetField(dispatch, "Size"), Is.EqualTo(Vector3.one));
+            }
+
+            fixture.Groups.Clear();
+            TextureHandle replacementDensity = fixture.AddGroup();
+            fixture.Build();
+            Assert.That(GetField(fixture.State, "DispatchCount"), Is.EqualTo(1));
+            Assert.That(GetField(fixture.State, "CandidateCount"), Is.EqualTo(25L));
+            Assert.That(fixture.Dispatches.Count, Is.EqualTo(2), "The high-water pool remains reusable.");
+            Assert.That(fixture.Dispatches[0], Is.SameAs(first));
+            Assert.That(fixture.Dispatches[1], Is.SameAs(second));
+            Assert.That(GetField(first, "Start"), Is.SameAs(start));
+            Assert.That(GetField(first, "SizeInCells"), Is.SameAs(size));
+            Assert.That(GetField(first, "Density"), Is.EqualTo(replacementDensity));
+            Assert.That(GetField(first, "Group"), Is.Null);
+            Assert.That(GetField(second, "Group"), Is.Null,
+                "An unused tail record must not keep a group from the previous larger plan alive.");
+            fixture.AssertNoGpuAllocation();
+        }
+    }
+
+    [Test]
+    public void RejectedDispatchPlanReleasesAlreadyPlannedGroupsBeforeResettingCounts()
+    {
+        // Each group covers exactly the full candidate budget. The second group
+        // rejects the plan after the first has populated reusable dispatch records.
+        using (var fixture = new DispatchFixture(8191f))
+        {
+            fixture.AddGroup();
+            fixture.AddGroup();
+            LogAssert.Expect(LogType.Warning,
+                "Grass generation was skipped: the camera/source grid exceeds the safety budget of " +
+                GrassDispatchMath.MaximumCandidates +
+                " candidate cells. Increase spacing, reduce draw distance, or use smaller authored areas.");
+            fixture.Build();
+            Assert.That(fixture.Dispatches.Count, Is.GreaterThan(0),
+                "The regression requires a partial plan that held group references before rejection.");
+            Assert.That(GetField(fixture.State, "DispatchCount"), Is.Zero);
+            Assert.That(GetField(fixture.State, "CandidateCount"), Is.Zero);
+            Assert.That(GetField(fixture.State, "WarnedBudget"), Is.True);
+            foreach (object dispatch in fixture.Dispatches)
+                Assert.That(GetField(dispatch, "Group"), Is.Null);
+            fixture.AssertNoGpuAllocation();
+        }
+    }
+
+    [Test]
+    public void DispatchImportFailureReleasesPlanningGroups()
+    {
+        using (var fixture = new DispatchFixture(4f))
+        {
+            fixture.AddGroup();
+            TargetInvocationException exception = Assert.Throws<TargetInvocationException>(() =>
+                fixture.Build(failImport: true));
+            Assert.That(exception.InnerException, Is.TypeOf<NullReferenceException>());
+            Assert.That(GetField(fixture.State, "DispatchCount"), Is.EqualTo(1),
+                "Texture binding must fail after the source has produced a dispatch.");
+            Assert.That(GetField(fixture.Dispatches[0], "Group"), Is.Null);
+            fixture.AssertNoGpuAllocation();
+        }
+    }
+
     private static bool ContainsDraw(IList draws, Renderer renderer)
     {
         foreach (object draw in draws)
@@ -705,6 +795,100 @@ public sealed class GrassRendererLifecycleTests
 
     private static void SetField(object owner, string name, object value) =>
         owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).SetValue(owner, value);
+
+    private sealed class DispatchFixture : IDisposable
+    {
+        public readonly object State;
+        public readonly IList Groups, Dispatches;
+        public readonly TextureHandle Black, White;
+        private readonly RendererFixture renderer;
+        private readonly RenderGraph graph;
+        private readonly RenderTexture capture;
+        private readonly Bounds bounds;
+
+        public DispatchFixture(float extent)
+        {
+            try
+            {
+                renderer = new RendererFixture();
+                State = renderer.CameraStates[0];
+                Groups = (IList)GetField(State, "ActiveGroups");
+                Dispatches = (IList)GetField(State, "Dispatches");
+                bounds = new Bounds(new Vector3(extent * 0.5f, 0f, extent * 0.5f),
+                    new Vector3(extent, 0f, extent));
+                capture = new RenderTexture(128, 128, 0);
+                SetField(State, "Density", RTHandles.Alloc(capture));
+                SetField(State, "CaptureExtent", extent * 0.5f);
+                // Record distinct handles without compiling or executing the graph.
+                // The planner needs capture dimensions but never its GPU storage.
+                graph = new RenderGraph("Grass Dispatch Lifetime Test");
+                Black = RecordTexture();
+                White = RecordTexture();
+                var imported = (IDictionary)GetField(State, "ImportedTextures");
+                imported.Add(Texture2D.blackTexture, Black);
+                imported.Add(Texture2D.whiteTexture, White);
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        public TextureHandle AddGroup()
+        {
+            Type passType = renderer.Pass.GetType();
+            object group = Activator.CreateInstance(passType.GetNestedType("TerrainGroup", BindingFlags.NonPublic), true);
+            object source = Activator.CreateInstance(passType.GetNestedType("PlacementSource", BindingFlags.NonPublic));
+            SetField(source, "Data", new GrassPlacementDrawData
+            {
+                WorldBounds = bounds,
+                WorldToMask = Matrix4x4.TRS(bounds.min, Quaternion.identity,
+                    new Vector3(bounds.size.x, 1f, bounds.size.z)).inverse,
+                Shape = GrassPlacementShape.Box,
+                Density = 1f
+            });
+            ((IList)GetField(group, "Sources")).Add(source);
+            TextureHandle density = RecordTexture();
+            SetField(group, "DensityTexture", density);
+            Groups.Add(group);
+            return density;
+        }
+
+        public void Build(bool failImport = false)
+        {
+            if (failImport)
+                ((IDictionary)GetField(State, "ImportedTextures")).Remove(Texture2D.blackTexture);
+            // A missing graph deliberately injects an import failure after CPU
+            // planning, exercising the same cleanup as a real binding exception.
+            InvokePrivate(renderer.Pass, "BuildDispatches", failImport ? null : graph,
+                State, renderer.Owner, bounds, 1f, true, Black);
+        }
+
+        public void AssertNoGpuAllocation()
+        {
+            Assert.That(capture.IsCreated(), Is.False);
+            Assert.That(GetField(State, "Positions"), Is.Null);
+            Assert.That(GetField(State, "Counts"), Is.Null);
+            Assert.That(GetField(State, "Arguments"), Is.Null);
+        }
+
+        private TextureHandle RecordTexture() => graph.CreateTexture(new TextureDesc(1, 1)
+        {
+            name = "Grass Dispatch Test Input",
+            format = GraphicsFormat.R8G8B8A8_UNorm,
+            dimension = TextureDimension.Tex2D,
+            msaaSamples = MSAASamples.None
+        });
+
+        public void Dispose()
+        {
+            graph?.Cleanup();
+            renderer?.Dispose();
+            if (capture)
+                Object.DestroyImmediate(capture);
+        }
+    }
 
     private sealed class RendererFixture : IDisposable
     {
@@ -772,6 +956,66 @@ public sealed class GrassRendererLifecycleTests
 [NonParallelizable]
 public sealed class GrassCaptureTextureTests
 {
+    [Test]
+    [Category("GrassGPU")]
+    public void WindTextureReconfigurationRejectsOnlyUnresolvedMultisampledStorage()
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || SystemInfo.supportsMultisampledTextures == 0)
+            Assert.Ignore("The wind input regression requires multisampled texture storage.");
+        var descriptor = new RenderTextureDescriptor(4, 4)
+        {
+            graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
+            depthBufferBits = 0,
+            msaaSamples = 4,
+            bindMS = true,
+            sRGB = false
+        };
+        if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != 4)
+            Assert.Ignore("The active graphics device does not support the requested 4x MSAA wind texture.");
+
+        Shader shader = Shader.Find("InfiniteGrass/GrassBladeShader");
+        Assert.That(shader, Is.Not.Null);
+        var material = new Material(shader);
+        var source = new RenderTexture(descriptor);
+        try
+        {
+            int wind = Shader.PropertyToID("_WindTexture");
+            material.SetTexture(wind, source);
+            Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+            var resolve = (Func<Material, Texture>)passType.GetMethod("ResolveWindTexture",
+                BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(Func<Material, Texture>));
+            var configurations = new[]
+            {
+                (Samples: 4, BindMS: true, Reject: true),
+                (Samples: 4, BindMS: false, Reject: false),
+                (Samples: 1, BindMS: true, Reject: false),
+                (Samples: 1, BindMS: false, Reject: false),
+                (Samples: 4, BindMS: true, Reject: true)
+            };
+            foreach (var configuration in configurations)
+            {
+                source.Release();
+                source.antiAliasing = configuration.Samples;
+                source.bindTextureMS = configuration.BindMS;
+                Assert.That(source.Create(), Is.True);
+                Assert.That(source.antiAliasing, Is.EqualTo(configuration.Samples));
+                Assert.That(source.bindTextureMS, Is.EqualTo(configuration.BindMS));
+
+                Assert.That(resolve(material), Is.SameAs(configuration.Reject ? Texture2D.grayTexture : (Texture)source));
+                Assert.That(material.GetTexture(wind), Is.SameAs(source),
+                    "Resolving wind compatibility must preserve the producer's material assignment.");
+                Assert.That(source.IsCreated(), Is.True,
+                    "The consumer must not release or replace the producer's storage.");
+            }
+        }
+        finally
+        {
+            source.Release();
+            Object.DestroyImmediate(material);
+            Object.DestroyImmediate(source);
+        }
+    }
+
     [Test]
     public void UncreatedWindTextureUsesNeutralFallbackWithoutAllocatingOrReplacingTheSource()
     {
