@@ -96,6 +96,10 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
             fixture.Advance(0.0);
             fixture.Actor.transform.position += Vector3.right * 2f;
             uint revision = fixture.Interactor.DrawRevision;
+            Assert.That(Application.IsPlaying(fixture.Actor), Is.True,
+                "Exercise manual sampling against the active runtime callbacks in this fixture's Play session.");
+            Invoke(fixture.Interactor, "LateUpdate");
+            Invoke(fixture.Interactor, "FixedUpdate");
             Invoke(fixture.Interactor, "EditorUpdate");
             Assert.That(fixture.Interactor.DrawRevision, Is.EqualTo(revision));
             Assert.That(fixture.Field.TryGetNode(new Vector2Int(13, 0), 0.0, 2f, out _, out _), Is.False);
