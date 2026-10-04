@@ -185,6 +185,99 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
         }
     }
 
+    [TestCase(9f, 0.9f, true)]
+    [TestCase(9f, 3.9f, false)]
+    [TestCase(1f, 9.9f, false)]
+    public void AirborneRelocationClearsTakeoffHistoryAtTheDiscontinuousObservation(float x, float height, bool lands)
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            fixture.Advance(0.0);
+            fixture.Actor.transform.position = new Vector3(1f, 3.9f, 0f);
+            fixture.Advance(0.1);
+            Assert.That(fixture.Interactor.ActiveNodeCount, Is.GreaterThan(0));
+
+            fixture.Actor.transform.position = new Vector3(x, height, 0f);
+            fixture.Advance(0.2);
+
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.2, 2f, out _, out _), Is.False,
+                "Losing contact must not hide a later horizontal or vertical teleport from the observation clock.");
+            if (lands)
+                Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.PathReset));
+            else
+            {
+                Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero,
+                    "A teleport observed while still airborne must clear retained output immediately.");
+                Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
+                fixture.Actor.transform.position = new Vector3(x, 0.9f, 0f);
+                fixture.Advance(0.3);
+            }
+            var landing = new Vector2Int(Mathf.RoundToInt(x / fixture.Field.CellSize), 0);
+            Assert.That(fixture.Field.TryGetNode(landing, lands ? 0.2 : 0.3, 2f, out _, out float strength), Is.True);
+            Assert.That(strength, Is.EqualTo(LiveStrength));
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.3, 2f, out _, out _), Is.False);
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ObservationGapAfterSupportLossClearsHistoryBeforeRecoveryExpires(bool lands)
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            fixture.Advance(0.0);
+            fixture.Actor.transform.position = new Vector3(1f, 3.9f, 0f);
+            fixture.Advance(0.1);
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.1, 2f, out _, out _), Is.True);
+            fixture.Actor.transform.position = new Vector3(2f, lands ? 0.9f : 3.9f, 0f);
+
+            fixture.Advance(0.5);
+
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.5, 2f, out _, out _), Is.False,
+                "The 0.4-second observation gap must clear a trail whose ordinary recovery is still positive.");
+            Assert.That(GrassInteractionField.RecoveryWeight(0.5, 2f), Is.GreaterThan(0f));
+            if (lands)
+                Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.PathReset));
+            else
+            {
+                Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
+                Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
+            }
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [Test]
+    public void ContinuouslyObservedNearbyJumpRetainsRecoveryAndNeverJoinsTheAirbornePath()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            fixture.Advance(0.0);
+            for (int step = 1; step <= 5; step++)
+            {
+                fixture.Actor.transform.position = new Vector3(step * 0.2f, 3.9f, 0f);
+                double now = step * 0.1;
+                fixture.Advance(now);
+                Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, now, 2f, out _, out float strength), Is.True);
+                Assert.That(strength, Is.EqualTo(LiveStrength * GrassInteractionField.RecoveryWeight(now, 2f)).Within(0.000001f));
+            }
+            fixture.Actor.transform.position = new Vector3(1.2f, 0.9f, 0f);
+            fixture.Advance(0.6);
+            Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.Active));
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.6, 2f, out _, out float takeoff), Is.True,
+                "A long but continuously observed nearby jump is not an observation gap.");
+            Assert.That(takeoff, Is.EqualTo(LiveStrength * GrassInteractionField.RecoveryWeight(0.6, 2f)).Within(0.000001f));
+            Assert.That(fixture.Field.TryGetNode(new Vector2Int(4, 0), 0.6, 2f, out _, out _), Is.False);
+            fixture.Actor.transform.position += Vector3.right * 0.2f;
+            fixture.Advance(0.7);
+            Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.7, 2f, out _, out _), Is.True);
+            Assert.That(fixture.Field.TryGetNode(new Vector2Int(4, 0), 0.7, 2f, out _, out _), Is.False,
+                "The next grounded step starts at landing and does not reconnect the gap.");
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
     [TestCase("teleport", 9f, 0.1)]
     [TestCase("long observation gap", 2f, 0.5)]
     [TestCase("clock reversal", 2f, -0.1)]
@@ -258,6 +351,12 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
                 "Overflow cannot retain a truncated prefix of the attempted path.");
             Assert.That(fixture.Field.TryGetNode(new Vector2Int(7, 0), 0.1, 2f, out _, out float weight), Is.True);
             Assert.That(weight, Is.EqualTo(LiveStrength));
+
+            fixture.Actor.transform.position = new Vector3(9f, 3.9f, 0f);
+            fixture.Advance(0.2);
+            Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero,
+                "An internal budget reset must preserve the latest observation for the next airborne teleport check.");
+            Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
             LogAssert.NoUnexpectedReceived();
         }
     }
@@ -523,6 +622,183 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
         }
     }
 
+    [TestCase("disabled")]
+    [TestCase("destroyed")]
+    [TestCase("moved")]
+    public void SupportChangesInvalidateCameraCaptureBeforeTheNextSample(string change)
+    {
+        using (var near = new InteractorFixture())
+        using (var far = new InteractorFixture(Vector3.right * 1000f))
+        using (var nearCapture = new CameraCaptureFixture(Vector3.zero))
+        using (var farCapture = new CameraCaptureFixture(Vector3.right * 1000f))
+        {
+            Set(near.Interactor, "attackDuration", 0.2f);
+            near.Advance(0.0);
+            near.Advance(0.1);
+            far.Advance(0.0);
+            Assert.That(near.Interactor.TryGetDraw(out Mesh mesh, out Material material, out _), Is.True);
+            float priorResponse = near.Interactor.ContactStrength;
+            uint priorDrawRevision = near.Interactor.DrawRevision;
+            ulong nearVersion = nearCapture.Collect();
+            ulong farVersion = farCapture.Collect();
+            Assert.That(nearCapture.DrawCount, Is.EqualTo(1));
+            Assert.That(farCapture.DrawCount, Is.EqualTo(1));
+
+            near.Actor.transform.position += Vector3.right * 0.1f;
+            Assert.That(nearCapture.Collect(), Is.EqualTo(nearVersion),
+                "Render lookup validates retained support without sampling the actor's new pose.");
+            near.Actor.transform.position -= Vector3.right * 0.1f;
+            if (change == "disabled")
+                near.Ground.enabled = false;
+            else if (change == "destroyed")
+                Object.DestroyImmediate(near.Ground.gameObject);
+            else
+                near.Ground.transform.position += Vector3.right;
+
+            ulong emptyVersion = nearCapture.Collect();
+
+            Assert.That(nearCapture.DrawCount, Is.Zero);
+            Assert.That(emptyVersion, Is.Not.EqualTo(nearVersion));
+            Assert.That(nearCapture.Collect(), Is.EqualTo(emptyVersion), "The already-empty camera set stays stable.");
+            Assert.That(farCapture.Collect(), Is.EqualTo(farVersion));
+            Assert.That(farCapture.DrawCount, Is.EqualTo(1));
+            Assert.That(near.Interactor.ActiveNodeCount, Is.Zero);
+            Assert.That(near.Interactor.DrawRevision, Is.Not.EqualTo(priorDrawRevision));
+            Assert.That(mesh != null && material != null, Is.True, "Invalidation clears and reuses the owned resource pair.");
+            Assert.That(mesh.vertexCount, Is.Zero);
+            Assert.That(near.Interactor.ContactStrength, Is.EqualTo(change == "moved" ? priorResponse : 0f));
+            if (change == "disabled")
+            {
+                Assert.That(near.Ground != null, Is.True);
+                Assert.That(near.Ground.enabled, Is.False);
+            }
+            else if (change == "moved")
+            {
+                Assert.That(near.Ground.transform.position, Is.EqualTo(new Vector3(1f, -0.5f, 0f)));
+                near.Actor.transform.position += Vector3.right;
+                near.Advance(0.2);
+                Assert.That(near.Interactor.ContactStrength, Is.GreaterThan(priorResponse));
+                Assert.That(near.Interactor.TryGetDraw(out Mesh renewedMesh, out Material renewedMaterial, out _), Is.True);
+                Assert.That(renewedMesh, Is.SameAs(mesh));
+                Assert.That(renewedMaterial, Is.SameAs(material));
+                Assert.That(near.Field.TryGetNode(Vector2Int.zero, 0.2, 2f, out _, out _), Is.False);
+                Assert.That(near.Field.TryGetNode(new Vector2Int(7, 0), 0.2, 2f, out _, out float pressure), Is.True);
+                Assert.That(pressure, Is.EqualTo(near.Interactor.ContactStrength));
+            }
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [Test]
+    public void ReplacingADepartedSupportMeshWithTheSameBoundsInvalidatesItsRetainedTrail()
+    {
+        using (var fixture = new InteractorFixture())
+        using (var capture = new CameraCaptureFixture(Vector3.zero))
+        {
+            var surfaces = new GameObject[2];
+            var areaObjects = new GameObject[2];
+            var colliders = new MeshCollider[2];
+            var areas = new GrassPlacementArea[2];
+            var meshes = new Mesh[3];
+            Action<GrassPlacementArea, Bounds, GrassPlacementChange> listener = null;
+            try
+            {
+                fixture.Ground.enabled = false;
+                fixture.Interactor.Configure(fixture.Collider, null, fixture.Actor.transform);
+                meshes[0] = CreateSteppedSupportMesh(false);
+                meshes[1] = new Mesh
+                {
+                    vertices = new[] { new Vector3(0f, 0f, -2f), new Vector3(4f, 0f, -2f),
+                        new Vector3(0f, 0f, 2f), new Vector3(4f, 0f, 2f) },
+                    triangles = new[] { 0, 2, 1, 1, 2, 3 }
+                };
+                meshes[1].RecalculateBounds();
+                meshes[2] = CreateSteppedSupportMesh(true);
+                for (int i = 0; i < 2; i++)
+                {
+                    surfaces[i] = new GameObject("Authored support " + i);
+                    SceneManager.MoveGameObjectToScene(surfaces[i], fixture.Scene);
+                    surfaces[i].AddComponent<MeshFilter>().sharedMesh = meshes[i];
+                    surfaces[i].AddComponent<MeshRenderer>().sharedMaterials = new Material[1];
+                    colliders[i] = surfaces[i].AddComponent<MeshCollider>();
+                    colliders[i].sharedMesh = meshes[i];
+                    areaObjects[i] = new GameObject("Fixed ownership " + i);
+                    areaObjects[i].SetActive(false);
+                    SceneManager.MoveGameObjectToScene(areaObjects[i], fixture.Scene);
+                    areaObjects[i].transform.position = new Vector3(i == 0 ? -2f : 2f, 0f, 0f);
+                    areas[i] = areaObjects[i].AddComponent<GrassPlacementArea>();
+                    Set(areas[i], "shape", GrassPlacementShape.Box);
+                    Set(areas[i], "size", new Vector2(4f, 4f));
+                    Set(areas[i], "paintSurface", colliders[i]);
+                    areaObjects[i].SetActive(true);
+                    Assert.That(areas[i].TryGetCaptureData(out _), Is.True);
+                }
+                fixture.Actor.transform.position = new Vector3(-1f, 0.9f, 0f);
+                fixture.Advance(0.0);
+                Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+                fixture.Actor.transform.position = new Vector3(1f, 0.9f, 0f);
+                fixture.Advance(0.1);
+                Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+                Assert.That(Get(fixture.Interactor, "lastGroundSupport"), Is.SameAs(colliders[1]));
+                Assert.That(fixture.Field.TryGetNode(new Vector2Int(-7, 0), 0.1, 2f, out _, out _), Is.True);
+                Assert.That(fixture.Interactor.TryGetDraw(out Mesh retainedMesh, out _, out _), Is.True);
+                ulong populatedVersion = capture.Collect();
+                Assert.That(capture.DrawCount, Is.EqualTo(1));
+                Bounds oldColliderBounds = colliders[0].bounds;
+                Assert.That(areas[0].TryGetCaptureData(out GrassPlacementDrawData before), Is.True);
+                uint priorRevision = areas[0].SourceRevision;
+                int surfaceEvents = 0;
+                listener = (area, bounds, change) =>
+                {
+                    if (area == areas[0] && (change & GrassPlacementChange.Surface) != 0)
+                        surfaceEvents++;
+                };
+                GrassPlacementArea.SourceChanged += listener;
+
+                colliders[0].sharedMesh = meshes[2];
+                surfaces[0].GetComponent<MeshFilter>().sharedMesh = meshes[2];
+                Physics.SyncTransforms();
+                Assert.That(meshes[2], Is.Not.SameAs(meshes[0]));
+                Assert.That(meshes[2].bounds, Is.EqualTo(meshes[0].bounds));
+                Assert.That(colliders[0].bounds, Is.EqualTo(oldColliderBounds), "Bounds equality is the regression precondition.");
+                Assert.That(areas[0].TryGetCaptureData(out GrassPlacementDrawData after), Is.True);
+
+                Assert.That(after.WorldBounds, Is.EqualTo(before.WorldBounds));
+                Assert.That(surfaceEvents, Is.EqualTo(1));
+                Assert.That(areas[0].SourceRevision, Is.Not.EqualTo(priorRevision));
+                Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero,
+                    "A's event must invalidate the old trail even though the latest support is unchanged B.");
+                Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
+                Assert.That(retainedMesh.vertexCount, Is.Zero);
+                ulong emptyVersion = capture.Collect();
+                Assert.That(capture.DrawCount, Is.Zero);
+                Assert.That(emptyVersion, Is.Not.EqualTo(populatedVersion),
+                    "A departed support's source event must invalidate the previously populated camera capture.");
+                Assert.That(capture.Collect(), Is.EqualTo(emptyVersion), "The empty capture version remains stable without sampling.");
+                fixture.Advance(0.2);
+                Assert.That(fixture.Field.TryGetNode(new Vector2Int(7, 0), 0.2, 2f, out _, out _), Is.True);
+                Assert.That(fixture.Field.TryGetNode(new Vector2Int(-7, 0), 0.2, 2f, out _, out _), Is.False);
+                uint refreshedRevision = areas[0].SourceRevision;
+                Assert.That(areas[0].TryGetCaptureData(out _), Is.True);
+                Assert.That(areas[0].SourceRevision, Is.EqualTo(refreshedRevision));
+                Assert.That(surfaceEvents, Is.EqualTo(1));
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                if (listener != null)
+                    GrassPlacementArea.SourceChanged -= listener;
+                for (int i = 0; i < 2; i++)
+                {
+                    if (areaObjects[i]) Object.DestroyImmediate(areaObjects[i]);
+                    if (surfaces[i]) Object.DestroyImmediate(surfaces[i]);
+                }
+                foreach (Mesh mesh in meshes)
+                    if (mesh) Object.DestroyImmediate(mesh);
+            }
+        }
+    }
+
     [TestCase(GrassPlacementChange.Density)]
     [TestCase(GrassPlacementChange.Surface)]
     public void InvisibleRetainedHistoryStillObservesRelevantCoverageInvalidation(GrassPlacementChange change)
@@ -648,6 +924,31 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
             Assert.That(Get(second.State, "Positions"), Is.Null,
                 "This case verifies CPU capture invalidation and owned mesh lifetime, without claiming a rendered pass.");
         }
+    }
+
+    private static Mesh CreateSteppedSupportMesh(bool raiseContactStrip)
+    {
+        float[] edges = { -4f, -3f, -1.5f, -0.5f, 0f };
+        float[] heights = { 0.5f, 0f, raiseContactStrip ? 0.5f : 0f, 0f };
+        var vertices = new Vector3[16];
+        var triangles = new int[24];
+        for (int strip = 0; strip < 4; strip++)
+        {
+            int v = strip * 4, t = strip * 6;
+            vertices[v] = new Vector3(edges[strip], heights[strip], -2f);
+            vertices[v + 1] = new Vector3(edges[strip + 1], heights[strip], -2f);
+            vertices[v + 2] = new Vector3(edges[strip], heights[strip], 2f);
+            vertices[v + 3] = new Vector3(edges[strip + 1], heights[strip], 2f);
+            triangles[t] = v;
+            triangles[t + 1] = v + 2;
+            triangles[t + 2] = v + 1;
+            triangles[t + 3] = v + 1;
+            triangles[t + 4] = v + 2;
+            triangles[t + 5] = v + 3;
+        }
+        var mesh = new Mesh { vertices = vertices, triangles = triangles };
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     private sealed class InteractorFixture : IDisposable

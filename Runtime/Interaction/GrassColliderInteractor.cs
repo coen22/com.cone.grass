@@ -56,7 +56,7 @@ public class GrassColliderInteractor : MonoBehaviour
     private GrassInteractionField field;
     private GrassInteractionMesh interactionMesh;
     private GrassInteractorSupport supportResolver;
-    private GrassInteractorShape previousShape;
+    private GrassInteractorShape previousShape, observedShape;
     private Collider configuredActor, configuredSupport, lastGroundSupport;
     private Shader configuredShader;
     private Transform configuredRoot;
@@ -67,9 +67,9 @@ public class GrassColliderInteractor : MonoBehaviour
     private int configuredCapacity, registeredGeneration;
     private int lastGroundSignature;
     private uint historyGeneration, drawRevision;
-    private double previousTime, responseTime, lastTime;
+    private double previousTime, responseTime, observedTime, lastTime;
     private float response;
-    private bool registered, previousValid, responseValid, hasTime, visible, warnedBudget, warnedMaterial, playing;
+    private bool registered, previousValid, responseValid, observationValid, hasTime, visible, warnedBudget, warnedMaterial, playing;
     private Vector2 historyMinimum, historyMaximum;
 
     public static IReadOnlyList<GrassColliderInteractor> ActiveInteractors => activeInteractors;
@@ -133,7 +133,13 @@ public class GrassColliderInteractor : MonoBehaviour
 
     /// <summary>Clear immediately on teleports, respawns, session changes or a floating-origin shift.</summary>
     [ContextMenu("Clear interaction history")]
-    public void ClearHistory() => ClearRecordedHistory(false);
+    public void ClearHistory()
+    {
+        observationValid = false;
+        observedShape = default;
+        observedTime = 0.0;
+        ClearRecordedHistory(false);
+    }
 
     private void ClearRecordedHistory(bool preserveContactResponse)
     {
@@ -162,10 +168,25 @@ public class GrassColliderInteractor : MonoBehaviour
         if (!visible || !IsEligible() || !gameObject.scene.isLoaded || interactionMesh == null ||
             configuredScene != gameObject.scene || !actorCollider || configuredActorScene != actorCollider.gameObject.scene)
             return false;
+        ValidateRecordedSupport();
+        if (!visible)
+            return false;
         mesh = interactionMesh.Mesh;
         material = interactionMesh.Material;
         bounds = interactionMesh.Bounds;
         return mesh && material;
+    }
+
+    private void ValidateRecordedSupport()
+    {
+        if (ReferenceEquals(lastGroundSupport, null))
+            return;
+        // Rendering can occur before another observation, including in Manual
+        // mode. Reject invalid retained positions without sampling or physics work.
+        if (!GrassInteractorSupport.IsUsableSupport(lastGroundSupport))
+            ClearHistory();
+        else if (GrassInteractorSupport.GetSupportSignature(lastGroundSupport) != lastGroundSignature)
+            ClearRecordedHistory(true);
     }
 
     private void Reset()
@@ -332,13 +353,7 @@ public class GrassColliderInteractor : MonoBehaviour
         // Synchronize once for the complete current/path query batch, including
         // controllers moved through Transform with auto-sync disabled.
         Physics.SyncTransforms();
-        if (!ReferenceEquals(lastGroundSupport, null))
-        {
-            if (!GrassInteractorSupport.IsUsableSupport(lastGroundSupport))
-                ClearHistory();
-            else if (GrassInteractorSupport.GetSupportSignature(lastGroundSupport) != lastGroundSignature)
-                ClearRecordedHistory(true);
-        }
+        ValidateRecordedSupport();
         float recovery = Mathf.Max(0.01f, FiniteOr(recoveryDuration, 2f));
         field?.Prune(now, recovery);
         if (!GrassInteractorSupport.TryGetShape(actorCollider, selfRoot,
@@ -352,6 +367,7 @@ public class GrassColliderInteractor : MonoBehaviour
             Rebuild(now, recovery);
             return;
         }
+        bool reset = ObservePose(in shape, now);
         supportResolver ??= new GrassInteractorSupport();
         uint generationBeforeQuery = historyGeneration;
         float ownershipMargin = padding + spacing * 1.415f;
@@ -372,21 +388,9 @@ public class GrassColliderInteractor : MonoBehaviour
 
         field ??= new GrassInteractionField(spacing, capacity);
         bool continuous = previousValid && generationBeforeQuery == historyGeneration;
-        bool observedContact = previousValid || responseValid;
-        double delta = now - (responseValid ? responseTime : previousTime);
         Vector2 currentCenter = new Vector2(shape.Center.x, shape.Center.z);
         Vector2 oldCenter = new Vector2(previousShape.Center.x, previousShape.Center.z);
-        float distance = observedContact ? Vector3.Distance(previousShape.Center, shape.Center) : 0f;
-        float teleport = Mathf.Max(0.01f, FiniteOr(teleportDistance, 5f));
-        bool reset = observedContact && (delta < 0 || delta > MaximumContinuousSeconds ||
-            distance > teleport || (delta == 0 && (distance > 0f || previousShape.Radius != shape.Radius || previousShape.Height != shape.Height)) ||
-            !ReferenceEquals(previousShape.Actor, shape.Actor) || !ReferenceEquals(previousShape.ActorRoot, shape.ActorRoot) ||
-            previousShape.PhysicsScene != shape.PhysicsScene);
-        if (reset)
-        {
-            ClearHistory();
-            continuous = false;
-        }
+        float distance = continuous ? Vector3.Distance(previousShape.Center, shape.Center) : 0f;
         bool pathBudgetExceeded = false;
         if (continuous)
         {
@@ -395,7 +399,7 @@ public class GrassColliderInteractor : MonoBehaviour
             // Reserve one query for an ownership-change endpoint recheck.
             if (double.IsNaN(intervals) || double.IsInfinity(intervals) || intervals >= MaximumPathQueries)
             {
-                ClearHistory();
+                ClearRecordedHistory(false);
                 continuous = false;
                 reset = true;
                 pathBudgetExceeded = true;
@@ -480,7 +484,7 @@ public class GrassColliderInteractor : MonoBehaviour
         {
             if (!accepted)
             {
-                ClearHistory();
+                ClearRecordedHistory(false);
                 accepted = field.AdvanceSweptCircle(currentCenter, radius, now,
                     currentCenter, radius, now, fallback, nextResponse, nextResponse, 0f);
             }
@@ -505,6 +509,25 @@ public class GrassColliderInteractor : MonoBehaviour
         lastGroundSupport = support.Support;
         lastGroundSignature = support.SupportSignature;
         Rebuild(now, recovery);
+    }
+
+    private bool ObservePose(in GrassInteractorShape shape, double now)
+    {
+        // Airborne observations still bound relocation and elapsed time. They
+        // must not make a later teleport look like the first observed pose.
+        double delta = now - observedTime;
+        float distance = observationValid ? Vector3.Distance(observedShape.Center, shape.Center) : 0f;
+        float teleport = Mathf.Max(0.01f, FiniteOr(teleportDistance, 5f));
+        bool reset = observationValid && (delta < 0 || delta > MaximumContinuousSeconds || distance > teleport ||
+            (delta == 0 && (distance > 0f || observedShape.Radius != shape.Radius || observedShape.Height != shape.Height)) ||
+            !ReferenceEquals(observedShape.Actor, shape.Actor) || !ReferenceEquals(observedShape.ActorRoot, shape.ActorRoot) ||
+            observedShape.PhysicsScene != shape.PhysicsScene);
+        if (reset)
+            ClearHistory();
+        observedShape = shape;
+        observedTime = now;
+        observationValid = true;
+        return reset;
     }
 
     private void Rebuild(double now, float recovery)

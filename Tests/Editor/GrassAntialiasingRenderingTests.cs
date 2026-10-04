@@ -97,23 +97,27 @@ public sealed class GrassAntialiasingRenderingTests
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
     }
 
-    [TestCase(1, 4f, 0f)]
-    [TestCase(4, 4f, 0f)]
-    [TestCase(1, 2f, 4f)]
-    [TestCase(4, 2f, 4f)]
+    [TestCase(1, 4f, 0f, 1f / 16384f)]
+    [TestCase(4, 4f, 0f, 1f / 16384f)]
+    [TestCase(1, 2f, 4f, 1f / 16384f)]
+    [TestCase(4, 2f, 4f, 1f / 16384f)]
+    [TestCase(1, 4f, 0f, 16384f)]
+    [TestCase(4, 4f, 0f, 16384f)]
+    [TestCase(1, 1.5f, 3f, 16384f)]
+    [TestCase(4, 1.5f, 3f, 16384f)]
     public void ProjectedCoverageIsInvariantToOrthographicWorldScale(
-        int samples, float originalPixelWidth, float minimumPixelWidth)
+        int samples, float originalPixelWidth, float minimumPixelWidth, float worldScale)
     {
         Color[] reference = Render(0, samples, 1f, originalPixelWidth, minimumPixelWidth);
         // Scale blade dimensions and the orthographic viewport together, keeping
         // root XZ (and therefore its seed), depth and all projected vertices fixed.
         // A power of two avoids introducing different floating-point rounding.
         Color[] scaled = Render(0, samples, 1f, originalPixelWidth, minimumPixelWidth,
-            orthographicScale: 1f / 16384f);
+            orthographicScale: worldScale);
         Assert.That(CoveredArea(reference), Is.GreaterThan(0f),
             "The unscaled blade is a positive control for coverage and shader execution.");
         AssertSamePixels(reference, scaled,
-            "Equivalent projected blades must keep the same density and width compensation at small world scales.");
+            "Equivalent projected blades must keep the same density and width compensation at small and large world scales.");
     }
 
     [TestCase(0f)]

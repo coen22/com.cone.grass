@@ -36,6 +36,42 @@ public static class TerrainGrassAlbedoBaker
         public uint Revision;
         public int References;
     }
+    private readonly struct BakedOutputState
+    {
+        private readonly uint updateCount;
+        private readonly int width, height, mipCount, anisoLevel, dirtyCount;
+        private readonly TextureFormat format;
+        private readonly UnityEngine.Experimental.Rendering.GraphicsFormat graphicsFormat;
+        private readonly FilterMode filterMode;
+        private readonly TextureWrapMode wrapU, wrapV;
+        private readonly float mipBias;
+        private readonly bool isReadable, isDirty;
+
+        public BakedOutputState(Texture2D texture)
+        {
+            updateCount = texture.updateCount;
+            width = texture.width;
+            height = texture.height;
+            mipCount = texture.mipmapCount;
+            format = texture.format;
+            graphicsFormat = texture.graphicsFormat;
+            filterMode = texture.filterMode;
+            wrapU = texture.wrapModeU;
+            wrapV = texture.wrapModeV;
+            anisoLevel = texture.anisoLevel;
+            mipBias = texture.mipMapBias;
+            isReadable = texture.isReadable;
+            isDirty = EditorUtility.IsDirty(texture);
+            dirtyCount = EditorUtility.GetDirtyCount(texture);
+        }
+
+        public bool Matches(Texture2D texture) => texture &&
+            updateCount == texture.updateCount && width == texture.width && height == texture.height &&
+            mipCount == texture.mipmapCount && format == texture.format && graphicsFormat == texture.graphicsFormat &&
+            filterMode == texture.filterMode && wrapU == texture.wrapModeU && wrapV == texture.wrapModeV &&
+            anisoLevel == texture.anisoLevel && mipBias == texture.mipMapBias && isReadable == texture.isReadable &&
+            isDirty == EditorUtility.IsDirty(texture) && dirtyCount == EditorUtility.GetDirtyCount(texture);
+    }
     private static readonly Dictionary<EntityId, TerrainSourceState> terrainSources = new Dictionary<EntityId, TerrainSourceState>();
     private static readonly Dictionary<string, SourceImportState> importRevisions =
         new Dictionary<string, SourceImportState>(StringComparer.Ordinal);
@@ -323,6 +359,12 @@ public static class TerrainGrassAlbedoBaker
             error = "The ground-albedo output was removed or replaced while being saved. Refresh to bake again.";
             return false;
         }
+        // Callbacks may edit this same asset, not just replace it. Keep a cheap
+        // snapshot of the generated image's reported state before either public
+        // notification path. Names and paths are deliberately not image state:
+        // moving the same saved output remains supported. GPU writers must
+        // report their writes with IncrementUpdateCount; no pixels are scanned.
+        BakedOutputState generated = new BakedOutputState(texture);
         NotifyBoundAreas(texture);
         NotifyBaked(terrain, texture);
         // Observers can move an output, but deleting, detaching or replacing it
@@ -331,6 +373,14 @@ public static class TerrainGrassAlbedoBaker
         {
             texture = null;
             error = "The ground-albedo output was removed or replaced by a completion callback. Refresh to bake again.";
+            return false;
+        }
+        if (!generated.Matches(texture))
+        {
+            // Preserve the observer's edits, but do not let a caller record
+            // their pixels/settings as the native albedo just generated above.
+            texture = null;
+            error = "The ground-albedo output changed during a completion callback. Refresh to bake again after the callback finishes editing it.";
             return false;
         }
         error = null;
@@ -342,8 +392,8 @@ public static class TerrainGrassAlbedoBaker
         Action<Terrain, Texture2D> subscribers = Baked;
         if (subscribers == null)
             return;
-        // A failed observer must neither change the result of a saved bake nor
-        // prevent later observers from invalidating their own cached output.
+        // An observer exception must not prevent later observers from receiving
+        // the notification. Any output edits are checked after all observers.
         foreach (Action<Terrain, Texture2D> subscriber in subscribers.GetInvocationList())
         {
             try { subscriber(terrain, texture); }
