@@ -1558,6 +1558,18 @@ public sealed class GrassPlacementAreaTests
             Assert.That(SceneManager.SetActiveScene(priorActive), Is.True);
         }
 
+        public Scene SaveAndReopenSource()
+        {
+            Assert.That(copied && Source.IsValid() && Source.isLoaded, Is.True);
+            Assert.That(Source.path, Is.EqualTo(copyPath), "Only the fixture-owned copy may be saved.");
+            RestorePriorActive();
+            Assert.That(EditorSceneManager.SaveScene(Source, copyPath), Is.True);
+            Assert.That(EditorSceneManager.CloseScene(Source, true), Is.True);
+            Source = default;
+            Source = OpenOwnedScene(copyPath);
+            return Source;
+        }
+
         public void Dispose()
         {
             var failures = new List<Exception>();
@@ -1876,17 +1888,13 @@ public sealed class GrassPlacementAreaTests
     [Test]
     public void AnAreaRegistersWhenASavedSceneIsOpenedAdditively()
     {
-        Scene originalActive = SceneManager.GetActiveScene();
-        Scene testScene = default;
-        string path = "Assets/GrassPlacementSceneTest_" + Guid.NewGuid().ToString("N") + ".unity";
+        var fixture = new SupportingSceneFixture();
+        Exception bodyFailure = null;
         try
         {
-            testScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
             GrassPlacementArea area = NewArea();
-            SceneManager.MoveGameObjectToScene(area.gameObject, testScene);
-            Assert.That(EditorSceneManager.SaveScene(testScene, path), Is.True);
-            Assert.That(EditorSceneManager.CloseScene(testScene, true), Is.True);
-            testScene = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+            Assert.That(area.gameObject.scene, Is.EqualTo(fixture.Source));
+            Scene testScene = fixture.SaveAndReopenSource();
             GrassPlacementArea loaded = testScene.GetRootGameObjects()[0].GetComponent<GrassPlacementArea>();
 
             Assert.That(loaded, Is.Not.Null);
@@ -1894,13 +1902,20 @@ public sealed class GrassPlacementAreaTests
                 "OnEnable runs before Scene.isLoaded becomes true; registration must still occur during loading.");
             Assert.That(loaded.TryGetCaptureData(out _), Is.True);
         }
+        catch (Exception error)
+        {
+            bodyFailure = error;
+            throw;
+        }
         finally
         {
-            if (originalActive.IsValid() && originalActive.isLoaded)
-                SceneManager.SetActiveScene(originalActive);
-            if (testScene.IsValid() && testScene.isLoaded)
-                EditorSceneManager.CloseScene(testScene, true);
-            AssetDatabase.DeleteAsset(path);
+            try { fixture.Dispose(); }
+            catch (Exception cleanupError)
+            {
+                if (bodyFailure != null)
+                    throw new AggregateException("Saved-scene body/owned cleanup failures retained.", bodyFailure, cleanupError);
+                throw;
+            }
         }
     }
 
