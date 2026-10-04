@@ -8,7 +8,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-public sealed class GrassInteractorTests
+public sealed class GrassInteractorTests : GrassPhysicsFixtureTests
 {
     private readonly List<GrassPlacementArea> previousAreas = new List<GrassPlacementArea>();
 
@@ -234,8 +234,7 @@ public sealed class GrassInteractorTests
 
         public InteractorFixture(bool ambiguousBody = false)
         {
-            Scene = SceneManager.CreateScene("Grass compatibility fixture " + Guid.NewGuid().ToString("N"),
-                new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+            Scene = GrassPhysicsFixtureScenes.Create("Grass compatibility fixture " + Guid.NewGuid().ToString("N"));
             try
             {
                 var floor = new GameObject("Explicit grass support");
@@ -274,7 +273,7 @@ public sealed class GrassInteractorTests
             if (Ground)
                 Object.DestroyImmediate(Ground.gameObject);
             if (Scene.IsValid() && Scene.isLoaded)
-                EditorSceneManager.CloseScene(Scene, true);
+                GrassPhysicsFixtureScenes.Close(Scene);
         }
     }
 }

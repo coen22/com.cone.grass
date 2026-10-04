@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-public sealed class GrassColliderInteractorTests
+public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
 {
     private const float LiveStrength = 0.85f;
     private GrassPlacementArea[] previousAreas;
@@ -552,8 +552,7 @@ public sealed class GrassColliderInteractorTests
     [Test]
     public void MovingToAnotherSceneRejectsOldDrawsBeforeTheNextUpdateAndClearsHistory()
     {
-        Scene destination = SceneManager.CreateScene("Grass interactor destination " + Guid.NewGuid().ToString("N"),
-            new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+        Scene destination = GrassPhysicsFixtureScenes.Create("Grass interactor destination " + Guid.NewGuid().ToString("N"));
         try
         {
             using (var fixture = new InteractorFixture())
@@ -571,7 +570,7 @@ public sealed class GrassColliderInteractorTests
         finally
         {
             if (destination.IsValid() && destination.isLoaded)
-                EditorSceneManager.CloseScene(destination, true);
+                GrassPhysicsFixtureScenes.Close(destination);
         }
     }
 
@@ -658,8 +657,7 @@ public sealed class GrassColliderInteractorTests
 
         public InteractorFixture(Vector3 origin = default)
         {
-            Scene = SceneManager.CreateScene("Grass collider fixture " + Guid.NewGuid().ToString("N"),
-                new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+            Scene = GrassPhysicsFixtureScenes.Create("Grass collider fixture " + Guid.NewGuid().ToString("N"));
             try
             {
                 var floor = new GameObject("Explicit grass support");
@@ -697,7 +695,7 @@ public sealed class GrassColliderInteractorTests
             if (Ground)
                 Object.DestroyImmediate(Ground.gameObject);
             if (Scene.IsValid() && Scene.isLoaded)
-                EditorSceneManager.CloseScene(Scene, true);
+                GrassPhysicsFixtureScenes.Close(Scene);
         }
     }
 
