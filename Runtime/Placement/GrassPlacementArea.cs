@@ -387,6 +387,16 @@ public sealed class GrassPlacementArea : MonoBehaviour
             shape, densityAsset, densityTexture, coverageUV);
     }
 
+    // Interaction ownership needs the same cropped extent as capture without
+    // requesting a painted texture upload or reading an external texture back.
+    internal bool TryGetCoverageWorldBounds(out Bounds bounds)
+    {
+        bounds = default;
+        return IsActiveSource() && density > 0f &&
+            TryGetFrame(out Matrix4x4 frame, out _, out Bounds frameBounds) &&
+            TryGetCoverageExtent(frame, frameBounds, out _, out bounds);
+    }
+
     public bool Paint(Vector3 worldPosition, float radius, float strength, float hardness, bool erase)
     {
         if (!densityAsset || shape != GrassPlacementShape.Texture || radius <= 0f ||

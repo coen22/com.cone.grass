@@ -87,6 +87,42 @@ The MicroVerse Texture Stamp remains visible as distant blades thin out. Keep it
 
 Ground color is captured in a shared XZ projection. Vertically overlapping surfaces cannot retain different ground colors at the same XZ coordinates. Use this workflow for terrain tiles and surfaces whose ground-color footprints do not overlap vertically.
 
+## Collider-driven interaction
+
+Add **Cone > Grass > Collider Interactor** to a character and assign its actual **Actor Collider**. The optional component feeds the existing grass slope capture, so it works with the shared blade deformation used by color, contact depth and optional motion vectors. Keep TAA disabled and motion history Off for the required quality baseline.
+
+1. Assign an upright **CapsuleCollider**, **CharacterController**, or **SphereCollider**. The collider must be active and enabled. An unsupported shape or transform stops new contact rather than using a guessed footprint.
+2. Set **Actor Root** to the character hierarchy that support queries must ignore. The component's own transform is the default only when it contains the actor collider. Colliders attached to the same Rigidbody are also excluded.
+3. For authored grass, use a Placement Area with its actual supporting Terrain or Paint Surface collider. For a legacy or generic surface, assign **Explicit Support**. A nearer unrelated floor, missing support, or ambiguous overlapping grass support rejects contact.
+4. Use **Late Update** for characters moved during Update, or **Fixed Update** for a physics-driven actor. For an external clock, select **Manual** and call `Sample(double)` once per observation. Sampling and recovery run independently of camera movement. Call `ClearHistory()` on gameplay session changes, respawns or a floating-origin shift; call `Configure(actor, support, selfRoot)` when reusing the component for another actor.
+
+| Setting | Initial value | Behavior |
+|---|---:|---|
+| Bend Strength | 0.85 | Maximum contact influence |
+| Attack Duration | 0 s | Response time constant; zero applies contact immediately |
+| Recovery Duration | 2 s | Smooth recovery from the last time the footprint covered each sample |
+| Grid Spacing | 0.15 m | Fixed world-space contact sample spacing |
+| Node Capacity | 1,024 | Retained samples; configurable up to 2,048 |
+| Ground Clearance | 0.15 m | Maximum supported distance below the lower collider cap |
+| Allowed Penetration | 0.1 m | Ground-query tolerance for shallow contact penetration |
+| Teleport Distance | 5 m | Maximum collider-center displacement joined between observations |
+
+Continuous movement sweeps the observed collider footprint across the world grid. Each sample retains one latest-contact time and direction, so a stationary actor does not accumulate overlapping stamp opacity. The same observed linear path and radius changes produce equivalent recovery across update cadences, within floating-point precision and the work limits. Turns or jumps that occur entirely between observations cannot be reconstructed.
+
+The Alice integration can continue using `GrassInteractor` and its public `body`, `interactionShader`, `groundLayers`, `bladeHeight`, `radiusPadding`, `strength`, `attackSeconds` and `recoverySeconds` settings. It uses the same field and lifecycle. Radius Padding expands the influence without inflating the physical grounding cast. Blade Height sets the contact-height range, and Attack Seconds is the exponential response time constant. Recovery Seconds is the complete finite recovery duration. Each sample stores its response at departure, so changing the actor's current contact does not rescale an older trail. `ContactStrength` reports the current actor response; the existing `RetainedStampCount` property reports retained field samples, including the live footprint.
+
+The component uses at most 64 support queries along a joined path, while a field sweep considers at most 4,096 candidate grid nodes. Teleports, reversed time, or observation gaps greater than 0.25 seconds clear the old path. Exceeding a history or sweep budget clears the trail and attempts the entire current footprint; if that footprint also exceeds the budget, output stays clear and the component reports a diagnostic. Increase Grid Spacing, shorten Recovery Duration, or adjust Node Capacity when the chosen actor and movement require more history.
+
+One reusable mesh contains each occupied grid cell once, with a transparent border. At the maximum node capacity it has at most 32,768 vertices and 49,152 indices. The component owns its mesh and a clone of the retained `InfiniteGrassInteraction` material, releases both on disable, and creates no scene Renderer. Relevant interaction changes invalidate each camera's slope capture, including final expiry, even when **Update Modifiers Every Frame** is disabled. They do not require a full grass-data refresh.
+
+The interaction producer interpolates premultiplied vertex RGBA, including transparent zero at expired nodes. This keeps neighboring bend directions weighted by their current influence and continuous through expiry. An explicitly assigned Interaction Shader must implement that premultiplied vertex-color contract; the included `GrassInteractor.shader` does. Existing generic slope modifiers retain their own material contract. After a custom modifier changes, `RefreshGrassInteraction()` can request slope capture alone without refreshing height or ground color.
+
+Interaction remains a shared world-XZ projection. Vertically overlapping grass supports cannot carry independent bend fields at the same XZ coordinates. The support query rejects ambiguous ownership; ordinary adjacent tiles remain supported. The field grid also cannot recover detail lost in the capture texture: with the default 300 m draw distance, 10 m capture padding and 1,024-pixel capture, each texel spans about 0.61 m. Choose capture resolution and distance appropriate to the actor footprint and verify the result in the target scene.
+
+Automatic ambiguity checks cover authored Placement Area owners and the declared explicit support. Unbound legacy renderers do not supply enough ownership metadata to detect every stacked surface. Support identity, transforms and geometry metadata invalidate retained history; call `ClearHistory()` after in-place mesh cooking that preserves those values. A moving support clears the old world positions while a fresh, bounded observation on that same support can continue the live attack response. It records only the new footprint after invalidation. Support loss, explicit resets, teleports and excessive observation gaps restart that response.
+
+The field, mesh, support and component EditMode cases are authored. Native collider behavior, rendered recovery and cost still require the [interaction acceptance checks](Documentation~/Validation.md#collider-interaction-acceptance).
+
 ## URP contact shadows
 
 Enable **Contact Shadows > Enabled** on Infinite Grass Renderer. The effect supports contacts between indirect grass and visible opaque scene surfaces using the main directional light.
@@ -169,7 +205,7 @@ Density, ground color and surface revisions are tracked separately. A paint stro
 
 When no dispatch remains, the renderer resets counts and indirect arguments, releases motion history, and skips grass color, contact and motion passes. Direct camera output uses the actual attachment metadata for MSAA and format decisions, including URP backbuffers without a texture descriptor. Motion history also releases on unsupported material changes, recreates lost GPU texture storage, and preserves wind sampling when texture-quality settings reduce the active mip level.
 
-Removing a required material or compute shader, or assigning a material without a `GrassForward` pass, releases camera resources immediately; a camera becoming unsupported releases its own cache. Capture passes declare `_MainTex` textures supplied through material and renderer property blocks, including per-material overrides. Modifier lookup compares native shader-tag IDs instead of converting tag names to managed strings during fallback searches. Optional motion snapshots recover invalid GPU buffers and reuse per-pass layout arrays while retaining independent metadata for pending draws. These source paths have regression coverage; steady-state allocation measurements still require Unity execution.
+Removing a required material or compute shader, or assigning a material without a `GrassForward` pass, releases camera resources immediately; a camera becoming unsupported releases its own cache. Capture passes declare all exposed material texture properties and their renderer property-block overrides, including per-material overrides. Custom inputs supplied only through global shader textures need an explicit capture dependency. Modifier lookup compares native shader-tag IDs instead of converting tag names to managed strings during fallback searches. Optional motion snapshots recover invalid GPU buffers and reuse per-pass layout arrays while retaining independent metadata for pending draws. These source paths have regression coverage; steady-state allocation measurements still require Unity execution.
 
 Deactivating the renderer feature releases its camera resources at the next render-context boundary, even though URP no longer calls its pass-enqueue method. An active feature in an unused renderer asset continues to evict idle camera caches. Re-enabling the feature creates camera resources as needed; disabling or destroying the feature object tears down its owned helpers and callback.
 
@@ -186,7 +222,7 @@ These are structural reductions, **not measured frame-rate claims**. The richer 
 - Package baseline changes from the inconsistent Unity 2021.3/URP 17.1 declaration to Unity 6.6/URP 17.6.
 - Required Terrain, Terrain Physics, Physics and IMGUI modules are explicit package dependencies.
 - Object identity uses Unity 6.6 `EntityId`; full identities are retained as cache/group keys instead of truncating them to integer hashes.
-- This is a `2.0.0-preview.1` API preview.
+- This is a `2.0.0-preview.2` API preview.
 - New components use **Authored Areas**. Set **Legacy Surface Layer** explicitly for previous layer-based scenes.
 - `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot.
 - `ArgsBuffer` and the synchronous debug `Buffer` fields are removed. The renderer feature owns per-camera resources. Use `VisibleGrassCount` and `OverflowGrassCount` for asynchronous diagnostics.
@@ -211,7 +247,7 @@ dotnet run --project Tools~/SourceChecks -- .
 
 The last command needs .NET 8 and restores a pinned Roslyn package. It parses six C# 9 configurations: Editor, Release player and Checked player branches for 6.6 and 6.7, including the optional sample. Editor and Checked configurations include Unity's diagnostic defines; Release excludes them. It does not bind Unity APIs or compile shaders.
 
-The separate shader check runs the official Microsoft DXC compiler against pinned, unmodified Unity Graphics headers. It compiles 51 entry-point/keyword configurations to each of DXIL and SPIR-V and writes binaries, diagnostics and source provenance to `artifacts/shaders`. All 102 compiler invocations passed locally. This catches HLSL compilation errors; Unity import, variant stripping, runtime bindings, target shader-model support and rendered correctness still need Editor/player validation. See the [shader compiler guide](Tools~/ShaderChecks/README.md).
+The separate shader check runs the official Microsoft DXC compiler against pinned, unmodified Unity Graphics headers. It compiles 53 entry-point/keyword configurations to each of DXIL and SPIR-V and writes binaries, diagnostics and source provenance to `artifacts/shaders`. All 106 compiler invocations passed locally. This catches HLSL compilation errors; Unity import, variant stripping, runtime bindings, target shader-model support and rendered correctness still need Editor/player validation. See the [shader compiler guide](Tools~/ShaderChecks/README.md).
 
 Create a disposable project with the package tests, optional bridge sample and native URP setup:
 
@@ -237,6 +273,8 @@ The GitHub workflow runs source and shader checks independently of licensing, th
 | [#32](https://github.com/coen22/com.cone.grass/issues/32) | Grass/scene contact shadows |
 | [#33](https://github.com/coen22/com.cone.grass/issues/33) | Terrain/root blending |
 | [#34](https://github.com/coen22/com.cone.grass/issues/34) | Aliasing and temporal stability |
+| [#46](https://github.com/coen22/com.cone.grass/issues/46) | Collider interaction, bounded recovery and lifecycle |
+| [#50](https://github.com/coen22/com.cone.grass/issues/50) | Native Editor test import, discovery and execution |
 
 Issues stay open until their Unity acceptance checks pass. See [validation](Documentation~/Validation.md) and the [MicroVerse guide](Integrations~/MicroVerse/README.md).
 

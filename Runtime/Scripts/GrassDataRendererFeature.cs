@@ -398,6 +398,9 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             bool recaptureHeight = captureMappingChanged || inventoryChanged || state.SurfaceDirty ||
                 state.SurfaceVersion != state.NextSurfaceVersion || !owner.cacheSurfaceData;
             bool recaptureModifiers = captureMappingChanged || inventoryChanged || owner.updateModifiersEveryFrame;
+            CollectInteractionDraws(state, captureBounds);
+            bool recaptureInteraction = recaptureModifiers || state.InteractionVersion != state.NextInteractionVersion ||
+                state.OwnerInteractionRevision != owner.InteractionRevision;
 
             if (recaptureHeight)
             {
@@ -411,7 +414,13 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 CollectRendererDraws(state, captureBounds, false, true, authored);
                 BuildRendererCapture(graph, state, "Grass Exclusion", state.MaskDraws, mask, default, captureVP, Color.clear);
                 BuildRendererCapture(graph, state, "Grass Color Modifiers", state.ColorDraws, color, default, captureVP, Color.clear);
-                BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default, captureVP, Color.clear);
+            }
+            if (recaptureInteraction)
+            {
+                if (!recaptureModifiers)
+                    CollectRendererDraws(state, captureBounds, false, true, authored);
+                BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default,
+                    captureVP, Color.clear, state.InteractionDraws);
             }
 
             state.CacheValid = true;
@@ -422,6 +431,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.Authored = authored;
             state.OwnerRevision = owner.Revision;
             state.InventoryRevision = inventoryRevision;
+            state.InteractionVersion = state.NextInteractionVersion;
+            state.OwnerInteractionRevision = owner.InteractionRevision;
             state.SurfaceVersion = state.NextSurfaceVersion;
             state.GroundVersion = state.NextGroundVersion;
             state.SurfaceDirty = false;
@@ -841,6 +852,30 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             return pass;
         }
 
+        private static void CollectInteractionDraws(CameraState state, Bounds captureBounds)
+        {
+            state.InteractionDraws.Clear();
+            state.NextInteractionVersion = VersionSeed;
+            IReadOnlyList<GrassColliderInteractor> interactors = GrassColliderInteractor.ActiveInteractors;
+            for (int i = 0; i < interactors.Count; i++)
+            {
+                GrassColliderInteractor interactor = interactors[i];
+                if (!interactor || !interactor.TryGetDraw(out Mesh mesh, out Material material, out Bounds bounds) ||
+                    !IntersectsXZ(bounds, captureBounds))
+                    continue;
+                int pass = material.FindPass("GrassSlope");
+                if (pass >= 0)
+                {
+                    state.InteractionDraws.Add(new InteractionDraw(mesh, material, pass));
+                    state.NextInteractionVersion = MixVersion(MixVersion(state.NextInteractionVersion,
+                        unchecked((uint)interactor.GetEntityId().GetHashCode())), interactor.DrawRevision);
+                }
+            }
+            // An empty relevant set has a stable version. Removing or expiring
+            // its last previous draw still changes the version and clears slope;
+            // changes wholly outside this camera's window do not recapture it.
+        }
+
         private void BuildHeightCapture(RenderGraph graph, CameraState state, TextureHandle height,
             TextureHandle depth, Matrix4x4 captureVP)
         {
@@ -923,12 +958,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         }
 
         private static void BuildRendererCapture(RenderGraph graph, CameraState state, string name, List<RendererDraw> draws,
-            TextureHandle target, TextureHandle depth, Matrix4x4 captureVP, Color clear)
+            TextureHandle target, TextureHandle depth, Matrix4x4 captureVP, Color clear,
+            List<InteractionDraw> interactions = null)
         {
             using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<RendererCapturePass>(
                        name, out RendererCapturePass pass))
             {
                 pass.Draws = draws;
+                pass.Interactions = interactions;
                 pass.CaptureVP = captureVP;
                 pass.HasDepth = depth.IsValid();
                 pass.Clear = clear;
@@ -936,6 +973,13 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 {
                     RendererDraw draw = draws[i];
                     int textureCount = CollectCaptureTextures(draw.Renderer, draw.Material, draw.Submesh,
+                        state.CaptureProperties, state.CaptureTextureIds, state.CaptureTextures);
+                    for (int texture = 0; texture < textureCount; texture++)
+                        builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
+                }
+                for (int i = 0; interactions != null && i < interactions.Count; i++)
+                {
+                    int textureCount = CollectCaptureTextures(null, interactions[i].Material, 0,
                         state.CaptureProperties, state.CaptureTextureIds, state.CaptureTextures);
                     for (int texture = 0; texture < textureCount; texture++)
                         builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
@@ -955,6 +999,14 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         RendererDraw draw = data.Draws[i];
                         if (draw.Renderer && draw.Material)
                             context.cmd.DrawRenderer(draw.Renderer, draw.Material, draw.Submesh, draw.Pass);
+                    }
+                    // Interactors register their world-space mesh directly. Their
+                    // owned geometry never enters scene or surface-height discovery.
+                    for (int i = 0; data.Interactions != null && i < data.Interactions.Count; i++)
+                    {
+                        InteractionDraw draw = data.Interactions[i];
+                        if (draw.Mesh && draw.Material)
+                            context.cmd.DrawMesh(draw.Mesh, Matrix4x4.identity, draw.Material, 0, draw.Pass);
                     }
                 });
             }
@@ -1583,8 +1635,9 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         {
             public readonly Camera Camera;
             public InfiniteGrassRenderer Owner;
-            public uint OwnerRevision, InventoryRevision;
+            public uint OwnerRevision, InventoryRevision, OwnerInteractionRevision;
             public ulong GroundVersion, NextGroundVersion, SurfaceVersion, NextSurfaceVersion;
+            public ulong InteractionVersion, NextInteractionVersion;
             public bool CacheValid, WarnedBudget, Disposed;
             public Vector2 Center;
             public Vector2 CaptureRange;
@@ -1616,6 +1669,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly List<RendererDraw> MaskDraws = new List<RendererDraw>();
             public readonly List<RendererDraw> ColorDraws = new List<RendererDraw>();
             public readonly List<RendererDraw> SlopeDraws = new List<RendererDraw>();
+            public readonly List<InteractionDraw> InteractionDraws = new List<InteractionDraw>();
             public readonly List<PlacementSource> Sources = new List<PlacementSource>();
             public readonly Dictionary<EntityId, TerrainGroup> Groups = new Dictionary<EntityId, TerrainGroup>();
             public readonly List<EntityId> StaleGroupKeys = new List<EntityId>();
@@ -1859,6 +1913,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 CaptureProperties.Clear();
                 CaptureTextureIds.Clear();
                 CaptureTextures.Clear();
+                InteractionDraws.Clear();
                 CoreUtils.Destroy(BladeMaterial);
             }
         }
@@ -1885,6 +1940,20 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 Renderer = renderer;
                 Material = material;
                 Submesh = submesh;
+                Pass = pass;
+            }
+        }
+
+        private readonly struct InteractionDraw
+        {
+            public readonly Mesh Mesh;
+            public readonly Material Material;
+            public readonly int Pass;
+
+            public InteractionDraw(Mesh mesh, Material material, int pass)
+            {
+                Mesh = mesh;
+                Material = material;
                 Pass = pass;
             }
         }
@@ -1947,6 +2016,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         private sealed class RendererCapturePass
         {
             public List<RendererDraw> Draws;
+            public List<InteractionDraw> Interactions;
             public Matrix4x4 CaptureVP;
             public bool HasDepth;
             public Color Clear;

@@ -1,6 +1,6 @@
 # Validation for the Unity 6.6 grass preview
 
-This document separates implemented source changes from results that require a Unity project and GPU. Keep issues #27–#34 open until their acceptance criteria have been exercised.
+This document separates implemented source changes from results that require a Unity project and GPU. Keep issues #27–#34, #46 and #50 open until their remaining acceptance criteria have been exercised.
 
 **Quality baseline:** TAA disabled, camera antialiasing **None**, grass **Motion Vectors > Off**, and zero queue overflow. Test single-sample output plus actual 2x/4x/8x MSAA attachments where supported. Temporal consumers are optional follow-up integrations and cannot satisfy the baseline silhouette, contact or LOD acceptance checks.
 
@@ -12,9 +12,12 @@ This document separates implemented source changes from results that require a U
 | Package and assembly-definition JSON, shader source links | Checked locally and in GitHub Actions |
 | C# 9 syntax, 6.6/6.7 Editor, Release player and Checked player branches | Six configurations automated in GitHub Actions; consult the PR checks for the exact commit |
 | New source metadata and whitespace | Checked locally |
-| HLSL compilation against pinned public URP 17.6 headers | 102/102 DXC invocations passed locally: DXIL and SPIR-V; separate CI job added |
+| HLSL compilation against pinned public URP 17.6 headers | 106/106 DXC invocations passed locally: DXIL and SPIR-V; separate CI job added |
 | Density, grid boundaries, Terrain decoding, LOD geometry, premultiplied edge math, projection/depth round trips | Mathematical/source checks performed |
 | Core placement, settings, mesh and dispatch EditMode cases | Authored; not executed in Unity |
+| Collider interaction field, mesh, support and component EditMode cases | Authored; not executed in Unity |
+| Swept collider contact and bounded recovery mathematics | Source-fingerprinted Python model checked; does not execute C# or PhysicsScene queries |
+| Shader-check tooling portability | 12 Python tests passed on actual Windows and Ubuntu runners for PR #53 and its merged commit |
 | Shipped compute kernels, contact shader, motion history and albedo GPU cases | Authored; not executed in Unity |
 | Optional MicroVerse bridge EditMode cases | Authored; not executed in Unity |
 | Unity 6.6 shader/C# import | Actual Editor CLI attempted; licensing rejected startup before import/tests |
@@ -23,11 +26,13 @@ This document separates implemented source changes from results that require a U
 | GPU timings, allocations in Unity, RenderGraph viewer, rendered comparisons | Not run |
 | Installed MicroVerse Core/Splines/Masks generation cycle | Not run |
 
-GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. The separate offline shader check downloads the official Microsoft DXC release and uses unmodified Unity Graphics headers at an exact source commit whose URP manifest declares 17.6.0. Its 102 configurations compile successfully to DXIL and SPIR-V without a Unity license. This does not establish Unity ShaderLab import, C# API binding, runtime resource binding, original shader-model compatibility, or rendered correctness. See the [compiler scope and provenance](../Tools~/ShaderChecks/README.md).
+GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. The separate offline shader check downloads the official Microsoft DXC release and uses unmodified Unity Graphics headers at an exact source commit whose URP manifest declares 17.6.0. Its 106 compiler invocations cover DXIL and SPIR-V without a Unity license. This does not establish Unity ShaderLab import, C# API binding, runtime resource binding, original shader-model compatibility, or rendered correctness. See the [compiler scope and provenance](../Tools~/ShaderChecks/README.md).
 
 The first [GitHub workflow run](https://github.com/coen22/com.cone.grass/actions/runs/37128243485) passed source checks for commit `8280ce1ab2950b86a63e97d295cf4744feaf8b33`. Its Unity job was **skipped**, because the repository had no configured Unity licensing credentials. This records a checkpoint; it does not certify subsequent commits or any Unity acceptance case below.
 
 The [PR checks](https://github.com/coen22/com.cone.grass/pull/35/checks) and [package validation workflow](https://github.com/coen22/com.cone.grass/actions/workflows/validation.yml) identify subsequent checked commits. The API review also replaced Unity 6.6's obsolete `GetInstanceID()` calls with `GetEntityId()`, retaining full identity for dictionary keys. Roslyn now rejects that known obsolete invocation as a regression guard; it remains a narrow source check rather than Unity API binding.
+
+[PR #52](https://github.com/coen22/com.cone.grass/pull/52) removes the obsolete Unity 6.6 SceneHandle conversion by hashing its full raw value. [PR #51](https://github.com/coen22/com.cone.grass/pull/51) removes unsupported NUnit annotations and corrects an object-collection constraint without excluding tests. Those source corrections do not certify native Editor import, fixture isolation, test discovery or execution. The reported external compiler receipt was not available for inspection here. [PR #53](https://github.com/coen22/com.cone.grass/pull/53) normalizes report/cache path serialization; [merged run 37164035193](https://github.com/coen22/com.cone.grass/actions/runs/37164035193) executed all 12 shader-tool tests on both Windows and Ubuntu. Its Unity test and build jobs were skipped.
 
 ### Actual Unity CLI attempt — 2026-10-03
 
@@ -192,6 +197,25 @@ Overlay, reflection, preview, and XR cameras are deliberately excluded by the cu
 - Begin with an inactive modifier and inactive terrain, populate the shared inventory, then activate them. Per-frame modifier capture and terrain surface discovery must use the retained inventory. Also retain support for an active generated terrain with `HideFlags.DontSave`; inactive objects must not draw before activation.
 
 The projection models one captured mesh height at each XZ position. Ground color is also a shared XZ projection: vertically overlapping surfaces cannot retain different ground colors at identical XZ coordinates. Duplicate XZ roots are treated as ambiguous motion history. Stacked mesh layers and arbitrary vertically overlapping terrain/mesh authoring are outside this preview's validated scope.
+
+## Collider interaction acceptance
+
+Use the shipped `GrassColliderInteractor` with a real CapsuleCollider, CharacterController and SphereCollider in turn. Keep camera AA None, motion Off and queue overflow zero. A support-query or field-model result alone does not establish rendered behavior.
+
+- Run the interaction field, mesh, support and component EditMode fixtures in the native Unity 6000.6 editor. Preserve the actual test-package and assembly provenance, discovered test count, passed/skipped/failed counts and XML. Execute positive support cases as well as rejection cases; a fixture that never resolves contact cannot establish correct height rejection.
+- Compare stationary contact, walking, running and sprinting at several update cadences. For the same observed linear path and radius changes, compare the field's covered samples, latest departure times, directions and recovery weights. Recovery must begin when the collider footprint leaves each sample, reach zero after its configured duration, and stop allocating nodes during stationary contact.
+- Exercise actual grounded contact on flat and sloped supports, shallow penetration, a jump beyond Ground Clearance, and contact after landing. Query the actor's PhysicsScene and ignore its hierarchy and shared Rigidbody colliders. Unsupported shapes or transforms, triggers, disabled colliders, saturated query results and untrusted initial overlap must reject new influence.
+- After landing, take another grounded step on the same support. The airborne gap must remain untouched while the takeoff footprint continues recovering. With a nonzero attack time, move the supporting surface and actor together; live contact must rise while old world positions clear. Repeat with an authored source updating before the interactor, and with a vertical teleport, support loss, explicit reset, reversed clock and excessive observation gap to verify response resets.
+- Place an unrelated floor above grass and ensure the resolver does not skip it to bend the grass below. Test missing ownership, overlapping supports at different heights, disjoint texture crops, and adjacent terrain/mesh tiles. Include the mesh's interpolation border in ownership checks without enlarging the physical grounding cast.
+- Cross an unsupported gap between two valid endpoints. The intermediate support checks must prevent a connecting trail. Exceed the 64-query path budget, 4,096 candidate-node sweep budget and configured history capacity. Rejection must not partially refresh earlier samples; retain only a complete current footprint when it fits, otherwise clear output and report the corrective action.
+- Teleport, reverse the supplied test clock, leave a gap greater than 0.25 seconds, change update mode or actor/support configuration, and call ClearHistory for an in-place session reset. No old segment may connect to the new pose. Repeat disable/enable, destruction, scene transitions and registry resets with domain reload disabled; meshes/materials must be released and registration restored once.
+- With Update Modifiers Every Frame disabled and the camera stationary, move the actor, stop it, lift it away, then wait for final expiry. Slope capture must change and finally clear. A second camera must retain independent state, while an actor wholly outside a camera's capture window must not invalidate that window. Height, density, ground color and unrelated modifier captures should keep their existing cache policy.
+- Inspect mesh vertices and bounds at translated positive/negative coordinates, including halo cells near a capture edge. Every emitted vertex must fit the outward-rounded bounds. Adjacent cells must agree on encoded RG and alpha; transparent edges must remain neutral and must not acquire a diagonal bend.
+- Render the resulting influence through the shipped forward and contact passes, and through motion only when testing an optional consumer. Verify the retained Resources material and slope shader survive a clean player build, graph texture reads are declared, camera matrices are preserved, and no generated helper appears in surface-height discovery.
+- Record capture span/resolution with the actor footprint. The default 620 m span over 1,024 pixels is about 0.61 m per texel, so a 0.15 m field grid does not imply that rendered spatial resolution. Evaluate bends, recovery, contacts and silhouettes at the actual target sample count with TAA disabled.
+- Profile managed allocations, physics synchronization/query cost, mesh uploads and slope recapture after capacity warm-up, for both one actor and the intended maximum simultaneous actors. Bounded storage and authored allocation assertions are not measured Unity performance results.
+
+The source-fingerprinted arithmetic model exercises float32 observed poses with double contact-time arithmetic, changing radii, independent geometric bisection controls, transactional rejection and sustained default-capacity sprint paths. It does not execute the C# helper, collider casts, mesh uploads, shader draws or allocation measurements. Native EditMode and Alice rendered acceptance remain separate requirements of issue #46.
 
 ## RenderGraph and GPU safety
 
