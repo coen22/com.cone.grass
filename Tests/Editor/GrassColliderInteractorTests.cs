@@ -133,12 +133,16 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
             Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.Recovering));
             Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 3.05, 2f, out _, out float departureWeight), Is.True);
             Assert.That(departureWeight, Is.EqualTo(LiveStrength * GrassInteractionField.RecoveryWeight(0.05, 2f)).Within(0.00001f));
-            fixture.Advance(4.0);
+            // Keep observing the airborne actor within the producer's continuity window:
+            // a pause here would deliberately clear history instead of measuring recovery.
+            for (int step = 31; step <= 40; step++)
+                fixture.Advance(step * 0.1);
             Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 4.0, 2f, out _, out float halfwayWeight), Is.True);
             Assert.That(halfwayWeight, Is.EqualTo(LiveStrength * 0.5f).Within(0.00001f));
             uint recoveryRevision = fixture.Interactor.DrawRevision;
 
-            fixture.Advance(5.0);
+            for (int step = 41; step <= 50; step++)
+                fixture.Advance(step * 0.1);
 
             Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
             Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
