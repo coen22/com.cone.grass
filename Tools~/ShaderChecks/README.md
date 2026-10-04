@@ -19,7 +19,7 @@ For CI, add an Ubuntu 24.04 job with the repository checkout, Python 3.12, and t
 
 ## What is compiled
 
-The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **51 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **102 compiler invocations**.
+The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **53 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **106 compiler invocations**.
 
 Coverage includes:
 

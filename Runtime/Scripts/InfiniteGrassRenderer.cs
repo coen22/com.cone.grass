@@ -176,7 +176,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
         RefreshGrassData();
     }
 
-    /// <summary>Refresh only the moving interaction capture, including with a stationary camera.</summary>
+    /// <summary>Refresh only interaction capture, including with a stationary camera.</summary>
     public void RefreshGrassInteraction()
     {
         unchecked { InteractionRevision++; }

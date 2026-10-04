@@ -1,133 +1,280 @@
+using System;
+using System.Collections.Generic;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 public sealed class GrassInteractorTests
 {
-    [TestCase(30)] [TestCase(60)] [TestCase(120)]
-    public void AttackAndRecoveryAreTimeBased(int rate)
+    private readonly List<GrassPlacementArea> previousAreas = new List<GrassPlacementArea>();
+
+    [SetUp]
+    public void IsolateAuthoredGrassOwnership()
     {
-        float response = 0f;
-        for (int i = 0; i < rate; i++) response = GrassInteractionMath.Response(response, .9f, 1f / rate, .06f);
-        Assert.That(response, Is.EqualTo(.9f * (1f - Mathf.Exp(-1f / .06f))).Within(.00001f));
-        Assert.That(GrassInteractionMath.Recovery(.9f, 1f, .55f),
-            Is.EqualTo(.9f * Mathf.Exp(-1f / .55f)).Within(.00001f));
+        previousAreas.Clear();
+        foreach (GrassPlacementArea area in GrassPlacementArea.ActiveAreas)
+            previousAreas.Add(area);
+        foreach (GrassPlacementArea area in previousAreas)
+            if (area)
+                area.enabled = false;
+    }
+
+    [TearDown]
+    public void RestoreAuthoredGrassOwnership()
+    {
+        foreach (GrassPlacementArea area in previousAreas)
+            if (area)
+                area.enabled = true;
+        previousAreas.Clear();
     }
 
     [Test]
-    public void VariableCadenceResponseMatchesElapsedTime()
+    public void PublishedScriptIdentityAndSerializedSettingsRemainAvailable()
     {
-        float response = 0f, elapsed = 0f;
-        foreach (float dt in new[] { .008f, .035f, .012f, .1f, .017f })
-        { response = GrassInteractionMath.Response(response, 1f, dt, .06f); elapsed += dt; }
-        Assert.That(response, Is.EqualTo(1f - Mathf.Exp(-elapsed / .06f)).Within(.00001f));
-    }
-
-    [Test]
-    public void SamplingRejectsDiscontinuitiesAndAirborneVolumes()
-    {
-        Assert.That(GrassInteractionMath.SegmentSamples(.3f, .5f), Is.EqualTo(2));
-        Assert.That(GrassInteractionMath.SegmentSamples(40f, .5f), Is.Zero);
-        Assert.That(GrassInteractionMath.SegmentSamples(float.NaN, .5f), Is.Zero);
-        Assert.That(GrassInteractionMath.HeightContact(0f, 0f, .5f), Is.EqualTo(1f));
-        Assert.That(GrassInteractionMath.HeightContact(.5f, 0f, .5f), Is.Zero);
-        Assert.That(GrassInteractionMath.HeightContact(.25f, 0f, .5f), Is.EqualTo(.5f).Within(.000001f));
-    }
-
-    [Test]
-    public void ActualColliderUpdatesWithoutCameraAndReleasesCapture()
-    {
-        var terrainData = new TerrainData { heightmapResolution = 33, size = new Vector3(20, 1, 20) };
-        GameObject floor = Terrain.CreateTerrainGameObject(terrainData), actor = new GameObject("Interactor body");
-        Vector3 station = new Vector3(1000, 0, 1000);
-        Mesh ownedMesh = null; Material ownedMaterial = null; GameObject helper = null;
-        try
+        using (var fixture = new InteractorFixture())
         {
-            floor.name = "Interactor terrain floor"; floor.transform.position = station - new Vector3(10, 0, 10);
-            var ground = floor.GetComponent<TerrainCollider>(); actor.transform.position = station;
-            var body = actor.AddComponent<CapsuleCollider>(); body.center = Vector3.up; body.height = 2f; body.radius = .3f;
-            var interactor = actor.AddComponent<GrassInteractor>(); interactor.body = body;
-            interactor.interactionShader = Shader.Find("InfiniteGrass/Modifiers/GrassInteractor");
-            Assert.That(interactor.interactionShader, Is.Not.Null, "The package shader is required; no missing-shader skip.");
-            Physics.SyncTransforms(); interactor.Sample(0); interactor.Sample(.1);
-            var supportField = typeof(GrassInteractor).GetField("previousSupport", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.That(supportField.GetValue(interactor), Is.SameAs(ground), "The actual terrain collider must support both takeoff and landing.");
-            Assert.That(interactor.ContactStrength, Is.GreaterThan(.5f));
-            Assert.That(interactor.CaptureRenderer.enabled, Is.True);
-            helper = interactor.CaptureRenderer.gameObject;
-            ownedMesh = helper.GetComponent<MeshFilter>().sharedMesh; ownedMaterial = interactor.CaptureRenderer.sharedMaterial;
-            actor.transform.position = station + new Vector3(1, 0, 0); Physics.SyncTransforms(); interactor.Sample(.2);
-            Assert.That(interactor.RetainedStampCount, Is.GreaterThan(0));
-            actor.transform.position = station + new Vector3(1, 1, 0); Physics.SyncTransforms(); interactor.Sample(.3);
-            Assert.That(interactor.CaptureRenderer.enabled, Is.True, "Departed ground contact must recover instead of disappearing.");
-            actor.transform.position = station + new Vector3(3, 1, 0); Physics.SyncTransforms(); interactor.Sample(.4);
-            int beforeLanding = interactor.RetainedStampCount;
-            Assert.That(beforeLanding, Is.GreaterThan(0), "The old grounded trail must still recover across the jump.");
-            actor.transform.position = station + new Vector3(3, 0, 0); Physics.SyncTransforms(); interactor.Sample(.5);
-            Assert.That(supportField.GetValue(interactor), Is.SameAs(ground));
-            actor.transform.position = station + new Vector3(3.05f, 0, 0); Physics.SyncTransforms(); interactor.Sample(.6);
-            Assert.That(interactor.RetainedStampCount, Is.EqualTo(beforeLanding), "A short grounded step after landing must not bridge the airborne gap.");
-            Vector3[] vertices = ownedMesh.vertices;
-            for (int stamp = 0; stamp < interactor.RetainedStampCount; stamp++)
+            GrassInteractor interactor = fixture.Interactor;
+            Assert.That(AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(MonoScript.FromMonoBehaviour(interactor))),
+                Is.EqualTo("b060e224fe684dcbbe8deb10e97e549f"),
+                "Scenes using the published script GUID must resolve to the compatibility component.");
+            Assert.That(interactor.body, Is.SameAs(fixture.Body), "OnEnable still finds an unassigned local collider.");
+            Assert.That(interactor.groundLayers.value, Is.EqualTo(~0));
+            Assert.That(interactor.radiusPadding, Is.EqualTo(0.15f));
+            Assert.That(interactor.bladeHeight, Is.EqualTo(0.5f));
+            Assert.That(interactor.strength, Is.EqualTo(0.9f));
+            Assert.That(interactor.attackSeconds, Is.EqualTo(0.06f));
+            Assert.That(interactor.recoverySeconds, Is.EqualTo(0.55f));
+            using (var serialized = new SerializedObject(interactor))
+                foreach (string name in new[] { "body", "interactionShader", "groundLayers", "radiusPadding",
+                             "bladeHeight", "strength", "attackSeconds", "recoverySeconds" })
+                    Assert.That(serialized.FindProperty(name), Is.Not.Null, name);
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [Test]
+    public void PublishedFieldsAndReflectedDiagnosticsUseOneManuallySampledCore()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            GrassInteractor interactor = fixture.Interactor;
+            interactor.Sample(0.0);
+            interactor.Sample(0.1);
+
+            float expected = interactor.strength * (1f - Mathf.Exp(-0.1f / interactor.attackSeconds));
+            Assert.That((float)typeof(GrassInteractor).GetProperty("ContactStrength").GetValue(interactor),
+                Is.EqualTo(expected).Within(0.00001f), "The facade must pass its attack and strength settings to real contact state.");
+            Assert.That((int)typeof(GrassInteractor).GetProperty("RetainedStampCount").GetValue(interactor),
+                Is.EqualTo(interactor.ActiveNodeCount).And.GreaterThan(0));
+            int paddedCount = interactor.ActiveNodeCount;
+            Assert.That(interactor.TryGetDraw(out Mesh mesh, out Material material, out _), Is.True);
+            Assert.That(material.shader, Is.SameAs(interactor.interactionShader));
+            Assert.That(fixture.Actor.GetComponents<GrassColliderInteractor>().Length, Is.EqualTo(1));
+            Assert.That(fixture.Actor.GetComponentsInChildren<Renderer>(true), Is.Empty);
+            Assert.That(fixture.Actor.transform.childCount, Is.Zero);
+            Assert.That(fixture.Scene.GetRootGameObjects().Length, Is.EqualTo(2), "No helper object or camera is created.");
+            Assert.That(RegistrationCount(interactor), Is.EqualTo(1));
+
+            interactor.radiusPadding = 0f;
+            interactor.Sample(0.2);
+            interactor.Sample(0.3);
+            Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0).And.LessThan(paddedCount),
+                "Changing the published padding must alter the field instead of only updating an unused facade field.");
+            Assert.That(fixture.Body.radius, Is.EqualTo(0.3f), "Interaction padding must not modify the borrowed collider.");
+            Assert.That(interactor.TryGetDraw(out Mesh reusedMesh, out Material reusedMaterial, out _), Is.True);
+            Assert.That(reusedMesh, Is.SameAs(mesh));
+            Assert.That(reusedMaterial, Is.SameAs(material));
+
+            interactor.groundLayers = 0;
+            interactor.Sample(0.4);
+            Assert.That(interactor.ActiveNodeCount, Is.Zero);
+            Assert.That(interactor.ContactStrength, Is.Zero);
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.False);
+            interactor.groundLayers = ~0;
+            interactor.bladeHeight = 0.1f;
+            fixture.Actor.transform.position += Vector3.up * 0.25f;
+            interactor.Sample(0.5);
+            Assert.That(interactor.ActiveNodeCount, Is.Zero, "The published blade height must limit accepted ground clearance.");
+            interactor.bladeHeight = 0.5f;
+            interactor.Sample(0.6);
+            interactor.Sample(0.7);
+            Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0));
+            Assert.That(interactor.ContactStrength, Is.GreaterThan(0f).And.LessThan(expected),
+                "Contact above the floor is attenuated through the shared support result.");
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [Test]
+    public void MultipleEligibleLocalCollidersRequireAnExplicitBody()
+    {
+        using (var fixture = new InteractorFixture(ambiguousBody: true))
+        {
+            GrassInteractor interactor = fixture.Interactor;
+            Assert.That(ReferenceEquals(interactor.body, null), Is.True,
+                "Automatic binding must not select an arbitrary eligible collider.");
+            interactor.Sample(0.0);
+            Assert.That(interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.MissingCollider));
+            Assert.That(interactor.ActiveNodeCount, Is.Zero);
+            interactor.Configure(fixture.Body, fixture.Ground);
+            interactor.Sample(0.1);
+            interactor.Sample(0.2);
+            Assert.That(interactor.body, Is.SameAs(fixture.Body));
+            Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0));
+            LogAssert.NoUnexpectedReceived();
+        }
+    }
+
+    [Test]
+    public void PublicConfigureRebindsTheFacadeAndDestroyedExplicitBodiesAreNotReplaced()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            GrassInteractor interactor = fixture.Interactor;
+            interactor.Sample(0.0);
+            interactor.Sample(0.1);
+            Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0));
+            var replacement = new GameObject("Replacement actual body");
+            try
             {
-                Vector3 centre = Vector3.zero;
-                for (int corner = 0; corner < 4; corner++) centre += actor.transform.TransformPoint(vertices[(stamp + 1) * 4 + corner]) * .25f;
-                Assert.That(centre.x - station.x, Is.LessThanOrEqualTo(1.001f), "No fresh recovering stamp may appear across the airborne path.");
+                SceneManager.MoveGameObjectToScene(replacement, fixture.Scene);
+                replacement.transform.position = new Vector3(3f, 0.9f, 0f);
+                var collider = replacement.AddComponent<CapsuleCollider>();
+                collider.radius = 0.3f;
+                collider.height = 1.8f;
+                interactor.Configure(collider, fixture.Ground, replacement.transform);
+                Assert.That(interactor.RetainedStampCount, Is.Zero);
+                interactor.Sample(0.2);
+                interactor.Sample(0.3);
+                Assert.That(interactor.body, Is.SameAs(collider));
+                Assert.That(interactor.ActorCollider, Is.SameAs(collider));
+                Assert.That(interactor.TryGetDraw(out _, out _, out Bounds bounds), Is.True);
+                Assert.That(bounds.min.x, Is.GreaterThan(1f), "A later sample must use the replacement body and exclude the old trail.");
+
+                Object.DestroyImmediate(collider);
+                interactor.enabled = false;
+                interactor.enabled = true;
+                interactor.Sample(0.4);
+                Assert.That(ReferenceEquals(interactor.body, collider), Is.True,
+                    "A destroyed explicitly assigned body must stay missing instead of selecting the original local collider.");
+                Assert.That(interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.MissingCollider));
+                Assert.That(interactor.ActiveNodeCount, Is.Zero);
+                Assert.That(fixture.Body && fixture.Body.enabled, Is.True);
+                Assert.That(RegistrationCount(interactor), Is.EqualTo(1));
+                LogAssert.NoUnexpectedReceived();
             }
-            actor.transform.position = station + new Vector3(3.05f, 1, 0); Physics.SyncTransforms(); interactor.Sample(.7);
-            for (int i = 8; i < 55; i++) interactor.Sample(i * .1);
+            finally
+            {
+                Object.DestroyImmediate(replacement);
+            }
+        }
+    }
+
+    [Test]
+    public void PublicResetFiniteRecoveryAndDisableShareCoreResourceOwnership()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            GrassInteractor interactor = fixture.Interactor;
+            interactor.Sample(0.0);
+            interactor.Sample(0.1);
+            Assert.That(interactor.TryGetDraw(out Mesh mesh, out Material material, out _), Is.True);
+
+            interactor.ResetInteraction();
             Assert.That(interactor.RetainedStampCount, Is.Zero);
-            Assert.That(interactor.CaptureRenderer.enabled, Is.False);
+            Assert.That(interactor.ContactStrength, Is.Zero);
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.False);
+            Assert.That(mesh != null && material != null, Is.True, "Reset keeps the one reusable native resource pair.");
+            Assert.That(mesh.vertexCount, Is.Zero);
+            Assert.That(RegistrationCount(interactor), Is.EqualTo(1));
+            interactor.Sample(0.2);
+            interactor.Sample(0.3);
+            Assert.That(interactor.TryGetDraw(out Mesh rebuiltMesh, out Material rebuiltMaterial, out _), Is.True);
+            Assert.That(rebuiltMesh, Is.SameAs(mesh));
+            Assert.That(rebuiltMaterial, Is.SameAs(material));
+
+            fixture.Actor.transform.position += Vector3.up * 3f;
+            interactor.Sample(0.4);
+            Assert.That(interactor.RetainedStampCount, Is.GreaterThan(0));
+            Assert.That(interactor.ContactStrength, Is.Zero, "Departed nodes recover independently of current collider contact.");
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.True);
+            interactor.Sample(0.3 + interactor.recoverySeconds + 0.000001);
+            Assert.That(interactor.RetainedStampCount, Is.Zero, "Recovery Seconds is the finite departure-to-removal duration.");
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.False);
+            Assert.That(mesh != null && material != null, Is.True);
+
             interactor.enabled = false;
-            Assert.That(helper == null && ownedMesh == null && ownedMaterial == null, Is.True);
+            Assert.That(RegistrationCount(interactor), Is.Zero);
+            Assert.That(mesh == null && material == null, Is.True, "Base OnDisable owns both native resources.");
+            Assert.That(fixture.Body && fixture.Body.enabled && fixture.Ground && fixture.Ground.enabled, Is.True);
+            LogAssert.NoUnexpectedReceived();
         }
-        finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(floor); Object.DestroyImmediate(terrainData); }
     }
 
-    [Test]
-    public void SupportChangeRetainsRecoveringContactOnPreviousCollider()
+    private static int RegistrationCount(GrassColliderInteractor interactor)
     {
-        var first = new GameObject("First support"); var second = new GameObject("Second support");
-        var actor = new GameObject("Support crossing body");
-        try
-        {
-            first.transform.position = new Vector3(-1, -.1f, 0); second.transform.position = new Vector3(1, -.1f, 0);
-            first.AddComponent<BoxCollider>().size = second.AddComponent<BoxCollider>().size = new Vector3(2, .2f, 4);
-            var body = actor.AddComponent<CapsuleCollider>(); body.center = Vector3.up; body.height = 2f; body.radius = .3f;
-            var interactor = actor.AddComponent<GrassInteractor>(); interactor.body = body;
-            interactor.interactionShader = Shader.Find("InfiniteGrass/Modifiers/GrassInteractor");
-            Assert.That(interactor.interactionShader, Is.Not.Null);
-            actor.transform.position = Vector3.left * .5f; Physics.SyncTransforms(); interactor.Sample(0); interactor.Sample(.1);
-            actor.transform.position = Vector3.right * .5f; Physics.SyncTransforms(); interactor.Sample(.2);
-            Assert.That(interactor.RetainedStampCount, Is.EqualTo(1), "A collider boundary must retain the old live footprint.");
-            Vector3[] vertices = interactor.CaptureRenderer.GetComponent<MeshFilter>().sharedMesh.vertices;
-            Vector3 oldCentre = Vector3.zero;
-            for (int i = 4; i < 8; i++) oldCentre += actor.transform.TransformPoint(vertices[i]) * .25f;
-            Assert.That(oldCentre.x, Is.EqualTo(-.5f).Within(.0001f));
-            first.transform.position += Vector3.back;
-            Physics.SyncTransforms(); interactor.Sample(.3);
-            vertices = interactor.CaptureRenderer.GetComponent<MeshFilter>().sharedMesh.vertices;
-            oldCentre = Vector3.zero;
-            for (int i = 4; i < 8; i++) oldCentre += actor.transform.TransformPoint(vertices[i]) * .25f;
-            Assert.That(oldCentre.z, Is.EqualTo(-1f).Within(.0001f), "Recovery stays in its supporting collider's coordinates.");
-        }
-        finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(first); Object.DestroyImmediate(second); }
+        int count = 0;
+        foreach (GrassColliderInteractor active in GrassColliderInteractor.ActiveInteractors)
+            if (active == interactor)
+                count++;
+        return count;
     }
 
-    [Test]
-    public void InteractionDirtyDoesNotInvalidateHeightOrGround()
+    private sealed class InteractorFixture : IDisposable
     {
-        InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
-        if (previous) previous.enabled = false;
-        var actor = new GameObject("Interaction settings");
-        try
+        public readonly Scene Scene;
+        public readonly GameObject Actor;
+        public readonly CapsuleCollider Body;
+        public readonly BoxCollider Ground;
+        public readonly GrassInteractor Interactor;
+
+        public InteractorFixture(bool ambiguousBody = false)
         {
-            var settings = actor.AddComponent<InfiniteGrassRenderer>(); uint revision = settings.Revision;
-            uint interaction = settings.InteractionRevision;
-            settings.RefreshGrassInteraction();
-            Assert.That(settings.Revision, Is.EqualTo(revision));
-            Assert.That(settings.InteractionRevision, Is.EqualTo(interaction + 1));
+            Scene = SceneManager.CreateScene("Grass compatibility fixture " + Guid.NewGuid().ToString("N"),
+                new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+            try
+            {
+                var floor = new GameObject("Explicit grass support");
+                SceneManager.MoveGameObjectToScene(floor, Scene);
+                floor.transform.position = Vector3.down * 0.5f;
+                Ground = floor.AddComponent<BoxCollider>();
+                Ground.size = new Vector3(20f, 1f, 20f);
+                Actor = new GameObject("Published interaction component");
+                Actor.SetActive(false);
+                SceneManager.MoveGameObjectToScene(Actor, Scene);
+                Actor.transform.position = Vector3.up * 0.9f;
+                Body = Actor.AddComponent<CapsuleCollider>();
+                Body.direction = 1;
+                Body.radius = 0.3f;
+                Body.height = 1.8f;
+                if (ambiguousBody)
+                    Actor.AddComponent<SphereCollider>();
+                Interactor = Actor.AddComponent<GrassInteractor>();
+                Interactor.SamplingMode = GrassColliderInteractor.UpdateMode.Manual;
+                Interactor.interactionShader = Shader.Find("InfiniteGrass/Modifiers/GrassInteractor");
+                Assert.That(Interactor.interactionShader, Is.Not.Null, "The published shader must be present; this is not a skip.");
+                Interactor.Configure(null, Ground);
+                Actor.SetActive(true);
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
-        finally { Object.DestroyImmediate(actor); if (previous) previous.enabled = true; }
+
+        public void Dispose()
+        {
+            if (Actor)
+                Object.DestroyImmediate(Actor);
+            if (Ground)
+                Object.DestroyImmediate(Ground.gameObject);
+            if (Scene.IsValid() && Scene.isLoaded)
+                EditorSceneManager.CloseScene(Scene, true);
+        }
     }
 }

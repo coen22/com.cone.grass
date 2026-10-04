@@ -1,33 +1,50 @@
 Shader "InfiniteGrass/Modifiers/GrassInteractor"
 {
-    Properties { _MainTex ("Capture contract", 2D) = "white" {} }
     SubShader
     {
-        Tags { "RenderPipeline"="UniversalPipeline" "RenderType"="Transparent" }
+        Tags { "RenderPipeline"="UniversalPipeline" "RenderType"="Transparent" "Queue"="Transparent" }
         Pass
         {
             Name "GrassSlope"
             Tags { "LightMode"="GrassSlope" }
-            ZWrite Off ZTest Always Cull Off
+            ZWrite Off
+            ZTest Always
+            Cull Off
             Blend One OneMinusSrcAlpha
             HLSLPROGRAM
             #pragma target 3.5
-            #pragma vertex GrassCaptureVertex
+            #pragma vertex Vertex
             #pragma fragment Fragment
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            CBUFFER_START(UnityPerMaterial)
-                float4 _MainTex_ST;
-            CBUFFER_END
-            #include "GrassCaptureCommon.hlsl"
-            half4 Fragment(GrassCaptureVaryings input) : SV_Target
+            float4x4 _GrassCaptureVP;
+
+            struct Attributes
             {
-                float2 radial = input.uv * 2.0 - 1.0;
-                float radius = length(radial);
-                half weight = (1.0 - smoothstep(0.25, 1.0, radius)) * input.color.a;
-                float2 direction = radial + input.tangentWS.xz * 0.65;
-                float magnitude = length(direction);
-                direction = magnitude > 0.0001 ? direction / magnitude : float2(0, 0);
-                return half4((direction * 0.5 + 0.5) * weight, 0, weight);
+                float3 positionOS : POSITION;
+                float4 color : COLOR;
+            };
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                float4 color : TEXCOORD0;
+            };
+            Varyings Vertex(Attributes input)
+            {
+                Varyings output;
+                float3 positionWS = TransformObjectToWorld(input.positionOS);
+                output.positionCS = mul(_GrassCaptureVP, float4(positionWS, 1));
+                // Match the existing interaction capture's XZ projection:
+                // supporting surface height does not clip the field mesh.
+                output.positionCS.z = 0.5 * output.positionCS.w;
+                output.color = input.color;
+                return output;
+            }
+            float4 Fragment(Varyings input) : SV_Target
+            {
+                // RGB was premultiplied by each node's recovery strength before
+                // interpolation. Multiplying here again would corrupt the decoded
+                // bend direction when neighboring nodes have different ages.
+                return input.color;
             }
             ENDHLSL
         }
