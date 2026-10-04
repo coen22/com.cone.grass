@@ -134,7 +134,7 @@ def shader_programs(path, repository):
             variants = FORWARD_VARIANTS if name == "GrassForward" else (
                 TERRAIN_VARIANTS if name == "TerrainAlbedo" else {"default": []})
             for variant, keywords in variants.items():
-                yield {"path": str(relative), "pass": name, "stage": stage, "entry": entries[0],
+                yield {"path": relative.as_posix(), "pass": name, "stage": stage, "entry": entries[0],
                        "variant": variant, "keywords": keywords, "target": target_value,
                        "source": source}
 
@@ -146,7 +146,7 @@ def compute_programs(path, repository):
         raise ValueError("No compute kernels found: " + str(path))
     relative = path.relative_to(repository)
     for entry, defines in entries:
-        yield {"path": str(relative), "pass": entry, "stage": "compute", "entry": entry,
+        yield {"path": relative.as_posix(), "pass": entry, "stage": "compute", "entry": entry,
                "variant": "default", "keywords": defines.split(), "target": 50,
                "source": source_segment(text, 0, len(text), relative)}
 

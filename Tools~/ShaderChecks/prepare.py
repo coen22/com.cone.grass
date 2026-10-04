@@ -24,7 +24,8 @@ def sha256(path):
 
 
 def compiler_files(directory):
-    return {str(path.relative_to(directory)): sha256(path)
+    # Receipt keys are portable identifiers; file I/O keeps the native Path.
+    return {path.relative_to(directory).as_posix(): sha256(path)
             for path in sorted(directory.rglob("*")) if path.is_file()}
 
 
