@@ -311,7 +311,7 @@ public sealed class GrassInteractorSupport
                 !InsideCircle(bounds, shape.Center, (double)shape.Radius + margin) || !area.IntersectsCoverage(envelope))
                 continue;
             Collider support;
-            if (!ReferenceEquals(area.Terrain, null))
+            if (area.HasAssignedTerrain)
             {
                 Terrain terrain = area.Terrain;
                 var terrainCollider = terrain ? terrain.GetComponent<TerrainCollider>() : null;
