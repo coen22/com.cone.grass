@@ -311,12 +311,9 @@ public sealed class GrassInteractorSupport
                 !InsideCircle(bounds, shape.Center, (double)shape.Radius + margin) || !area.IntersectsCoverage(envelope))
                 continue;
             Collider support;
-            Terrain terrain = area.Terrain;
-            // Match the placement frame's optional assignment contract: an unset
-            // wrapper has no entity, while a destroyed assigned terrain retains
-            // its nonzero identity and must never fall back to the mesh support.
-            if (!ReferenceEquals(terrain, null) && terrain.GetEntityId() != EntityId.None)
+            if (area.HasAssignedTerrain)
             {
+                Terrain terrain = area.Terrain;
                 var terrainCollider = terrain ? terrain.GetComponent<TerrainCollider>() : null;
                 support = terrainCollider && terrainCollider.terrainData == terrain.terrainData ? terrainCollider : null;
             }

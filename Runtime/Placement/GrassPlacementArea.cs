@@ -210,6 +210,23 @@ public sealed class GrassPlacementArea : MonoBehaviour
 
     public GrassPlacementShape Shape => shape;
     public Terrain Terrain => terrain;
+    internal bool HasAssignedTerrain
+    {
+        get
+        {
+            if (ReferenceEquals(terrain, null))
+                return false;
+#if UNITY_EDITOR
+            // Unset Editor fields can have zero-ID placeholders. Destroyed
+            // assigned objects retain their IDs here and still require validation.
+            return terrain.GetEntityId() != EntityId.None;
+#else
+            // Destroyed player objects can also have zero IDs. Keep their managed
+            // references assigned so validity checks reject them instead of falling back.
+            return true;
+#endif
+        }
+    }
     public bool UsesTerrainBounds => useTerrainBounds;
     public Collider PaintSurface => paintSurface;
     public GrassDensityAsset DensityAsset => densityAsset;
@@ -690,10 +707,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         Vector3 frameSize = new Vector3(Mathf.Abs(transform.lossyScale.x) * size.x, 1f,
             Mathf.Abs(transform.lossyScale.z) * size.y);
 
-        // Unity may deserialize an unset object field as a managed fake-null
-        // wrapper with no entity. Keep destroyed assigned terrains fail-closed:
-        // their retained nonzero entity still enters the validation below.
-        if (!ReferenceEquals(terrain, null) && terrain.GetEntityId() != EntityId.None)
+        if (HasAssignedTerrain)
         {
             if (!terrain || !terrain.terrainData || !terrain.isActiveAndEnabled)
                 return false;
