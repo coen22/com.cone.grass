@@ -480,14 +480,26 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
         Assert.That(assigned, Is.Not.EqualTo(EntityId.None));
         Assert.That(area.TryGetCaptureData(out _), Is.True);
         Bounds probe = new Bounds(Vector3.zero, Vector3.one);
+        // Keep the authored fallback live, but outside the native query while
+        // the assigned terrain owns contact; coincident foreign floors reject.
+        fallback.enabled = false;
+        Physics.SyncTransforms();
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f,
+            out var liveSample, out status), Is.True);
+        Assert.That(liveSample.Support, Is.SameAs(collider));
 
         terrain.enabled = false;
         Assert.That(area.Terrain.GetEntityId(), Is.EqualTo(assigned));
         Assert.That(area.TryGetCaptureData(out _), Is.False);
         Assert.That(area.IntersectsCoverage(probe), Is.False);
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out status), Is.False);
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
         terrain.enabled = true;
         Assert.That(area.Terrain.GetEntityId(), Is.EqualTo(assigned));
         Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f,
+            out var reboundSample, out status), Is.True);
+        Assert.That(reboundSample.Support, Is.SameAs(collider));
 
         Object.DestroyImmediate(terrain);
         Assert.That(ReferenceEquals(area.Terrain, terrain), Is.True);
@@ -498,6 +510,11 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
         Assert.That(area.TryGetCaptureData(out _), Is.False,
             "An assigned destroyed terrain must not fall back to the live mesh.");
         Assert.That(area.IntersectsCoverage(probe), Is.False);
+        fallback.enabled = true;
+        Physics.SyncTransforms();
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out status), Is.False,
+            "A destroyed assigned terrain cannot resolve the still-live fallback floor.");
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
 
         var cleared = new SerializedObject(area);
         cleared.FindProperty("terrain").objectReferenceValue = null;
@@ -507,6 +524,16 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
         Assert.That(area.TryGetCaptureData(out _), Is.True,
             "Explicitly clearing the terrain permits the authored mesh binding.");
         Assert.That(area.IntersectsCoverage(probe), Is.True);
+        Assert.That(ReferenceEquals(area.Terrain, null) || area.Terrain.GetEntityId() == EntityId.None,
+            Is.True, "Only an explicitly unset optional terrain permits mesh ownership.");
+        // The surviving terrain collider is a separate unowned coincident floor.
+        // Remove it from this positive query; the authored mesh is the sole floor.
+        collider.enabled = false;
+        Physics.SyncTransforms();
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f,
+            out var meshSample, out status), Is.True,
+            "Clearing the optional terrain must recover actual mesh contact, not just capture bounds.");
+        Assert.That(meshSample.Support, Is.SameAs(fallback));
     }
 
     [Test]
