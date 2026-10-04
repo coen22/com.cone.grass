@@ -11,7 +11,6 @@ using Object = UnityEngine.Object;
 /// camera depth production and RenderGraph scheduling require separate coverage.
 /// </summary>
 [Category("GrassGPU")]
-[NonParallelizable]
 public sealed class GrassContactRenderingTests
 {
     private const int Size = 64;

@@ -10,7 +10,6 @@ using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 /// <summary>Output guards and source notifications can run without a graphics device.</summary>
-[NonParallelizable]
 public sealed class TerrainGrassAlbedoOutputTests
 {
     private readonly List<Object> owned = new List<Object>();

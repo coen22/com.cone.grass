@@ -9,7 +9,6 @@ using Object = UnityEngine.Object;
 
 /// <summary>Executes the shipped kernels, including group barriers and native indirect argument writes.</summary>
 [Category("GrassGPU")]
-[NonParallelizable]
 public sealed class GrassGpuGenerationTests
 {
     private const string ComputePath = "Packages/com.cone.grass/Runtime/Compute/GrassPositionsCompute.compute";

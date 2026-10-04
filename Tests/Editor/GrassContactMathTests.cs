@@ -27,7 +27,6 @@ public class GrassContactMathTests
 
     [TestCase(1)]
     [TestCase(4)]
-    [NonParallelizable]
     [Category("GrassGPU")]
     public void RecordAcceptsImportedBackbufferWithoutTextureDescriptor(int samples)
     {

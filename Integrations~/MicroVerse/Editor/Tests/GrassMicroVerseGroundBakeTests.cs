@@ -13,7 +13,7 @@ using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 /// <summary>Exercises saved native TerrainLit bakes through the optional bridge's public editor API.</summary>
-[Category("GrassGPU"), NonParallelizable]
+[Category("GrassGPU")]
 public sealed class GrassMicroVerseGroundBakeTests
 {
     private readonly List<Object> owned = new List<Object>();
@@ -939,7 +939,7 @@ public sealed class GrassMicroVerseGroundBakeTests
             bridge.enabled = false;
         else
             bridge.gameObject.SetActive(false);
-        Assert.That(GrassMicroVerseBridge.ActiveBridges, Does.Not.Contain(bridge));
+        Assert.That(GrassMicroVerseBridge.ActiveBridges, Has.No.Member(bridge));
         GameObject otherObject = Own(new GameObject("Conflicting inactive bake owner"));
         GrassMicroVerseBridge other = AddBridge(otherObject, 128, true);
 

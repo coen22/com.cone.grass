@@ -10,7 +10,6 @@ using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
-[NonParallelizable]
 public sealed class GrassPlacementAreaTests
 {
     private readonly List<GameObject> sceneObjects = new List<GameObject>();

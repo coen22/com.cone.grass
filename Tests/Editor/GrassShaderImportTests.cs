@@ -7,7 +7,6 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
 
-[NonParallelizable]
 public sealed class GrassShaderImportTests
 {
     private static readonly string[] SearchFolders =
