@@ -65,6 +65,36 @@ public sealed class GrassInteractorTests
     }
 
     [Test]
+    public void SupportChangeRetainsRecoveringContactOnPreviousCollider()
+    {
+        var first = new GameObject("First support"); var second = new GameObject("Second support");
+        var actor = new GameObject("Support crossing body");
+        try
+        {
+            first.transform.position = new Vector3(-1, -.1f, 0); second.transform.position = new Vector3(1, -.1f, 0);
+            first.AddComponent<BoxCollider>().size = second.AddComponent<BoxCollider>().size = new Vector3(2, .2f, 4);
+            var body = actor.AddComponent<CapsuleCollider>(); body.center = Vector3.up; body.height = 2f; body.radius = .3f;
+            var interactor = actor.AddComponent<GrassInteractor>(); interactor.body = body;
+            interactor.interactionShader = Shader.Find("InfiniteGrass/Modifiers/GrassInteractor");
+            Assert.That(interactor.interactionShader, Is.Not.Null);
+            actor.transform.position = Vector3.left * .5f; Physics.SyncTransforms(); interactor.Sample(0); interactor.Sample(.1);
+            actor.transform.position = Vector3.right * .5f; Physics.SyncTransforms(); interactor.Sample(.2);
+            Assert.That(interactor.RetainedStampCount, Is.EqualTo(1), "A collider boundary must retain the old live footprint.");
+            Vector3[] vertices = interactor.CaptureRenderer.GetComponent<MeshFilter>().sharedMesh.vertices;
+            Vector3 oldCentre = Vector3.zero;
+            for (int i = 4; i < 8; i++) oldCentre += actor.transform.TransformPoint(vertices[i]) * .25f;
+            Assert.That(oldCentre.x, Is.EqualTo(-.5f).Within(.0001f));
+            first.transform.position += Vector3.back;
+            Physics.SyncTransforms(); interactor.Sample(.3);
+            vertices = interactor.CaptureRenderer.GetComponent<MeshFilter>().sharedMesh.vertices;
+            oldCentre = Vector3.zero;
+            for (int i = 4; i < 8; i++) oldCentre += actor.transform.TransformPoint(vertices[i]) * .25f;
+            Assert.That(oldCentre.z, Is.EqualTo(-1f).Within(.0001f), "Recovery stays in its supporting collider's coordinates.");
+        }
+        finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(first); Object.DestroyImmediate(second); }
+    }
+
+    [Test]
     public void InteractionDirtyDoesNotInvalidateHeightOrGround()
     {
         InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;

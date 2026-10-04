@@ -67,6 +67,8 @@ public sealed class GrassInteractor : MonoBehaviour
         { ResetInteraction(); dt = 0f; }
         if (!EnsureCapture()) return;
         bool contact = TrySupport(out Collider support, out Vector3 center, out float radius, out float target);
+        float departedStrength = response;
+        Vector3 departedDirection = lastDirection;
         response = GrassInteractionMath.Response(response, contact ? target : 0f,
             Mathf.Max(0f, dt), contact ? attackSeconds : recoverySeconds);
         if (contact && observed && previousSupport == support)
@@ -99,10 +101,10 @@ public sealed class GrassInteractor : MonoBehaviour
         {
             sampledSupport = support; sampledLocal = support.transform.InverseTransformPoint(center); lastDirection = Vector3.zero;
         }
-        if (!contact && previousSupport && response > .005f)
-            AddStamp(previousSupport, previousSupport.transform.TransformPoint(previousLocal), lastDirection,
+        if (previousSupport && (!contact || previousSupport != support) && departedStrength > .005f)
+            AddStamp(previousSupport, previousSupport.transform.TransformPoint(previousLocal), departedDirection,
                 Mathf.Max(.05f, radiusPadding + Mathf.Max(body ? body.bounds.extents.x : .1f, body ? body.bounds.extents.z : .1f)),
-                response, now);
+                departedStrength, previousTime);
         // First contact ramps in using observed time; no camera movement or texture recenter is required.
         int quads = 0;
         if (contact && response > .005f)
