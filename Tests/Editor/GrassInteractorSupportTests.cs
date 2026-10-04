@@ -1,13 +1,16 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
-public sealed class GrassInteractorSupportTests
+public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
 {
     private readonly List<Scene> scenes = new List<Scene>();
     private readonly List<Object> assets = new List<Object>();
@@ -33,7 +36,7 @@ public sealed class GrassInteractorSupportTests
     {
         for (int i = scenes.Count - 1; i >= 0; i--)
             if (scenes[i].IsValid() && scenes[i].isLoaded)
-                EditorSceneManager.CloseScene(scenes[i], true);
+                GrassPhysicsFixtureScenes.Close(scenes[i]);
         for (int i = assets.Count - 1; i >= 0; i--)
             if (assets[i])
                 Object.DestroyImmediate(assets[i]);
@@ -651,8 +654,7 @@ public sealed class GrassInteractorSupportTests
 
     private Scene NewPhysicsScene()
     {
-        Scene created = SceneManager.CreateScene("Grass support " + Guid.NewGuid().ToString("N"),
-            new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+        Scene created = GrassPhysicsFixtureScenes.Create("Grass support " + Guid.NewGuid().ToString("N"));
         scenes.Add(created);
         return created;
     }
@@ -728,5 +730,225 @@ public sealed class GrassInteractorSupportTests
         Assert.That(GrassInteractorSupport.TryGetShape(actor, actor.transform, out var shape, out var status), Is.True,
             "Shape setup failed with " + status);
         return shape;
+    }
+}
+
+// LocalPhysicsMode.Physics3D is a runtime API. One entry per fixture preserves
+// all existing collision cases without paying for an entry per individual case.
+public abstract class GrassPhysicsFixtureTests
+{
+    private bool previousPause;
+
+    [UnityOneTimeSetUp]
+    public IEnumerator EnterPhysicsSession()
+    {
+        // Read the owner's options; never change them to make a fixture pass.
+        bool reload = !EditorSettings.enterPlayModeOptionsEnabled ||
+            (EditorSettings.enterPlayModeOptions & EnterPlayModeOptions.DisableDomainReload) == 0;
+        yield return new EnterPlayMode(expectDomainReload: reload);
+        previousPause = EditorApplication.isPaused;
+        // These fixtures drive physics queries and sampling explicitly. Pausing
+        // also preserves their original immediate Editor resource-release checks:
+        // URP CoreUtils.Destroy uses DestroyImmediate in a paused Editor session.
+        EditorApplication.isPaused = true;
+        GrassPhysicsFixtureScenes.Begin();
+        GrassPhysicsFixtureScenes.ProveIsolation();
+    }
+
+    [UnityOneTimeTearDown]
+    public IEnumerator ExitPhysicsSession()
+    {
+        if (!Application.isPlaying)
+        {
+            EditorApplication.isPaused = previousPause;
+            Assert.Fail("The shared physics session ended before its owned-scene cleanup was verified.");
+        }
+        // Let runtime scene unloads progress without changing any Editor setting.
+        EditorApplication.isPaused = false;
+        string cleanupFailure = null;
+        IEnumerator drain = GrassPhysicsFixtureScenes.Drain();
+        while (true)
+        {
+            bool next;
+            try { next = drain.MoveNext(); }
+            catch (Exception error) { cleanupFailure = error.ToString(); break; }
+            if (!next)
+                break;
+            yield return drain.Current;
+        }
+        try { cleanupFailure = GrassPhysicsFixtureScenes.CheckCleanup() ?? cleanupFailure; }
+        catch (Exception error) { cleanupFailure = error.ToString(); }
+        // Even a cleanup assertion must return the Editor to its original mode.
+        EditorApplication.isPaused = previousPause;
+        yield return new ExitPlayMode();
+        EditorApplication.isPaused = previousPause;
+        Assert.That(cleanupFailure, Is.Null, cleanupFailure);
+    }
+}
+
+internal static class GrassPhysicsFixtureScenes
+{
+    private sealed class OwnedScene
+    {
+        internal Scene Scene;
+        internal PhysicsScene Physics;
+        internal bool Local;
+        internal AsyncOperation Unload;
+    }
+
+    private static readonly List<OwnedScene> owned = new List<OwnedScene>();
+    private static Scene active;
+    private static Scene[] existing;
+    private static HashSet<Object> nativeResources;
+    private static Dictionary<GrassColliderInteractor, bool> existingProducers;
+
+    internal static void Begin()
+    {
+        Assert.That(owned, Is.Empty, "The previous fixture must release all of its scenes.");
+        active = SceneManager.GetActiveScene();
+        existing = new Scene[SceneManager.sceneCount];
+        for (int i = 0; i < existing.Length; i++)
+            existing[i] = SceneManager.GetSceneAt(i);
+        nativeResources = InteractionResources();
+        existingProducers = new Dictionary<GrassColliderInteractor, bool>();
+        foreach (GrassColliderInteractor producer in Resources.FindObjectsOfTypeAll<GrassColliderInteractor>())
+            if (producer && producer.gameObject.scene.IsValid() && producer.gameObject.scene.isLoaded)
+                existingProducers.Add(producer, producer.enabled);
+    }
+
+    internal static Scene Create(string name) => Create(name, LocalPhysicsMode.Physics3D);
+
+    private static Scene Create(string name, LocalPhysicsMode mode)
+    {
+        Assert.That(Application.isPlaying, Is.True, "Enter the shared fixture Play session before creating a local physics world.");
+        Scene scene = SceneManager.CreateScene(name, new CreateSceneParameters(mode));
+        var entry = new OwnedScene { Scene = scene, Physics = scene.GetPhysicsScene(), Local = mode == LocalPhysicsMode.Physics3D };
+        owned.Add(entry); // Own it before an assertion can fail.
+        Assert.That(EditorSceneManager.IsPreviewScene(scene), Is.False);
+        Assert.That(entry.Physics.IsValid(), Is.True);
+        if (entry.Local)
+        {
+            Assert.That(entry.Physics, Is.Not.EqualTo(Physics.defaultPhysicsScene));
+            foreach (OwnedScene other in owned)
+                if (other != entry && other.Scene.IsValid() && other.Scene.isLoaded)
+                    Assert.That(entry.Physics, Is.Not.EqualTo(other.Physics), "Each fixture scene needs a distinct native physics world.");
+        }
+        Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(active), "Creating a fixture must preserve the active scene.");
+        return scene;
+    }
+
+    internal static void ProveIsolation()
+    {
+        Scene first = Create("Grass physics isolation A " + Guid.NewGuid().ToString("N"));
+        Scene second = Create("Grass physics isolation B " + Guid.NewGuid().ToString("N"));
+        Scene shared = Create("Grass default physics control " + Guid.NewGuid().ToString("N"), LocalPhysicsMode.None);
+        Vector3 point = new Vector3(12345f, 678f, -12345f);
+        try
+        {
+            Collider a = Probe(first, point);
+            Collider b = Probe(second, point);
+            Collider control = Probe(shared, point);
+            Physics.SyncTransforms();
+            Vector3 origin = point + Vector3.up * 2f;
+            Assert.That(first.GetPhysicsScene().Raycast(origin, Vector3.down, out RaycastHit hitA, 3f), Is.True);
+            Assert.That(hitA.collider, Is.SameAs(a), "World A must not query the coincident sibling or default-world collider.");
+            Assert.That(second.GetPhysicsScene().Raycast(origin, Vector3.down, out RaycastHit hitB, 3f), Is.True);
+            Assert.That(hitB.collider, Is.SameAs(b), "World B must not query the coincident sibling or default-world collider.");
+            Assert.That(shared.GetPhysicsScene(), Is.EqualTo(Physics.defaultPhysicsScene), "The non-local control must actually share the default world.");
+            Assert.That(Physics.defaultPhysicsScene.Raycast(origin, Vector3.down, out RaycastHit hitDefault, 3f), Is.True);
+            Assert.That(hitDefault.collider, Is.SameAs(control), "The default world must not contain either local collider.");
+            Assert.That(GrassInteractorSupport.TryGetShape(a, a.transform, out var shape, out _), Is.True);
+            Assert.That(shape.PhysicsScene, Is.EqualTo(first.GetPhysicsScene()), "Production support must accept the non-preview isolated scene.");
+        }
+        finally
+        {
+            Close(shared);
+            Close(second);
+            Close(first);
+        }
+    }
+
+    private static Collider Probe(Scene scene, Vector3 point)
+    {
+        var item = new GameObject("Grass native physics isolation probe");
+        SceneManager.MoveGameObjectToScene(item, scene);
+        item.transform.position = point;
+        return item.AddComponent<SphereCollider>();
+    }
+
+    internal static void Close(Scene scene)
+    {
+        OwnedScene entry = owned.Find(item => item.Scene == scene);
+        Assert.That(entry, Is.Not.Null, "Only the current fixture's owned scene may be unloaded.");
+        if (entry.Unload != null || !scene.IsValid() || !scene.isLoaded)
+            return;
+        // Runtime scene unload is asynchronous. Remove components/registrations now,
+        // then await the scene and deferred native-resource releases before exit.
+        foreach (GameObject root in scene.GetRootGameObjects())
+            Object.DestroyImmediate(root);
+        entry.Unload = SceneManager.UnloadSceneAsync(scene);
+        Assert.That(entry.Unload, Is.Not.Null);
+    }
+
+    internal static IEnumerator Drain()
+    {
+        foreach (OwnedScene entry in owned)
+            Close(entry.Scene);
+        foreach (OwnedScene entry in owned)
+            if (entry.Unload != null)
+                while (!entry.Unload.isDone)
+                    yield return null;
+        yield return null; // CoreUtils.Destroy uses runtime deferred destruction.
+    }
+
+    internal static string CheckCleanup()
+    {
+        string failure = null;
+        foreach (OwnedScene entry in owned)
+            if ((entry.Scene.IsValid() && entry.Scene.isLoaded) || (entry.Local && entry.Physics.IsValid()))
+                failure = "An owned scene or its isolated native physics world survived fixture teardown.";
+        if (SceneManager.GetActiveScene() != active || SceneManager.sceneCount != existing.Length)
+            failure = "Fixture teardown changed the pre-existing active scene or loaded scene count.";
+        for (int i = 0; i < existing.Length && i < SceneManager.sceneCount; i++)
+            if (SceneManager.GetSceneAt(i) != existing[i])
+                failure = "Fixture teardown changed a pre-existing scene's identity/order.";
+        var remaining = InteractionResources();
+        remaining.ExceptWith(nativeResources);
+        foreach (var previous in existingProducers)
+        {
+            if (!previous.Key || previous.Key.enabled != previous.Value)
+                failure = "Fixture teardown did not restore a pre-existing grass producer's enabled state.";
+            else
+            {
+                // Existing tests temporarily disable producers. Their own resources
+                // may be recreated, but a fixture must leave no unowned native pair.
+                var resources = typeof(GrassColliderInteractor).GetField("interactionMesh", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(previous.Key) as GrassInteractionMesh;
+                if (resources != null)
+                {
+                    if (resources.Mesh) remaining.Remove(resources.Mesh);
+                    if (resources.Material) remaining.Remove(resources.Material);
+                }
+            }
+        }
+        if (remaining.Count != 0)
+            failure = "Fixture teardown leaked an unowned grass interaction mesh/material.";
+        owned.Clear();
+        existing = null;
+        nativeResources = null;
+        existingProducers = null;
+        return failure;
+    }
+
+    private static HashSet<Object> InteractionResources()
+    {
+        var ids = new HashSet<Object>();
+        foreach (Mesh mesh in Resources.FindObjectsOfTypeAll<Mesh>())
+            if (mesh.name == "Grass Collider Interaction")
+                ids.Add(mesh);
+        foreach (Material material in Resources.FindObjectsOfTypeAll<Material>())
+            if (material.name == "Grass Collider Interaction")
+                ids.Add(material);
+        return ids;
     }
 }
