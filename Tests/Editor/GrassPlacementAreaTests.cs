@@ -1319,6 +1319,157 @@ public sealed class GrassPlacementAreaTests
         Assert.That(area.IntersectsCoverage(data.WorldBounds), Is.True);
     }
 
+    [TestCase("collider")]
+    [TestCase("mesh renderer")]
+    [TestCase("skinned renderer")]
+    public void SameBoundsSupportingMeshReplacementPublishesOneSurfaceChange(string changedSource)
+    {
+        GrassPlacementArea area = NewArea();
+        NewObservedMeshSupport(area, out MeshCollider collider, out MeshFilter filter, out MeshRenderer renderer);
+        Mesh replacement = NewSteppedSupportMesh(true);
+        SkinnedMeshRenderer skinned = null;
+        if (changedSource == "skinned renderer")
+        {
+            GameObject owner = renderer.gameObject;
+            Object.DestroyImmediate(renderer);
+            skinned = owner.AddComponent<SkinnedMeshRenderer>();
+            skinned.sharedMesh = filter.sharedMesh;
+            skinned.localBounds = filter.sharedMesh.bounds;
+            skinned.sharedMaterials = new Material[1];
+        }
+        Assert.That(replacement.bounds, Is.EqualTo(filter.sharedMesh.bounds));
+        Assert.That(replacement.vertices[8].y, Is.Not.EqualTo(filter.sharedMesh.vertices[8].y),
+            "The middle strip changes height even though the outer bounds remain equal.");
+        Physics.SyncTransforms();
+        Bounds colliderBounds = collider.bounds;
+        Renderer observedRenderer = skinned ? (Renderer)skinned : renderer;
+        Bounds rendererBounds = observedRenderer.bounds;
+
+        AssertSurfaceObservation(area, () =>
+        {
+            if (changedSource == "collider")
+                collider.sharedMesh = replacement;
+            else if (skinned)
+                skinned.sharedMesh = replacement;
+            else
+                filter.sharedMesh = replacement;
+            Physics.SyncTransforms();
+            Assert.That(collider.bounds, Is.EqualTo(colliderBounds));
+            Assert.That(observedRenderer.bounds, Is.EqualTo(rendererBounds));
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SameBoundsSupportingTransformsPublishOneSurfaceChange(bool changeParentRenderer)
+    {
+        GrassPlacementArea area = NewArea();
+        NewObservedMeshSupport(area, out MeshCollider collider, out _, out MeshRenderer renderer);
+        Physics.SyncTransforms();
+        Bounds colliderBounds = collider.bounds, rendererBounds = renderer.bounds;
+        Matrix4x4 colliderMatrix = collider.transform.localToWorldMatrix;
+        Matrix4x4 rendererMatrix = renderer.localToWorldMatrix;
+
+        AssertSurfaceObservation(area, () =>
+        {
+            // An exact half turn preserves this square mesh's AABB without
+            // introducing trigonometric rounding into the old bounds-only oracle.
+            Quaternion halfTurn = new Quaternion(0f, 1f, 0f, 0f);
+            if (changeParentRenderer)
+            {
+                renderer.transform.rotation = halfTurn;
+                collider.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+                Assert.That(collider.transform.localToWorldMatrix, Is.EqualTo(colliderMatrix));
+                Assert.That(renderer.localToWorldMatrix, Is.Not.EqualTo(rendererMatrix));
+            }
+            else
+            {
+                collider.transform.rotation = halfTurn;
+                Assert.That(renderer.localToWorldMatrix, Is.EqualTo(rendererMatrix));
+                Assert.That(collider.transform.localToWorldMatrix, Is.Not.EqualTo(colliderMatrix));
+            }
+            Physics.SyncTransforms();
+            Assert.That(collider.bounds, Is.EqualTo(colliderBounds));
+            Assert.That(renderer.bounds, Is.EqualTo(rendererBounds));
+        });
+    }
+
+    [Test]
+    public void ChangingRecordedMaterialSlotsPublishesASurfaceChangeWhileTheSourceStaysUsable()
+    {
+        GrassPlacementArea area = NewArea();
+        NewObservedMeshSupport(area, out _, out MeshFilter filter, out MeshRenderer renderer);
+        Mesh mesh = filter.sharedMesh;
+        int[] indices = mesh.triangles;
+        var firstStrip = new int[6];
+        var remainingStrips = new int[indices.Length - firstStrip.Length];
+        Array.Copy(indices, firstStrip, firstStrip.Length);
+        Array.Copy(indices, firstStrip.Length, remainingStrips, 0, remainingStrips.Length);
+        mesh.subMeshCount = 2;
+        mesh.SetTriangles(firstStrip, 0);
+        mesh.SetTriangles(remainingStrips, 1);
+
+        AssertSurfaceObservation(area, () => renderer.sharedMaterials = new Material[2]);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void SupportingSceneChangesPublishSurfaceEventsWithoutMovingTheSeparateArea(bool terrainSurface)
+    {
+        GrassPlacementArea area = NewArea();
+        GameObject support;
+        if (terrainSurface)
+        {
+            Terrain terrain = NewTerrain(new Vector3(-2f, 0f, -2f), new Vector3(4f, 0.5f, 4f));
+            ConfigureLocal(area, new Vector2(4f, 4f), terrain);
+            support = terrain.gameObject;
+        }
+        else
+        {
+            NewObservedMeshSupport(area, out _, out _, out MeshRenderer renderer);
+            support = renderer.gameObject;
+        }
+        Scene originalScene = support.scene, originalActive = SceneManager.GetActiveScene();
+        Scene other = default;
+        try
+        {
+            other = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            SceneManager.SetActiveScene(originalActive);
+            AssertSurfaceObservation(area, () => SceneManager.MoveGameObjectToScene(support, other));
+            Assert.That(area.gameObject.scene, Is.EqualTo(originalScene));
+            AssertSurfaceObservation(area, () => SceneManager.MoveGameObjectToScene(support, originalScene));
+        }
+        finally
+        {
+            if (support && support.scene != originalScene)
+                SceneManager.MoveGameObjectToScene(support, originalScene);
+            if (originalActive.IsValid() && originalActive.isLoaded)
+                SceneManager.SetActiveScene(originalActive);
+            if (other.IsValid() && other.isLoaded)
+                EditorSceneManager.CloseScene(other, true);
+        }
+    }
+
+    [Test]
+    public void WarmedSupportingGeometryObservationsReuseTheirMaterialBuffer()
+    {
+        GrassPlacementArea area = NewArea();
+        NewObservedMeshSupport(area, out _, out _, out _);
+        bool captured = true;
+        for (int index = 0; index < 8; index++)
+            captured &= area.TryGetCaptureData(out _);
+        uint revision = area.SourceRevision;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 32; index++)
+            captured &= area.TryGetCaptureData(out _);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(captured, Is.True);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision));
+        Assert.That(allocated, Is.Zero,
+            "Support observation must reuse the warmed material list without allocating mesh or material arrays.");
+    }
+
     [Test]
     public void MovingAnExplicitMeshSurfaceIntoAPreviewSceneDisablesCoverageAndPaintingUntilItReturns()
     {
@@ -1758,6 +1909,91 @@ public sealed class GrassPlacementAreaTests
         serialized.FindProperty("paintSurface").objectReferenceValue = surface;
         serialized.ApplyModifiedPropertiesWithoutUndo();
         return surface;
+    }
+
+    private void NewObservedMeshSupport(GrassPlacementArea area, out MeshCollider collider,
+        out MeshFilter filter, out MeshRenderer renderer)
+    {
+        ConfigureLocal(area, new Vector2(4f, 4f));
+        var parent = new GameObject("Separate observed grass renderer");
+        sceneObjects.Add(parent);
+        filter = parent.AddComponent<MeshFilter>();
+        filter.sharedMesh = NewSteppedSupportMesh(false);
+        renderer = parent.AddComponent<MeshRenderer>();
+        renderer.sharedMaterials = new Material[1];
+        var child = new GameObject("Explicit observed child collider");
+        sceneObjects.Add(child);
+        child.transform.SetParent(parent.transform, false);
+        collider = child.AddComponent<MeshCollider>();
+        collider.sharedMesh = filter.sharedMesh;
+        var serialized = new SerializedObject(area);
+        serialized.FindProperty("paintSurface").objectReferenceValue = collider;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+    }
+
+    private Mesh NewSteppedSupportMesh(bool raiseMiddle)
+    {
+        float[] edges = { -2f, -1f, -0.5f, 0.5f, 2f };
+        var vertices = new Vector3[16];
+        var indices = new int[24];
+        for (int strip = 0; strip < 4; strip++)
+        {
+            float height = strip == 0 || (raiseMiddle && strip == 2) ? 0.5f : 0f;
+            int vertex = strip * 4, index = strip * 6;
+            vertices[vertex] = new Vector3(edges[strip], height, -2f);
+            vertices[vertex + 1] = new Vector3(edges[strip + 1], height, -2f);
+            vertices[vertex + 2] = new Vector3(edges[strip], height, 2f);
+            vertices[vertex + 3] = new Vector3(edges[strip + 1], height, 2f);
+            indices[index] = vertex;
+            indices[index + 1] = vertex + 2;
+            indices[index + 2] = vertex + 1;
+            indices[index + 3] = vertex + 1;
+            indices[index + 4] = vertex + 2;
+            indices[index + 5] = vertex + 3;
+        }
+        var mesh = new Mesh { name = "Same-bounds stepped grass support", vertices = vertices, triangles = indices };
+        assets.Add(mesh);
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static void AssertSurfaceObservation(GrassPlacementArea area, Action mutate)
+    {
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
+        uint sourceRevision = area.SourceRevision, surfaceRevision = area.SurfaceRevision;
+        uint densityRevision = area.DensityRevision, groundRevision = area.GroundColorRevision;
+        var regions = new List<Bounds>();
+        var changes = new List<GrassPlacementChange>();
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, change) =>
+        {
+            if (source == area)
+            {
+                regions.Add(region);
+                changes.Add(change);
+            }
+        };
+        GrassPlacementArea.SourceChanged += handler;
+        try
+        {
+            mutate();
+            Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData changed), Is.True);
+            Assert.That(changed.WorldBounds, Is.EqualTo(original.WorldBounds));
+            Assert.That(regions.Count, Is.EqualTo(1));
+            Assert.That(regions[0], Is.EqualTo(original.WorldBounds));
+            Assert.That(changes[0], Is.EqualTo(GrassPlacementChange.Surface));
+            Assert.That(area.SourceRevision, Is.EqualTo(sourceRevision + 1));
+            Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision + 1));
+            Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
+            Assert.That(area.GroundColorRevision, Is.EqualTo(groundRevision));
+            Assert.That(area.TryGetCaptureData(out _), Is.True);
+            Assert.That(regions.Count, Is.EqualTo(1), "An unchanged repoll must not emit a second invalidation.");
+            Assert.That(area.SourceRevision, Is.EqualTo(sourceRevision + 1));
+            Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision + 1));
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= handler;
+        }
     }
 
     private static void ConfigureLocal(GrassPlacementArea area, Vector2 size, Terrain terrain = null)

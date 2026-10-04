@@ -710,9 +710,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
             // when its collider is destroyed, unloaded or moved into a preview scene.
             if (!paintSurface || !paintSurface.gameObject.activeInHierarchy)
                 return false;
-            Renderer supportingRenderer = paintSurface.GetComponent<Renderer>();
-            if (!supportingRenderer)
-                supportingRenderer = paintSurface.GetComponentInParent<Renderer>();
+            Renderer supportingRenderer = GetSupportingRenderer(paintSurface);
             if (!HasSupportingGeometry(supportingRenderer))
                 return false;
             var supportingScene = paintSurface.gameObject.scene;
@@ -802,6 +800,12 @@ public sealed class GrassPlacementArea : MonoBehaviour
             return false;
         }
         return true;
+    }
+
+    private static Renderer GetSupportingRenderer(Collider surface)
+    {
+        Renderer renderer = surface.GetComponent<Renderer>();
+        return renderer ? renderer : surface.GetComponentInParent<Renderer>();
     }
 
     private bool TryGetCoverageExtent(Matrix4x4 frame, Bounds frameBounds, out Rect uvBounds, out Bounds bounds)
@@ -999,17 +1003,63 @@ public sealed class GrassPlacementArea : MonoBehaviour
         {
             int hash = paintSurface ? paintSurface.GetEntityId().GetHashCode() : 0;
             if (paintSurface)
+            {
                 hash = hash * 397 ^ paintSurface.bounds.GetHashCode();
+                // A separate area's frame and a support's AABB can stay unchanged
+                // when its geometry changes. Publish the same surface observation
+                // to capture caches and interaction history left on this surface.
+                hash = hash * 397 ^ paintSurface.transform.localToWorldMatrix.GetHashCode();
+                hash = hash * 397 ^ paintSurface.gameObject.scene.handle.GetRawData().GetHashCode();
+                hash = hash * 397 ^ paintSurface.enabled.GetHashCode();
+                hash = hash * 397 ^ paintSurface.isTrigger.GetHashCode();
+                hash = hash * 397 ^ paintSurface.gameObject.layer;
+                if (paintSurface is MeshCollider meshCollider)
+                {
+                    hash = hash * 397 ^ GetMeshStateHash(meshCollider.sharedMesh);
+                    hash = hash * 397 ^ meshCollider.convex.GetHashCode();
+                    hash = hash * 397 ^ (int)meshCollider.cookingOptions;
+                }
+                Renderer renderer = GetSupportingRenderer(paintSurface);
+                hash = hash * 397 ^ (renderer ? renderer.GetEntityId().GetHashCode() : 0);
+                if (renderer)
+                {
+                    hash = hash * 397 ^ renderer.localToWorldMatrix.GetHashCode();
+                    hash = hash * 397 ^ renderer.bounds.GetHashCode();
+                    hash = hash * 397 ^ renderer.gameObject.scene.handle.GetRawData().GetHashCode();
+                    Mesh mesh = renderer is SkinnedMeshRenderer skinned ? skinned.sharedMesh :
+                        renderer.TryGetComponent(out MeshFilter filter) ? filter.sharedMesh : null;
+                    hash = hash * 397 ^ GetMeshStateHash(mesh);
+                    // The height override records one draw per slot. Reuse the
+                    // readiness buffer instead of allocating sharedMaterials.
+                    supportingMaterials.Clear();
+                    renderer.GetSharedMaterials(supportingMaterials);
+                    hash = hash * 397 ^ supportingMaterials.Count;
+                }
+            }
             if (terrain && terrain.terrainData)
             {
                 TerrainData data = terrain.terrainData;
                 hash = hash * 397 ^ data.GetEntityId().GetHashCode();
+                hash = hash * 397 ^ terrain.gameObject.scene.handle.GetRawData().GetHashCode();
                 hash = hash * 397 ^ data.size.y.GetHashCode();
                 hash = hash * 397 ^ terrain.transform.position.y.GetHashCode();
                 hash = hash * 397 ^ GetTextureStateHash(data.heightmapTexture);
                 hash = hash * 397 ^ GetTextureStateHash(data.holesTexture);
             }
             return hash;
+        }
+    }
+
+    private static int GetMeshStateHash(Mesh mesh)
+    {
+        if (!mesh)
+            return 0;
+        unchecked
+        {
+            int hash = mesh.GetEntityId().GetHashCode();
+            hash = hash * 397 ^ mesh.bounds.GetHashCode();
+            hash = hash * 397 ^ mesh.vertexCount;
+            return hash * 397 ^ mesh.subMeshCount;
         }
     }
 

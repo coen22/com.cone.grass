@@ -171,7 +171,14 @@ float GrassWorldUnitsPerPixel(float3 positionWS, GrassViewParameters view)
 {
     float eyeDepth = max(abs(dot(positionWS, -view.cameraForward) + view.viewTranslationZ), 0.001);
     float depthScale = lerp(eyeDepth, 1.0, view.projection.z);
-    return (2.0 * depthScale) / (max(view.projection.x, 1.0) * max(view.projection.y, 0.001));
+    if (!all(isfinite(view.projection)) || view.projection.y <= 0.0 ||
+        !isfinite(depthScale) || depthScale <= 0.0)
+        return 0.0;
+    // A valid orthographic projection can have an arbitrarily small positive
+    // scale. Flooring it changes the requested pixel width in large views.
+    // Divide in stages so render height * projection scale cannot overflow.
+    float worldUnitsPerPixel = (depthScale / max(view.projection.x, 1.0)) / view.projection.y * 2.0;
+    return isfinite(worldUnitsPerPixel) ? max(worldUnitsPerPixel, 0.0) : 0.0;
 }
 
 GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
@@ -190,6 +197,10 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     // Expand subpixel blades and compensate coverage by the same ratio.
     float originalFullWidth = width * 0.5;
     float minimumFullWidth = max(0.0, shape.ranges.w) * GrassWorldUnitsPerPixel(root.pivot, view);
+    // Unrepresentable expansion must not turn an otherwise finite blade into
+    // infinite vertices. root.width stores twice this full geometric width.
+    if (!isfinite(minimumFullWidth) || minimumFullWidth > 0.5 * FLT_MAX)
+        minimumFullWidth = 0.0;
     float expandedFullWidth = max(originalFullWidth, minimumFullWidth);
     // Preserve the ratio at small world scales too. A fixed denominator floor
     // would thin even an unexpanded blade that projects to several full pixels.

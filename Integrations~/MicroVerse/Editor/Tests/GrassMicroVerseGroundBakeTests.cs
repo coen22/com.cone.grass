@@ -385,6 +385,133 @@ public sealed class GrassMicroVerseGroundBakeTests
         }
     }
 
+    [TestCase("savedPixels", false)]
+    [TestCase("savedPixels", true)]
+    [TestCase("dirtyPixels", false)]
+    [TestCase("dirtyPixels", true)]
+    [TestCase("wrapV", false)]
+    [TestCase("wrapV", true)]
+    public void OutputEditsDuringNotificationRemainUntouchedButCannotCertifyTheBake(string change, bool fromBoundArea)
+    {
+        Texture2D original = Refresh();
+        string guid = AssetDatabase.AssetPathToGUID(outputPath);
+        string sourceKey = bridge.GroundBakeSourceKey;
+        string outputKey = bridge.GroundBakeOutputKey;
+        Hash128 sourceHash = AssetDatabase.GetAssetDependencyHash(diffusePath);
+        Color[] sourcePixels = diffuse.GetPixels();
+        bool changed = false;
+        Action<Terrain, Texture2D> changeBaked = (source, output) =>
+        {
+            if (source == terrain)
+                ChangeOutput(output);
+        };
+        Action<GrassPlacementArea, Bounds, GrassPlacementChange> changeBoundArea = (area, bounds, changes) =>
+        {
+            if (area == bridge.PlacementArea && (changes & GrassPlacementChange.GroundColor) != 0 &&
+                TerrainGrassAlbedoBaker.IsBakingOutput(outputPath))
+                ChangeOutput(original);
+        };
+        if (fromBoundArea)
+            GrassPlacementArea.SourceChanged += changeBoundArea;
+        else
+            TerrainGrassAlbedoBaker.Baked += changeBaked;
+        try
+        {
+            Assert.That(GrassMicroVerseBridgeUtility.Refresh(bridge, false, false, false, true), Is.False);
+        }
+        finally
+        {
+            GrassPlacementArea.SourceChanged -= changeBoundArea;
+            TerrainGrassAlbedoBaker.Baked -= changeBaked;
+        }
+
+        Assert.That(changed, Is.True, "The selected notification must run inside the actual bake.");
+        Assert.That(bakeCount, Is.EqualTo(2), "Both notification paths must still complete before certification fails.");
+        Assert.That(bridge.LastRefreshSucceeded, Is.False);
+        StringAssert.Contains("changed during a completion callback", bridge.LastRefreshMessage);
+        Assert.That(bridge.BakedGroundColor, Is.SameAs(original));
+        Assert.That(AssetDatabase.LoadMainAssetAtPath(outputPath), Is.SameAs(original));
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+        Assert.That(bridge.GroundBakeAssetPath, Is.EqualTo(outputPath));
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(sourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(outputKey), "Observer edits must not receive the completed bake's durable record.");
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.Null);
+        Assert.That(TerrainGrassAlbedoBaker.IsBakingOutput(outputPath), Is.False);
+        Assert.That(EditorUtility.IsDirty(original), Is.EqualTo(change == "dirtyPixels"));
+        Assert.That(original.wrapModeV, Is.EqualTo(change == "wrapV" ? TextureWrapMode.Repeat : TextureWrapMode.Clamp));
+        AssertColor(original.GetPixel(32, 32), change == "wrapV" ? Color.red : Color.blue);
+        Hash128 editedHash = AssetDatabase.GetAssetDependencyHash(outputPath);
+        if (change == "savedPixels")
+            Assert.That(editedHash.ToString(), Is.Not.EqualTo(outputKey), "The saved blue image must remain on disk without being certified.");
+
+        uint revision = bridge.PlacementArea.SourceRevision;
+        uint updateCount = original.updateCount;
+        int dirtyCount = EditorUtility.GetDirtyCount(original);
+        Color[] editedPixels = original.GetPixels();
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out _), Is.False);
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+        Assert.That(bridge.PlacementArea.DensityTexture, Is.Null);
+        Assert.That(bridge.PlacementArea.GroundColorTexture, Is.Null);
+        Assert.That(bridge.GroundBakeSourceKey, Is.EqualTo(sourceKey));
+        Assert.That(bridge.GroundBakeOutputKey, Is.EqualTo(outputKey));
+        Assert.That(original.updateCount, Is.EqualTo(updateCount));
+        Assert.That(EditorUtility.GetDirtyCount(original), Is.EqualTo(dirtyCount));
+        Assert.That(EditorUtility.IsDirty(original), Is.EqualTo(change == "dirtyPixels"));
+        Assert.That(original.wrapModeV, Is.EqualTo(change == "wrapV" ? TextureWrapMode.Repeat : TextureWrapMode.Clamp));
+        Assert.That(original.GetPixels(), Is.EqualTo(editedPixels), "Preflight must neither undo nor save the observer's edits.");
+        Assert.That(AssetDatabase.GetAssetDependencyHash(outputPath), Is.EqualTo(editedHash));
+        Assert.That(bakeCount, Is.EqualTo(2));
+
+        Assert.That(Refresh(), Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(3), "A callback-free explicit refresh must regenerate the native image exactly once.");
+        Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+        Assert.That(original.wrapModeV, Is.EqualTo(TextureWrapMode.Clamp));
+        Assert.That(EditorUtility.IsDirty(original), Is.False);
+        AssertColor(original.GetPixel(32, 32), Color.red);
+        Assert.That(GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message), Is.True, message);
+        Assert.That(AssetDatabase.GetAssetDependencyHash(diffusePath), Is.EqualTo(sourceHash));
+        Assert.That(diffuse.GetPixels(), Is.EqualTo(sourcePixels));
+        Assert.That(EditorUtility.IsDirty(diffuse), Is.False);
+        revision = bridge.PlacementArea.SourceRevision;
+        Assert.That(Refresh(), Is.SameAs(original));
+        Assert.That(bakeCount, Is.EqualTo(3));
+        Assert.That(bridge.PlacementArea.SourceRevision, Is.EqualTo(revision));
+
+        void ChangeOutput(Texture2D output)
+        {
+            if (changed)
+                return;
+            changed = true;
+            Assert.That(output, Is.SameAs(original));
+            uint beforeUpdate = output.updateCount;
+            int beforeDirty = EditorUtility.GetDirtyCount(output);
+            if (change == "wrapV")
+            {
+                output.wrapModeV = TextureWrapMode.Repeat;
+                EditorUtility.ClearDirty(output);
+                Assert.That(output.updateCount, Is.EqualTo(beforeUpdate), "The sampler-only edit must not depend on a pixel upload.");
+                Assert.That(EditorUtility.GetDirtyCount(output), Is.EqualTo(beforeDirty));
+            }
+            else
+            {
+                var pixels = new Color[output.width * output.height];
+                for (int i = 0; i < pixels.Length; i++)
+                    pixels[i] = Color.blue;
+                output.SetPixels(pixels);
+                output.Apply(true, false);
+                EditorUtility.SetDirty(output);
+                if (change == "savedPixels")
+                {
+                    AssetDatabase.SaveAssetIfDirty(output);
+                    Assert.That(EditorUtility.GetDirtyCount(output), Is.EqualTo(beforeDirty),
+                        "A saved edit must be detected even after its dirty counter is cleared.");
+                }
+                Assert.That(output.updateCount, Is.Not.EqualTo(beforeUpdate));
+            }
+        }
+    }
+
     [TestCase("missing")]
     [TestCase("replacement")]
     [TestCase("ambiguous")]
