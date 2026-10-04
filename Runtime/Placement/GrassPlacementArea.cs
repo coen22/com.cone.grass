@@ -690,7 +690,10 @@ public sealed class GrassPlacementArea : MonoBehaviour
         Vector3 frameSize = new Vector3(Mathf.Abs(transform.lossyScale.x) * size.x, 1f,
             Mathf.Abs(transform.lossyScale.z) * size.y);
 
-        if (!ReferenceEquals(terrain, null))
+        // Unity may deserialize an unset object field as a managed fake-null
+        // wrapper with no entity. Keep destroyed assigned terrains fail-closed:
+        // their retained nonzero entity still enters the validation below.
+        if (!ReferenceEquals(terrain, null) && terrain.GetEntityId() != EntityId.None)
         {
             if (!terrain || !terrain.terrainData || !terrain.isActiveAndEnabled)
                 return false;

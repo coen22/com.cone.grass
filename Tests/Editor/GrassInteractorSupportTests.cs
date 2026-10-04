@@ -456,7 +456,7 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
     public void TerrainColliderMustMatchTheAuthoredTerrainDataAndRecoverAfterRebinding()
     {
         Terrain terrain = NewTerrain(new Vector3(-5f, 0f, -5f), new Vector3(10f, 1f, 10f));
-        NewTerrainArea(terrain);
+        GrassPlacementArea area = NewTerrainArea(terrain);
         TerrainCollider collider = terrain.GetComponent<TerrainCollider>();
         var other = new TerrainData { heightmapResolution = 33, size = new Vector3(10f, 1f, 10f) };
         assets.Add(other);
@@ -469,6 +469,44 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
         collider.terrainData = terrain.terrainData;
         Physics.SyncTransforms();
         Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out _), Is.True);
+        // Local mapping makes a live mesh fallback possible, so the destroyed
+        // assigned reference must itself prevent rebinding to that surface.
+        BoxCollider fallback = NewFloor(Vector3.zero, new Vector2(10f, 10f));
+        var local = new SerializedObject(area);
+        local.FindProperty("useTerrainBounds").boolValue = false;
+        local.FindProperty("paintSurface").objectReferenceValue = fallback;
+        local.ApplyModifiedPropertiesWithoutUndo();
+        EntityId assigned = terrain.GetEntityId();
+        Assert.That(assigned, Is.Not.EqualTo(EntityId.None));
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Bounds probe = new Bounds(Vector3.zero, Vector3.one);
+
+        terrain.enabled = false;
+        Assert.That(area.Terrain.GetEntityId(), Is.EqualTo(assigned));
+        Assert.That(area.TryGetCaptureData(out _), Is.False);
+        Assert.That(area.IntersectsCoverage(probe), Is.False);
+        terrain.enabled = true;
+        Assert.That(area.Terrain.GetEntityId(), Is.EqualTo(assigned));
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+
+        Object.DestroyImmediate(terrain);
+        Assert.That(ReferenceEquals(area.Terrain, terrain), Is.True);
+        Assert.That(!terrain, Is.True);
+        Assert.That(area.Terrain.GetEntityId(), Is.EqualTo(assigned),
+            "A destroyed assigned terrain must retain its nonzero entity identity.");
+        Assert.That(fallback && collider, Is.True);
+        Assert.That(area.TryGetCaptureData(out _), Is.False,
+            "An assigned destroyed terrain must not fall back to the live mesh.");
+        Assert.That(area.IntersectsCoverage(probe), Is.False);
+
+        var cleared = new SerializedObject(area);
+        cleared.FindProperty("terrain").objectReferenceValue = null;
+        cleared.ApplyModifiedPropertiesWithoutUndo();
+        Assert.That(!area.Terrain, Is.True);
+        Assert.That(area.PaintSurface, Is.SameAs(fallback));
+        Assert.That(area.TryGetCaptureData(out _), Is.True,
+            "Explicitly clearing the terrain permits the authored mesh binding.");
+        Assert.That(area.IntersectsCoverage(probe), Is.True);
     }
 
     [Test]
