@@ -1,3 +1,4 @@
+import hashlib
 import io
 from pathlib import Path
 import sys
@@ -22,10 +23,11 @@ ENDHLSL
 
 
 class ShaderExtractionTests(unittest.TestCase):
-    def extract(self, source):
+    def extract(self, source, relative_path="Sample.shader"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            shader = root / "Sample.shader"
+            shader = root / relative_path
+            shader.parent.mkdir(parents=True, exist_ok=True)
             shader.write_text(source)
             return list(check.shader_programs(shader, root))
 
@@ -41,7 +43,9 @@ class ShaderExtractionTests(unittest.TestCase):
         shared = '\nfloat SharedValue() { return 3; }\n'
         source = 'Shader "Example" { SubShader { HLSLINCLUDE' + shared
         source += 'ENDHLSL\nPass { ' + PROGRAM + ' } } }'
-        programs = self.extract(source)
+        programs = self.extract(source, "Runtime/Shaders/Sample.shader")
+        self.assertEqual({"Runtime/Shaders/Sample.shader"}, {item["path"] for item in programs})
+        self.assertIn('#line 1 "Runtime/Shaders/Sample.shader"', programs[0]["source"])
         self.assertIn(shared, programs[0]["source"])
         self.assertIn('float4 Vertex(uint id : SV_VertexID)', programs[0]["source"])
 
@@ -75,11 +79,14 @@ class ShaderExtractionTests(unittest.TestCase):
     def test_compute_kernel_defines_are_not_lost(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "Test.compute"
+            source = root / "Runtime/Compute/Test.compute"
+            source.parent.mkdir(parents=True)
             source.write_text('// #pragma kernel Comment\n#pragma kernel First FEATURE=2\n#pragma kernel Second\n')
             programs = list(check.compute_programs(source, root))
         self.assertEqual(["First", "Second"], [item["entry"] for item in programs])
         self.assertEqual(["FEATURE=2"], programs[0]["keywords"])
+        self.assertEqual({"Runtime/Compute/Test.compute"}, {item["path"] for item in programs})
+        self.assertIn('#line 1 "Runtime/Compute/Test.compute"', programs[0]["source"])
 
     def test_backend_changes_platform_headers_and_preserves_source_target(self):
         program = {"stage": "fragment", "path": "Runtime/Shaders/Example.shader",
@@ -123,17 +130,21 @@ class CompilerArchiveTests(unittest.TestCase):
                 prepare.extract_compiler(archive, root / "out")
 
     def test_compiler_fingerprint_includes_shared_libraries(self):
+        contents = {"bin/dxc": b"binary", "lib/libdxcompiler.so": b"library",
+                    "lib/libdxil.so": b"validator"}
+        expected = {path: hashlib.sha256(data).hexdigest() for path, data in contents.items()}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "bin").mkdir()
-            (root / "lib").mkdir()
-            (root / "bin/dxc").write_bytes(b"binary")
-            (root / "lib/libdxcompiler.so").write_bytes(b"library")
+            for relative, data in contents.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
             before = prepare.compiler_files(root)
             (root / "lib/libdxcompiler.so").write_bytes(b"modified")
             after = prepare.compiler_files(root)
-        self.assertEqual(before["bin/dxc"], after["bin/dxc"])
-        self.assertNotEqual(before["lib/libdxcompiler.so"], after["lib/libdxcompiler.so"])
+        self.assertEqual(expected, before, "Receipt keys and byte hashes must be identical on Windows and POSIX.")
+        expected["lib/libdxcompiler.so"] = hashlib.sha256(b"modified").hexdigest()
+        self.assertEqual(expected, after, "A library edit must change its fingerprint and retain all other files.")
 
 
 if __name__ == "__main__":
