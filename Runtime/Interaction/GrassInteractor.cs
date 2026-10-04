@@ -105,6 +105,12 @@ public sealed class GrassInteractor : MonoBehaviour
             AddStamp(previousSupport, previousSupport.transform.TransformPoint(previousLocal), departedDirection,
                 Mathf.Max(.05f, radiusPadding + Mathf.Max(body ? body.bounds.extents.x : .1f, body ? body.bounds.extents.z : .1f)),
                 departedStrength, previousTime);
+        if (!contact)
+        {
+            // A jump breaks the grounded path even when it lands on the same collider.
+            // Keep recovering stamps, but anchor the next grounded segment at its landing.
+            sampledSupport = null; sampledLocal = Vector3.zero;
+        }
         // First contact ramps in using observed time; no camera movement or texture recenter is required.
         int quads = 0;
         if (contact && response > .005f)

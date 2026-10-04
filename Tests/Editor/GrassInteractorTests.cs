@@ -37,31 +37,51 @@ public sealed class GrassInteractorTests
     [Test]
     public void ActualColliderUpdatesWithoutCameraAndReleasesCapture()
     {
-        GameObject floor = new GameObject("Interactor floor"), actor = new GameObject("Interactor body");
+        var terrainData = new TerrainData { heightmapResolution = 33, size = new Vector3(20, 1, 20) };
+        GameObject floor = Terrain.CreateTerrainGameObject(terrainData), actor = new GameObject("Interactor body");
+        Vector3 station = new Vector3(1000, 0, 1000);
         Mesh ownedMesh = null; Material ownedMaterial = null; GameObject helper = null;
         try
         {
-            var ground = floor.AddComponent<BoxCollider>(); ground.size = new Vector3(20, .2f, 20); floor.transform.position = Vector3.down * .1f;
+            floor.name = "Interactor terrain floor"; floor.transform.position = station - new Vector3(10, 0, 10);
+            var ground = floor.GetComponent<TerrainCollider>(); actor.transform.position = station;
             var body = actor.AddComponent<CapsuleCollider>(); body.center = Vector3.up; body.height = 2f; body.radius = .3f;
             var interactor = actor.AddComponent<GrassInteractor>(); interactor.body = body;
             interactor.interactionShader = Shader.Find("InfiniteGrass/Modifiers/GrassInteractor");
             Assert.That(interactor.interactionShader, Is.Not.Null, "The package shader is required; no missing-shader skip.");
             Physics.SyncTransforms(); interactor.Sample(0); interactor.Sample(.1);
+            var supportField = typeof(GrassInteractor).GetField("previousSupport", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.That(supportField.GetValue(interactor), Is.SameAs(ground), "The actual terrain collider must support both takeoff and landing.");
             Assert.That(interactor.ContactStrength, Is.GreaterThan(.5f));
             Assert.That(interactor.CaptureRenderer.enabled, Is.True);
             helper = interactor.CaptureRenderer.gameObject;
             ownedMesh = helper.GetComponent<MeshFilter>().sharedMesh; ownedMaterial = interactor.CaptureRenderer.sharedMaterial;
-            actor.transform.position = new Vector3(1, 0, 0); Physics.SyncTransforms(); interactor.Sample(.2);
+            actor.transform.position = station + new Vector3(1, 0, 0); Physics.SyncTransforms(); interactor.Sample(.2);
             Assert.That(interactor.RetainedStampCount, Is.GreaterThan(0));
-            actor.transform.position = new Vector3(1, 1, 0); Physics.SyncTransforms(); interactor.Sample(.3);
+            actor.transform.position = station + new Vector3(1, 1, 0); Physics.SyncTransforms(); interactor.Sample(.3);
             Assert.That(interactor.CaptureRenderer.enabled, Is.True, "Departed ground contact must recover instead of disappearing.");
-            for (int i = 4; i < 50; i++) interactor.Sample(i * .1);
+            actor.transform.position = station + new Vector3(3, 1, 0); Physics.SyncTransforms(); interactor.Sample(.4);
+            int beforeLanding = interactor.RetainedStampCount;
+            Assert.That(beforeLanding, Is.GreaterThan(0), "The old grounded trail must still recover across the jump.");
+            actor.transform.position = station + new Vector3(3, 0, 0); Physics.SyncTransforms(); interactor.Sample(.5);
+            Assert.That(supportField.GetValue(interactor), Is.SameAs(ground));
+            actor.transform.position = station + new Vector3(3.05f, 0, 0); Physics.SyncTransforms(); interactor.Sample(.6);
+            Assert.That(interactor.RetainedStampCount, Is.EqualTo(beforeLanding), "A short grounded step after landing must not bridge the airborne gap.");
+            Vector3[] vertices = ownedMesh.vertices;
+            for (int stamp = 0; stamp < interactor.RetainedStampCount; stamp++)
+            {
+                Vector3 centre = Vector3.zero;
+                for (int corner = 0; corner < 4; corner++) centre += actor.transform.TransformPoint(vertices[(stamp + 1) * 4 + corner]) * .25f;
+                Assert.That(centre.x - station.x, Is.LessThanOrEqualTo(1.001f), "No fresh recovering stamp may appear across the airborne path.");
+            }
+            actor.transform.position = station + new Vector3(3.05f, 1, 0); Physics.SyncTransforms(); interactor.Sample(.7);
+            for (int i = 8; i < 55; i++) interactor.Sample(i * .1);
             Assert.That(interactor.RetainedStampCount, Is.Zero);
             Assert.That(interactor.CaptureRenderer.enabled, Is.False);
             interactor.enabled = false;
             Assert.That(helper == null && ownedMesh == null && ownedMaterial == null, Is.True);
         }
-        finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(floor); }
+        finally { Object.DestroyImmediate(actor); Object.DestroyImmediate(floor); Object.DestroyImmediate(terrainData); }
     }
 
     [Test]
