@@ -162,6 +162,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int PlacementGroundStrength = Shader.PropertyToID("_PlacementGroundStrength");
         public static readonly int PlacementLayer = Shader.PropertyToID("_PlacementGroundLayerTexture");
         public static readonly int PlacementLayerSampler = Shader.PropertyToID("_PlacementGroundLayerSamplerTexture");
+        public static readonly int PlacementLayerIsSampler = Shader.PropertyToID("_PlacementGroundLayerIsSampler");
         public static readonly int PlacementHasLayer = Shader.PropertyToID("_PlacementHasGroundLayer");
         public static readonly int PlacementLayerUV = Shader.PropertyToID("_PlacementGroundLayerUV");
         public static readonly int PlacementRemapMin = Shader.PropertyToID("_PlacementGroundRemapMin");
@@ -1143,7 +1144,9 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                         properties.SetColor(Id.PlacementTint, source.GroundTint);
                         properties.SetFloat(Id.PlacementGroundStrength, source.GroundColorStrength);
                         properties.SetTexture(Id.PlacementLayer, source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture);
-                        properties.SetTexture(Id.PlacementLayerSampler, ResolveGroundLayerSamplerTexture(source));
+                        Texture layerSampler = ResolveGroundLayerSamplerTexture(source);
+                        properties.SetTexture(Id.PlacementLayerSampler, layerSampler);
+                        properties.SetInteger(Id.PlacementLayerIsSampler, source.GroundLayerTexture == layerSampler ? 1 : 0);
                         properties.SetInteger(Id.PlacementHasLayer, source.GroundLayerTexture ? 1 : 0);
                         properties.SetVector(Id.PlacementLayerUV, source.GroundLayerUV);
                         properties.SetVector(Id.PlacementRemapMin, source.GroundLayerRemapMin);
@@ -1738,7 +1741,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 if (uploadArguments)
                 {
                     Arguments?.Dispose();
-                    Arguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments,
+                    Arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments,
                         3, argumentStride) { name = "Grass Indirect Arguments" };
                 }
                 owner.GetLodCapacity(LodCapacities, LodOffsets);

@@ -544,7 +544,7 @@ public sealed class GrassMotionVectors : IDisposable
             if (DispatchArguments == null || !DispatchArguments.IsValid())
             {
                 DispatchArguments?.Dispose();
-                DispatchArguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments, 9, sizeof(uint));
+                DispatchArguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 9, sizeof(uint));
                 changed = true;
             }
             for (int i = 0; i < Snapshots.Length; i++)

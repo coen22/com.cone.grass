@@ -191,6 +191,13 @@ public sealed class GrassInteractorSupport
                 return Reject(GrassInteractorSupportStatus.InvalidSettings, out status);
 
             bool hasExplicit = !ReferenceEquals(explicitSupport, null);
+#if UNITY_EDITOR
+            // Serialized empty Editor fields can retain a managed zero-ID placeholder.
+            // Assigned destroyed Editor objects keep their ID and must still reject.
+            // Player destruction can clear the ID, so keep the managed-reference guard there.
+            if (hasExplicit && explicitSupport.GetEntityId() == EntityId.None)
+                hasExplicit = false;
+#endif
             if (hasExplicit && (!IsUsableSupport(explicitSupport) || !AcceptedLayer(explicitSupport, acceptedSupportLayers) ||
                 IsSelf(explicitSupport, shape) ||
                 explicitSupport.gameObject.scene.GetPhysicsScene() != scene))

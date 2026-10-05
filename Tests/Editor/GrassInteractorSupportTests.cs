@@ -697,6 +697,42 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
     }
 
     [Test]
+    public void SerializedEmptyExplicitSupportUsesAuthoredOwnershipButDestroyedAssignmentRejects()
+    {
+        BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
+        NewArea(floor, Vector3.zero, new Vector2(10f, 10f));
+        CapsuleCollider actor = NewCapsule(Vector3.up);
+        var interactor = actor.gameObject.AddComponent<GrassColliderInteractor>();
+        interactor.SamplingMode = GrassColliderInteractor.UpdateMode.Manual;
+        interactor.Configure(actor, floor, actor.transform);
+        using (var serialized = new SerializedObject(interactor))
+        {
+            serialized.FindProperty("explicitSupport").objectReferenceValue = null;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+        Collider empty = interactor.ExplicitSupport;
+        Assert.That(ReferenceEquals(empty, null), Is.False,
+            "Exercise Unity's native empty field placeholder, not a plain CLR null.");
+        Assert.That(empty == null, Is.True);
+        Assert.That(empty.GetEntityId(), Is.EqualTo(EntityId.None));
+        Physics.SyncTransforms();
+        GrassInteractorShape shape = Shape(actor);
+        var resolver = new GrassInteractorSupport();
+        Assert.That(resolver.TryResolve(shape, empty, 0.1f, 0.05f, out var sample, out var status), Is.True);
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+        Assert.That(sample.Support, Is.SameAs(floor));
+
+        BoxCollider assigned = NewFloor(Vector3.right * 20f, new Vector2(10f, 10f));
+        interactor.Configure(actor, assigned, actor.transform);
+        Object.DestroyImmediate(assigned);
+        Assert.That(ReferenceEquals(interactor.ExplicitSupport, assigned), Is.True);
+        Assert.That(resolver.TryResolve(shape, interactor.ExplicitSupport, 0.1f, 0.05f,
+            out _, out status), Is.False, "Destroyed assignments cannot fall back to the still-live authored floor.");
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.InvalidSupport));
+        LogAssert.NoUnexpectedReceived();
+    }
+
+    [Test]
     public void WarmedSupportQueriesReuseTheirManagedBuffers()
     {
         BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));

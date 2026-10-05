@@ -470,8 +470,7 @@ public sealed class TerrainGrassAlbedoBakerTests
         Matrix4x4 projection = Matrix4x4.Ortho(-size.x * 0.5f, size.x * 0.5f,
             -size.z * 0.5f, size.z * 0.5f, 0.01f, size.y + 2f);
         material.SetMatrix("_GrassCaptureVP", GL.GetGPUProjectionMatrix(projection, true) * view);
-        // Production binds each source with an MPB. Exercise that path for the
-        // texture whose only shader use is supplying native sampler state.
+        // Match production's MPB sampler binding and selected-layer branch.
         var properties = new MaterialPropertyBlock();
         properties.SetMatrix("_PlacementWorldToMask", draw.WorldToMask);
         properties.SetMatrix("_PlacementGroundWorldToMask", draw.GroundWorldToMask);
@@ -484,7 +483,10 @@ public sealed class TerrainGrassAlbedoBakerTests
         properties.SetInteger("_PlacementHasGroundColor", 0);
         properties.SetInteger("_PlacementHasGroundLayer", 1);
         properties.SetTexture("_PlacementGroundLayerTexture", draw.GroundLayerTexture);
-        properties.SetTexture("_PlacementGroundLayerSamplerTexture", draw.GroundLayerSamplerTexture);
+        Texture layerSampler = draw.GroundLayerSamplerTexture ? draw.GroundLayerSamplerTexture :
+            draw.GroundLayerTexture ? draw.GroundLayerTexture : Texture2D.whiteTexture;
+        properties.SetTexture("_PlacementGroundLayerSamplerTexture", layerSampler);
+        properties.SetInteger("_PlacementGroundLayerIsSampler", draw.GroundLayerTexture == layerSampler ? 1 : 0);
         properties.SetVector("_PlacementGroundLayerUV", draw.GroundLayerUV);
         properties.SetVector("_PlacementGroundRemapMin", draw.GroundLayerRemapMin);
         properties.SetVector("_PlacementGroundRemapMax", draw.GroundLayerRemapMax);
