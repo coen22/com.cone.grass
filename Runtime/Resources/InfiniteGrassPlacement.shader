@@ -31,6 +31,7 @@ Shader "Hidden/InfiniteGrass/Placement"
         int _PlacementHasGroundColor;
         int _PlacementGroundColorUsesTerrainBounds;
         int _PlacementHasGroundLayer;
+        int _PlacementGroundLayerIsSampler;
         TEXTURE2D(_PlacementDensityTexture);
         TEXTURE2D(_PlacementGroundColorTexture);
         TEXTURE2D(_PlacementGroundLayerTexture);
@@ -137,8 +138,15 @@ Shader "Hidden/InfiniteGrass/Placement"
                     float2 layerUV = input.positionWS.xz * _PlacementGroundLayerUV.xy + _PlacementGroundLayerUV.zw;
                     // Match native TerrainLit's sampler source, including per-axis
                     // addressing and filtering, rather than forcing linear repeat.
-                    albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundLayerTexture,
-                        sampler_PlacementGroundLayerSamplerTexture, layerUV).rgb;
+                    // Sample the group-first texture directly when it is also the layer.
+                    // This keeps the sampler source in the compiled resource table;
+                    // Unity cannot bind a sampler for a texture optimized out of the shader.
+                    if (_PlacementGroundLayerIsSampler != 0)
+                        albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundLayerSamplerTexture,
+                            sampler_PlacementGroundLayerSamplerTexture, layerUV).rgb;
+                    else
+                        albedo = GRASS_SAMPLE_CAPTURE_TEXTURE2D(_PlacementGroundLayerTexture,
+                            sampler_PlacementGroundLayerSamplerTexture, layerUV).rgb;
                     // URP TerrainLit applies diffuse remap scale (max-min), without adding min.
                     albedo *= _PlacementGroundRemapMax.rgb - _PlacementGroundRemapMin.rgb;
                 }
