@@ -97,6 +97,18 @@ python3 Tools~/report_unity_results.py /path/to/results --require-gpu
 
 The reporter fails a required GPU run if GPU cases are absent, skipped or incomplete. Omit `--require-gpu` for a headless import run; skipped graphics cases still appear in the report.
 
+For the Test Framework 1.8 host-reload cancellation reported in [#67](https://github.com/coen22/com.cone.grass/issues/67), a Grass-only batch run can explicitly opt into `-grassBatchReloadGuard`. Use it only when the owner's existing Enter Play Mode options already disable domain reload and retain scene reload:
+
+```sh
+Unity -batchmode -projectPath /path/to/project -runTests -testPlatform EditMode -assemblyNames com.cone.grass.tests.editor -grassBatchReloadGuard -testResults /path/to/results/grass.xml -logFile /path/to/results/grass.log
+```
+
+An optional `-testFilter` may select a subset of that exact assembly. The guard checks the actual `RunStarted` tree against a fixed reviewed method/signature inventory and compatible typed arguments; it refuses unknown methods, foreign assemblies and mixed selections. Same-type parameter values for reviewed methods are allowed, so this is not an exact authored-leaf whitelist. Changes to those methods or their setup/teardown require a renewed audit for intentional C# compilation or domain-reload waits before extending the inventory.
+
+Registration takes no startup lock. The guard changes no Editor settings and permits startup import/compilation and scene reload. After admission it defers assembly reload through the selected run, replaces the Test Framework's Play-entry unlock, and releases its owned lock on completion, error or Editor shutdown. It does not extend Kinematica's separate mixed-run guard. A compilation request during the run is logged; results still concern the assemblies loaded at the start, so changed code needs a subsequent run after reload.
+
+The guard controls are authored and source-reviewed, without native qualification here. Preserve the exact selected identities, loaded assembly/package provenance, admission/release log, measured Play/Edit transitions and complete NUnit XML for the integrated run. A completed guarded run must retain its real failures and skips; it does not establish a passing full suite, scene restoration or rendered acceptance by itself.
+
 ### Reproducible standalone scene and builds
 
 The generated project contains `GrassValidationBuild`, which operates only in a project carrying the generator's marker. **Tools > Cone > Grass Validation > Create Rendering Scene** creates a flat native URP TerrainLit terrain, a saved synthetic density-mask asset consumed by the actual MicroVerse bridge, the production renderer feature, a directional light, an obstacle and a direct-output game camera. This synthetic mask exercises saved-output binding without pretending to execute MicroVerse generation.
