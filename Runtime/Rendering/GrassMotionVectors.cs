@@ -75,6 +75,7 @@ public sealed class GrassMotionVectors : IDisposable
     private bool warnedSnapshotFormat;
     private bool disposed;
     private bool unormSnapshotsSupported;
+    private bool srgbSnapshotsSupported;
     private bool rg32SnapshotsSupported;
     private bool rgba32SnapshotsSupported;
 
@@ -252,8 +253,10 @@ public sealed class GrassMotionVectors : IDisposable
 
         if (!newFrame)
             return;
-        RecordSnapshot(graph, vertexTextureHandles[2], graph.ImportTexture(destination.Slope), "Grass Store Interaction History");
-        RecordSnapshot(graph, vertexTextureHandles[4], graph.ImportTexture(destination.Wind), "Grass Store Wind History");
+        RecordSnapshot(graph, vertexTextureHandles[2], graph.ImportTexture(destination.Slope), slope,
+            slopeFormat, "Grass Store Interaction History");
+        RecordSnapshot(graph, vertexTextureHandles[4], graph.ImportTexture(destination.Wind), wind,
+            windFormat, "Grass Store Wind History");
         using (IComputeRenderGraphBuilder builder = graph.AddComputePass<HistoryPass>("Grass Store Root History", out HistoryPass pass))
         {
             pass.Shader = historyShader;
@@ -366,8 +369,33 @@ public sealed class GrassMotionVectors : IDisposable
         }
     }
 
-    private void RecordSnapshot(RenderGraph graph, TextureHandle source, TextureHandle destination, string name)
+    private void RecordSnapshot(RenderGraph graph, TextureHandle source, TextureHandle destination,
+        Texture sourceTexture, GraphicsFormat format, string name)
     {
+        if (format == GraphicsFormat.R8G8B8A8_SRGB)
+        {
+            // Retain the encoded bytes as well as the sampler. Converting sRGB
+            // texels to float changes format-dependent hardware filtering even
+            // when every texel-center value survives the conversion exactly.
+            using (IUnsafeRenderGraphBuilder builder = graph.AddUnsafePass<EncodedSnapshotPass>(name, out var copyPass))
+            {
+                copyPass.Source = source;
+                copyPass.Destination = destination;
+                copyPass.Width = sourceTexture.width;
+                copyPass.Height = sourceTexture.height;
+                builder.UseTexture(source, AccessFlags.Read);
+                builder.UseTexture(destination, AccessFlags.WriteAll);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc(static (EncodedSnapshotPass data, UnsafeGraphContext context) =>
+                {
+                    // The region API adjusts logical source dimensions for its
+                    // active mip limit. Mip 0 denotes the currently loaded GPU mip.
+                    context.cmd.CopyTexture(data.Source, 0, 0, 0, 0, data.Width, data.Height,
+                        data.Destination, 0, 0, 0, 0);
+                });
+            }
+            return;
+        }
         using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<SnapshotPass>(name, out SnapshotPass pass))
         {
             pass.Source = source;
@@ -392,11 +420,12 @@ public sealed class GrassMotionVectors : IDisposable
         historyShader = Resources.Load<ComputeShader>("InfiniteGrassMotionHistory");
         Shader shader = Resources.Load<Shader>("InfiniteGrassMotionCopy");
         unormSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm);
+        srgbSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB);
         rg32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat);
         rgba32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat);
         if (!historyShader || !shader || !shader.isSupported || !historyShader.HasKernel("ClearHistory") ||
             !historyShader.HasKernel("BuildHistory") || !historyShader.HasKernel("CaptureCounts") || !historyShader.HasKernel("StoreRoots") ||
-            !(unormSnapshotsSupported || rg32SnapshotsSupported || rgba32SnapshotsSupported))
+            !(unormSnapshotsSupported || srgbSnapshotsSupported || rg32SnapshotsSupported || rgba32SnapshotsSupported))
         {
             if (!warnedResources)
                 Debug.LogWarning("Grass motion vectors require the InfiniteGrassMotionHistory compute shader, InfiniteGrassMotionCopy shader, and renderable snapshot textures supporting linear sampling.");
@@ -420,30 +449,45 @@ public sealed class GrassMotionVectors : IDisposable
         out GraphicsFormat slopeFormat, out GraphicsFormat windFormat)
     {
         slopeFormat = SelectSnapshotFormat(slope.graphicsFormat, false,
-            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported);
+            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported, srgbSnapshotsSupported);
         windFormat = SelectSnapshotFormat(wind.graphicsFormat, true,
-            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported);
+            unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported, srgbSnapshotsSupported);
+        if (slopeFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(slope, SystemInfo.copyTextureSupport))
+            slopeFormat = GraphicsFormat.None;
+        if (windFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(wind, SystemInfo.copyTextureSupport))
+            windFormat = GraphicsFormat.None;
         if (slopeFormat != GraphicsFormat.None && windFormat != GraphicsFormat.None)
             return true;
         if (!warnedSnapshotFormat)
-            Debug.LogWarning("Grass motion history cannot preserve these deformation textures on this device. It requires matching linear RGBA8 UNorm or 32-bit floating-point snapshot formats supporting rendering and linear sampling.");
+            Debug.LogWarning("Grass motion history cannot preserve these deformation textures on this device. It requires matching RGBA8 UNorm or sRGB, or 32-bit floating-point snapshot formats supporting rendering and linear sampling. RGBA8 sRGB additionally requires an exact texture copy from a single-sample source.");
         warnedSnapshotFormat = true;
         Release(camera);
         return false;
     }
 
     private static GraphicsFormat SelectSnapshotFormat(GraphicsFormat sourceFormat, bool wind,
-        bool unormSupported, bool rg32Supported, bool rgba32Supported)
+        bool unormSupported, bool rg32Supported, bool rgba32Supported, bool srgbSupported)
     {
-        // A matching linear UNorm copy preserves its source texels. Other inputs
-        // retain their sampled float values, including compressed and sRGB wind.
+        // Match RGBA8 encoding to preserve its format-dependent filtering too.
+        // Other inputs retain their sampled texel values in float storage.
         // Half storage changes even ordinary 8-bit UNorm values and creates
         // motion on stationary blades. Wind needs only its two sampled channels.
+        if (sourceFormat == GraphicsFormat.R8G8B8A8_SRGB)
+            return srgbSupported ? GraphicsFormat.R8G8B8A8_SRGB : GraphicsFormat.None;
         if (sourceFormat == GraphicsFormat.R8G8B8A8_UNorm && unormSupported)
             return GraphicsFormat.R8G8B8A8_UNorm;
         if (wind && rg32Supported)
             return GraphicsFormat.R32G32_SFloat;
         return rgba32Supported ? GraphicsFormat.R32G32B32A32_SFloat : GraphicsFormat.None;
+    }
+
+    private static bool CanCopyEncodedSnapshot(Texture source, CopyTextureSupport support)
+    {
+        if (!source || source.dimension != TextureDimension.Tex2D || (support & CopyTextureSupport.Basic) == 0)
+            return false;
+        if (source is RenderTexture rendered)
+            return rendered.IsCreated() && rendered.antiAliasing == 1;
+        return source is Texture2D && (support & CopyTextureSupport.TextureToRT) != 0;
     }
 
     public void ResetHistory(Camera camera)
@@ -626,14 +670,15 @@ public sealed class GrassMotionVectors : IDisposable
             var descriptor = new RenderTextureDescriptor(Mathf.Max(1, source.width >> mipLimit),
                 Mathf.Max(1, source.height >> mipLimit))
             {
+                // Keep graphicsFormat authoritative: the legacy sRGB setter
+                // can replace an encoded format in a Gamma project.
                 graphicsFormat = format,
                 depthStencilFormat = GraphicsFormat.None,
                 msaaSamples = 1,
                 volumeDepth = 1,
                 dimension = TextureDimension.Tex2D,
                 useMipMap = false,
-                autoGenerateMips = false,
-                sRGB = false
+                autoGenerateMips = false
             };
             bool changed = RenderingUtils.ReAllocateHandleIfNeeded(ref handle, descriptor, source.filterMode, source.wrapMode, name: name);
             handle.rt.wrapModeU = source.wrapModeU;
@@ -667,6 +712,12 @@ public sealed class GrassMotionVectors : IDisposable
     {
         public TextureHandle Source;
         public Material Material;
+    }
+
+    private sealed class EncodedSnapshotPass
+    {
+        public TextureHandle Source, Destination;
+        public int Width, Height;
     }
 
     private sealed class HistoryPass

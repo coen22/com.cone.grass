@@ -215,6 +215,12 @@ public sealed class GrassMotionLifecycleTests
                 Assert.That(snapshot.rt.wrapModeU, Is.EqualTo(source.wrapModeU));
                 Assert.That(snapshot.rt.wrapModeV, Is.EqualTo(source.wrapModeV));
                 Assert.That(snapshot.rt.filterMode, Is.EqualTo(source.filterMode));
+                if (source.graphicsFormat == GraphicsFormat.R8G8B8A8_SRGB)
+                {
+                    Assert.That(snapshot.rt.graphicsFormat, Is.EqualTo(source.graphicsFormat),
+                        "Matching only point-sampled values in float storage does not preserve sRGB filtering.");
+                    Assert.That(snapshot.rt.sRGB, Is.True);
+                }
                 CopyDeformation(source, snapshot.rt);
 
                 Vector4[] samples = SampleDeformation(source, snapshot.rt);
@@ -294,17 +300,106 @@ public sealed class GrassMotionLifecycleTests
     }
 
     [Test]
+    public void EncodedSnapshotCopiesTheActiveMipWithoutChangingItsFilteredValues()
+    {
+        using (var fixture = new HistoryFixture())
+        {
+            int originalLimit = QualitySettings.globalTextureMipmapLimit;
+            var source = new Texture2D(6, 4, TextureFormat.RGBA32, true, false)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapModeU = TextureWrapMode.Repeat,
+                wrapModeV = TextureWrapMode.Clamp,
+                ignoreMipmapLimit = false
+            };
+            try
+            {
+                Assert.That(source.graphicsFormat, Is.EqualTo(GraphicsFormat.R8G8B8A8_SRGB));
+                QualitySettings.globalTextureMipmapLimit = 0;
+                source.SetPixels(new Color[24], 0);
+                source.SetPixels(new[]
+                {
+                    new Color(0.5f, 0.8f, 0f, 1f), new Color(0.37f, 0.61f, 0f, 1f), new Color(0.81f, 0.21f, 0f, 1f),
+                    new Color(0.65f, 0.5f, 0f, 1f), new Color(0.13f, 0.89f, 0f, 1f), new Color(0.78f, 0.35f, 0f, 1f)
+                }, 1);
+                source.SetPixels(new[] { Color.white }, 2);
+                source.Apply(false, false);
+                fixture.EnsureAllocation(source);
+
+                QualitySettings.globalTextureMipmapLimit = 1;
+                Assert.That(source.activeMipmapLimit, Is.EqualTo(1));
+                Assert.That(fixture.EnsureAllocation(source), Is.True);
+                RTHandle snapshot = (RTHandle)GetField(fixture.Snapshots.GetValue(0), "Wind");
+                Assert.That(snapshot.rt.width, Is.EqualTo(3));
+                Assert.That(snapshot.rt.height, Is.EqualTo(2));
+                Assert.That(snapshot.rt.graphicsFormat, Is.EqualTo(source.graphicsFormat));
+                CopyDeformation(source, snapshot.rt);
+                Vector4[] samples = SampleDeformation(source, snapshot.rt);
+                Assert.That(samples[0].x, Is.InRange(0.1f, 0.4f),
+                    "The active mip is neither the black full-resolution mip nor the white last mip.");
+                for (int pair = 0; pair < samples.Length / 2; pair++)
+                    for (int channel = 0; channel < 2; channel++)
+                        Assert.That(samples[pair * 2 + 1][channel],
+                            Is.EqualTo(samples[pair * 2][channel]).Within(pair < 6 ? 0.000001f : 0.00001f));
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                Object.DestroyImmediate(source);
+                QualitySettings.globalTextureMipmapLimit = originalLimit;
+            }
+        }
+    }
+
+    [TestCase(1)]
+    [TestCase(4)]
+    public void EncodedRenderTextureCopyRequiresCreatedSingleSampleStorage(int samples)
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
+            !SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB))
+            Assert.Ignore("The encoded history storage check requires renderable sRGB textures.");
+        var descriptor = new RenderTextureDescriptor(4, 4)
+        {
+            graphicsFormat = GraphicsFormat.R8G8B8A8_SRGB,
+            depthBufferBits = 0,
+            msaaSamples = samples,
+            bindMS = false
+        };
+        if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != samples)
+            Assert.Ignore("The active graphics device cannot create the requested sample count.");
+        var source = new RenderTexture(descriptor);
+        try
+        {
+            Assert.That(CanCopyEncodedSnapshot(source, CopyTextureSupport.Basic), Is.False);
+            Assert.That(source.Create(), Is.True);
+            Assert.That(source.antiAliasing, Is.EqualTo(samples));
+            Assert.That(source.graphicsFormat, Is.EqualTo(GraphicsFormat.R8G8B8A8_SRGB));
+            Assert.That(source.sRGB, Is.True);
+            Assert.That(CanCopyEncodedSnapshot(source, CopyTextureSupport.Basic), Is.EqualTo(samples == 1),
+                "CopyTexture requires matching sample counts even when the producer exposes a resolved sampling view.");
+            Assert.That(CanCopyEncodedSnapshot(source, CopyTextureSupport.None), Is.False);
+            Assert.That(source.IsCreated(), Is.True);
+        }
+        finally
+        {
+            source.Release();
+            Object.DestroyImmediate(source);
+        }
+    }
+
+    [Test]
     public void UnsupportedSnapshotFormatsReleaseExistingCameraHistory()
     {
         using (var fixture = new HistoryFixture())
         {
             SetField(fixture.Renderer, "unormSnapshotsSupported", false);
+            SetField(fixture.Renderer, "srgbSnapshotsSupported", false);
             SetField(fixture.Renderer, "rg32SnapshotsSupported", false);
             SetField(fixture.Renderer, "rgba32SnapshotsSupported", false);
             GraphicsBuffer[] buffers = fixture.Buffers;
             RTHandle[] textures = fixture.Textures;
             LogAssert.Expect(LogType.Warning,
-                "Grass motion history cannot preserve these deformation textures on this device. It requires matching linear RGBA8 UNorm or 32-bit floating-point snapshot formats supporting rendering and linear sampling.");
+                "Grass motion history cannot preserve these deformation textures on this device. It requires matching RGBA8 UNorm or sRGB, or 32-bit floating-point snapshot formats supporting rendering and linear sampling. RGBA8 sRGB additionally requires an exact texture copy from a single-sample source.");
             var arguments = new object[] { fixture.Camera, Texture2D.whiteTexture, Texture2D.whiteTexture, null, null };
             MethodInfo resolve = typeof(GrassMotionVectors).GetMethod("TryGetSnapshotFormats", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.That(resolve.Invoke(fixture.Renderer, arguments), Is.False);
@@ -329,16 +424,28 @@ public sealed class GrassMotionLifecycleTests
         RenderTexture previousTarget = RenderTexture.active;
         try
         {
-            Assert.That(material.FindPass("CopyDeformation"), Is.EqualTo(0));
-            ShaderUtil.CompilePass(material, 0, true);
-            Assert.That(ShaderUtil.IsPassCompiled(material, 0), Is.True);
-            var properties = new MaterialPropertyBlock();
-            properties.SetTexture("_GrassHistorySource", source);
-            properties.SetVector("_BlitScaleBias", new Vector4(1f, 1f, 0f, 0f));
-            commands.SetRenderTarget(destination);
-            commands.SetViewport(new Rect(0f, 0f, destination.width, destination.height));
-            commands.ClearRenderTarget(false, true, Color.clear);
-            commands.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3, 1, properties);
+            if (destination.graphicsFormat == GraphicsFormat.R8G8B8A8_SRGB)
+            {
+                Assert.That(CanCopyEncodedSnapshot(source, SystemInfo.copyTextureSupport), Is.True);
+                Assert.That(destination.graphicsFormat, Is.EqualTo(source.graphicsFormat));
+                // Match the production copy: mip0 is the active GPU mip; the
+                // region API adjusts these logical dimensions for its mip limit.
+                commands.CopyTexture(source, 0, 0, 0, 0, source.width, source.height,
+                    destination, 0, 0, 0, 0);
+            }
+            else
+            {
+                Assert.That(material.FindPass("CopyDeformation"), Is.EqualTo(0));
+                ShaderUtil.CompilePass(material, 0, true);
+                Assert.That(ShaderUtil.IsPassCompiled(material, 0), Is.True);
+                var properties = new MaterialPropertyBlock();
+                properties.SetTexture("_GrassHistorySource", source);
+                properties.SetVector("_BlitScaleBias", new Vector4(1f, 1f, 0f, 0f));
+                commands.SetRenderTarget(destination);
+                commands.SetViewport(new Rect(0f, 0f, destination.width, destination.height));
+                commands.ClearRenderTarget(false, true, Color.clear);
+                commands.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3, 1, properties);
+            }
             GL.sRGBWrite = false;
             Graphics.ExecuteCommandBuffer(commands);
         }
@@ -394,14 +501,19 @@ public sealed class GrassMotionLifecycleTests
 
     private static GraphicsFormat SelectSnapshotFormat(Texture source, bool wind)
     {
-        var select = (Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
+        var select = (Func<GraphicsFormat, bool, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
             .GetMethod("SelectSnapshotFormat", BindingFlags.Static | BindingFlags.NonPublic)
-            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>));
+            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, bool, GraphicsFormat>));
         return select(source.graphicsFormat, wind,
             SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm),
             SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat),
-            SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat));
+            SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat),
+            SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB));
     }
+
+    private static bool CanCopyEncodedSnapshot(Texture source, CopyTextureSupport support) =>
+        (bool)typeof(GrassMotionVectors).GetMethod("CanCopyEncodedSnapshot", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, new object[] { source, support });
 
     private static void AssertReleased(GraphicsBuffer[] buffers, RTHandle[] textures)
     {
@@ -457,6 +569,9 @@ public sealed class GrassMotionLifecycleTests
             GraphicsFormat slopeFormat = SelectSnapshotFormat(slope, false);
             if (windFormat == GraphicsFormat.None || slopeFormat == GraphicsFormat.None)
                 Assert.Ignore("Motion lifetime regression requires compatible lossless snapshot texture formats.");
+            if ((windFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(wind, SystemInfo.copyTextureSupport)) ||
+                (slopeFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(slope, SystemInfo.copyTextureSupport)))
+                Assert.Ignore("sRGB motion history requires exact copying from this source texture type.");
             return (bool)History.GetType().GetMethod("EnsureAllocation")
                 .Invoke(History, new object[] { 3, slope, wind, slopeFormat, windFormat });
         }
@@ -504,24 +619,45 @@ public sealed class GrassMotionLifecycleTests
 
 public sealed class GrassMotionSnapshotFormatTests
 {
-    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, true, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
-    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, true, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
-    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, false, true, false, GraphicsFormat.R32G32_SFloat)]
-    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, false, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
-    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, true, true, true, true, GraphicsFormat.R32G32_SFloat)]
-    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, false, true, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
-    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, true, true, GraphicsFormat.R32G32_SFloat)]
-    [TestCase(GraphicsFormat.R16G16B16A16_SFloat, false, true, true, true, GraphicsFormat.R32G32B32A32_SFloat)]
-    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, true, GraphicsFormat.R32G32B32A32_SFloat)]
-    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, false, GraphicsFormat.None)]
-    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, false, true, true, false, GraphicsFormat.None)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, true, false, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, true, false, false, false, GraphicsFormat.R8G8B8A8_UNorm)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, true, false, true, false, false, GraphicsFormat.R32G32_SFloat)]
+    [TestCase(GraphicsFormat.R8G8B8A8_UNorm, false, false, true, true, false, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, true, true, true, true, true, GraphicsFormat.R8G8B8A8_SRGB)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, false, true, true, true, true, GraphicsFormat.R8G8B8A8_SRGB)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, true, true, true, true, false, GraphicsFormat.None)]
+    [TestCase(GraphicsFormat.R8G8B8A8_SRGB, false, true, true, true, false, GraphicsFormat.None)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, true, true, false, GraphicsFormat.R32G32_SFloat)]
+    [TestCase(GraphicsFormat.R16G16B16A16_SFloat, false, true, true, true, false, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, true, false, GraphicsFormat.R32G32B32A32_SFloat)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, true, true, false, false, false, GraphicsFormat.None)]
+    [TestCase(GraphicsFormat.R32G32B32A32_SFloat, false, true, true, false, false, GraphicsFormat.None)]
     public void FormatSelectionPreservesEncodingAndRequiredChannelsOrDeclinesHistory(GraphicsFormat source,
-        bool wind, bool unormSupported, bool rg32Supported, bool rgba32Supported, GraphicsFormat expected)
+        bool wind, bool unormSupported, bool rg32Supported, bool rgba32Supported, bool srgbSupported, GraphicsFormat expected)
     {
-        var select = (Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
+        var select = (Func<GraphicsFormat, bool, bool, bool, bool, bool, GraphicsFormat>)typeof(GrassMotionVectors)
             .GetMethod("SelectSnapshotFormat", BindingFlags.Static | BindingFlags.NonPublic)
-            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, GraphicsFormat>));
-        Assert.That(select(source, wind, unormSupported, rg32Supported, rgba32Supported), Is.EqualTo(expected));
+            .CreateDelegate(typeof(Func<GraphicsFormat, bool, bool, bool, bool, bool, GraphicsFormat>));
+        Assert.That(select(source, wind, unormSupported, rg32Supported, rgba32Supported, srgbSupported), Is.EqualTo(expected));
+    }
+
+    [TestCase(CopyTextureSupport.None, false)]
+    [TestCase(CopyTextureSupport.Basic, false)]
+    [TestCase(CopyTextureSupport.TextureToRT, false)]
+    [TestCase(CopyTextureSupport.Basic | CopyTextureSupport.DifferentTypes, false)]
+    [TestCase(CopyTextureSupport.Basic | CopyTextureSupport.TextureToRT, true)]
+    public void EncodedTextureCopyRequiresItsActualStorageTransition(CopyTextureSupport support, bool expected)
+    {
+        var source = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+        try
+        {
+            MethodInfo check = typeof(GrassMotionVectors).GetMethod("CanCopyEncodedSnapshot", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(check.Invoke(null, new object[] { source, support }), Is.EqualTo(expected));
+        }
+        finally
+        {
+            Object.DestroyImmediate(source);
+        }
     }
 }
 
