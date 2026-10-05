@@ -911,28 +911,48 @@ public sealed class GrassRendererLifecycleTests
                 object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 20f), true };
                 InvokePrivate(fixture.Pass, "CollectSources", arguments);
                 ulong oneSlot = (ulong)GetField(state, "NextSurfaceVersion");
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(oneSlot),
+                    "Polling an unchanged surface must not invalidate its captured height.");
 
                 renderer.sharedMaterials = new Material[2];
                 Assert.That(area.TryGetCaptureData(out _), Is.True);
-                Assert.That(area.SurfaceRevision, Is.EqualTo(surfaceRevision));
+                uint twoSlotRevision = area.SurfaceRevision;
+                Assert.That(twoSlotRevision, Is.GreaterThan(surfaceRevision),
+                    "Slot count changes also invalidate interaction history left on the supporting surface.");
                 Assert.That(renderer.bounds, Is.EqualTo(bounds));
                 Assert.That(surfaceObject.GetComponent<MeshFilter>().sharedMesh, Is.SameAs(mesh));
                 InvokePrivate(fixture.Pass, "CollectSources", arguments);
                 ulong twoSlots = (ulong)GetField(state, "NextSurfaceVersion");
                 Assert.That(twoSlots, Is.Not.EqualTo(oneSlot),
                     "The second height subset becomes drawable even though source readiness stayed true.");
-
-                renderer.sharedMaterials = new[]
-                {
-                    AssetDatabase.LoadAssetAtPath<Material>("Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat"), null
-                };
                 InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(area.SurfaceRevision, Is.EqualTo(twoSlotRevision));
+                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(twoSlots));
+
+                Material replacement = AssetDatabase.LoadAssetAtPath<Material>(
+                    "Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat");
+                Assert.That(replacement, Is.Not.Null);
+                renderer.sharedMaterials = new[] { replacement, null };
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(area.SurfaceRevision, Is.EqualTo(twoSlotRevision));
                 Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(twoSlots),
                     "Height capture overrides material values; only the number of slots affects its draw selection.");
 
                 renderer.sharedMaterials = new Material[1];
+                Assert.That(area.TryGetCaptureData(out _), Is.True);
+                uint restoredRevision = area.SurfaceRevision;
+                Assert.That(restoredRevision, Is.GreaterThan(twoSlotRevision));
                 InvokePrivate(fixture.Pass, "CollectSources", arguments);
-                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(oneSlot));
+                ulong restoredOneSlot = (ulong)GetField(state, "NextSurfaceVersion");
+                Assert.That(restoredOneSlot, Is.Not.EqualTo(twoSlots),
+                    "Removing a height subset requires a fresh capture even when an earlier state had one slot too.");
+                // The signature includes the advancing surface revision; returning
+                // to one slot does not restore the original capture's identity.
+                InvokePrivate(fixture.Pass, "CollectSources", arguments);
+                Assert.That(area.SurfaceRevision, Is.EqualTo(restoredRevision));
+                Assert.That(GetField(state, "NextSurfaceVersion"), Is.EqualTo(restoredOneSlot));
             }
             finally
             {
