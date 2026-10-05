@@ -21,7 +21,8 @@ StructuredBuffer<uint> _GrassHistoryCounts;
 RWStructuredBuffer<uint> _GrassHistoryKeys;
 RWStructuredBuffer<float4> _GrassHistoryRoots;
 RWStructuredBuffer<uint> _GrassHistorySnapshotCounts;
-RWByteAddressBuffer _GrassHistoryDispatch;
+// Match the typed UAV supplied by GraphicsBuffer.Target.IndirectArguments.
+RWBuffer<uint> _GrassHistoryDispatch;
 
 uint GrassHistoryCount(uint lod)
 {
@@ -34,7 +35,10 @@ void GrassHistoryWriteDispatch(uint lod, uint count)
     uint groups = (count + 63u) / 64u;
     uint groupsX = max(1u, min(groups, 65535u));
     uint groupsY = max(1u, (groups + groupsX - 1u) / groupsX);
-    _GrassHistoryDispatch.Store3(lod * 12u, uint3(groupsX, groupsY, 1u));
+    uint offset = lod * 3u;
+    _GrassHistoryDispatch[offset] = groupsX;
+    _GrassHistoryDispatch[offset + 1u] = groupsY;
+    _GrassHistoryDispatch[offset + 2u] = 1u;
 }
 
 uint GrassHistoryRootIndex(uint3 id, uint count)

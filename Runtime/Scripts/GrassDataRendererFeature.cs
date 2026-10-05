@@ -1738,7 +1738,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 if (uploadArguments)
                 {
                     Arguments?.Dispose();
-                    Arguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments,
+                    Arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments,
                         3, argumentStride) { name = "Grass Indirect Arguments" };
                 }
                 owner.GetLodCapacity(LodCapacities, LodOffsets);

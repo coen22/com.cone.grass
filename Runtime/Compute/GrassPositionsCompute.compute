@@ -58,7 +58,8 @@ Texture2D<float> _TerrainHoles;
 RWStructuredBuffer<float4> _GrassPositions;
 // Attempted near/middle/far counts, then the number rejected by capacity limits.
 RWStructuredBuffer<uint> _GrassCounts;
-RWByteAddressBuffer _GrassIndirectArgs;
+// IndirectArguments exposes an R32_UINT UAV on D3D11, not a raw byte-address view.
+RWBuffer<uint> _GrassIndirectArgs;
 
 uint GrassHash(uint value)
 {
@@ -348,5 +349,5 @@ void FinalizeArgs(uint3 id : SV_DispatchThreadID)
     // The CPU initializes the other fields using IndirectDrawIndexedArgs.
     // Its platform-supplied stride and field offset avoid assuming a 20-byte ABI.
     uint byteOffset = lod * (uint)_ArgsStride + (uint)_ArgsInstanceCountOffset;
-    _GrassIndirectArgs.Store(byteOffset, instanceCount);
+    _GrassIndirectArgs[byteOffset / 4u] = instanceCount;
 }

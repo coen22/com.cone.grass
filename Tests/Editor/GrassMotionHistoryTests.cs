@@ -212,7 +212,7 @@ public sealed class GrassMotionHistoryTests
             GraphicsBuffer keys = Allocate(buffers, tableSize, 4);
             GraphicsBuffer oldRoots = Allocate(buffers, roots.Length, 16);
             GraphicsBuffer snapshotCounts = Allocate(buffers, 3, 4);
-            GraphicsBuffer arguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments, 9, 4);
+            GraphicsBuffer arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 9, 4);
             buffers.Add(arguments);
             positions.SetData(roots);
             countBuffer.SetData(counts);

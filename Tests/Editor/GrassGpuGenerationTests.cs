@@ -44,7 +44,7 @@ public sealed class GrassGpuGenerationTests
         finalizeKernel = shader.FindKernel("FinalizeArgs");
         positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 608, sizeof(float) * 4);
         counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 4, sizeof(uint));
-        arguments = new GraphicsBuffer(GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.IndirectArguments,
+        arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments,
             3, GraphicsBuffer.IndirectDrawIndexedArgs.size);
         var untouched = new Vector4[positions.count];
         for (int index = 0; index < untouched.Length; index++)
