@@ -45,6 +45,73 @@ public sealed class GrassPlacementAreaTests
         Assert.That(data.WorldBounds.size.z, Is.EqualTo(8f).Within(0.0001f));
     }
 
+    [Test]
+    public void SerializedEmptySurfaceBindingsPreserveLocalCoverageAndBrushPlane()
+    {
+        GrassPlacementArea area = NewArea();
+        Terrain terrain = NewTerrain(new Vector3(-5f, 0f, -5f), new Vector3(10f, 1f, 10f));
+        ConfigureLocal(area, new Vector2(10f, 10f), terrain);
+        NewMeshSurface(area);
+        Assert.That(area.HasAssignedTerrain && area.HasAssignedPaintSurface, Is.True);
+        area.transform.position = Vector3.up * 3f;
+        using (var serialized = new SerializedObject(area))
+        {
+            serialized.FindProperty("terrain").objectReferenceValue = null;
+            serialized.FindProperty("paintSurface").objectReferenceValue = null;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        AssertSerializedEmptyPlaceholder(area.Terrain);
+        AssertSerializedEmptyPlaceholder(area.PaintSurface);
+        Assert.That(area.HasAssignedTerrain || area.HasAssignedPaintSurface, Is.False);
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+        Assert.That(snapshot.WorldBounds.center, Is.EqualTo(area.transform.position));
+        var query = new Bounds(area.transform.position, Vector3.one);
+        Assert.That(area.IntersectsCoverage(query), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(query), Is.True);
+        Editor editor = NewPlacementEditor(area);
+        Assert.That(BrushPoint(editor, area, new Ray(Vector3.up * 8f, Vector3.down), out Vector3 point), Is.True);
+        Assert.That(point, Is.EqualTo(area.transform.position));
+    }
+
+    [Test]
+    public void SerializedEmptyDensityAssetUsesExternalTextureInCaptureAndSnapshot()
+    {
+        GrassPlacementArea area = NewArea();
+        ConfigureLocal(area, new Vector2(10f, 10f));
+        GrassDensityAsset density = NewDensity();
+        density.Fill(1f);
+        area.SetDensityAsset(density, false);
+        Texture2D external = NewTexture();
+        using (var serialized = new SerializedObject(area))
+        {
+            serialized.FindProperty("densityTexture").objectReferenceValue = external;
+            serialized.FindProperty("densityAsset").objectReferenceValue = null;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        AssertSerializedEmptyPlaceholder(area.DensityAsset);
+        Assert.That(area.DensityTexture, Is.SameAs(external));
+        Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
+        Assert.That(snapshot.DensityTexture, Is.SameAs(external));
+        Assert.That(ReferenceEquals(snapshot.DensityAsset, area.DensityAsset), Is.True,
+            "The snapshot must handle the serialized placeholder without requesting asset pixels.");
+        var query = new Bounds(area.transform.position, Vector3.one);
+        Assert.That(area.IntersectsCoverage(query), Is.True);
+        Assert.That(snapshot.IntersectsCoverage(query), Is.True);
+        uint revision = area.SourceRevision;
+        Assert.That(area.TryGetCaptureData(out _), Is.True);
+        Assert.That(area.SourceRevision, Is.EqualTo(revision));
+    }
+
+    private static void AssertSerializedEmptyPlaceholder(Object value)
+    {
+        Assert.That(ReferenceEquals(value, null), Is.False,
+            "Exercise Unity's native serialized placeholder, not a plain CLR null.");
+        Assert.That(value == null, Is.True);
+        Assert.That(value.GetEntityId(), Is.EqualTo(EntityId.None));
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public void UnrepresentableFiniteFootprintsStopCoverageWithoutPublishingInvalidBoundsAndRecover(bool overflow)
