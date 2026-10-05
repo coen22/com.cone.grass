@@ -1485,7 +1485,7 @@ public sealed class GrassPlacementAreaTests
     {
         // Public saved-scene loading permits this Edit control to retain the
         // owner's untitled scene, without creating or saving another untitled one.
-        var fixture = new SupportingSceneFixture();
+        var fixture = new GrassSavedSceneFixture(includeTarget: true);
         GameObject support = null;
         Scene originalScene = fixture.Source;
         Exception bodyFailure = null;
@@ -1503,10 +1503,10 @@ public sealed class GrassPlacementAreaTests
                 NewObservedMeshSupport(area, out _, out _, out MeshRenderer renderer);
                 support = renderer.gameObject;
             }
-            Assert.That(support.scene, Is.EqualTo(originalScene));
+            Assert.That(support.scene, Is.EqualTo(originalScene), $"Create support in owned source '{originalScene.path}'.");
             fixture.RestorePriorActive();
             AssertSurfaceObservation(area, () => SceneManager.MoveGameObjectToScene(support, fixture.Target));
-            Assert.That(area.gameObject.scene, Is.EqualTo(originalScene));
+            Assert.That(area.gameObject.scene, Is.EqualTo(originalScene), $"Move support: area must remain in owned source '{originalScene.path}'.");
             AssertSurfaceObservation(area, () => SceneManager.MoveGameObjectToScene(support, originalScene));
         }
         catch (Exception error)
@@ -1531,165 +1531,6 @@ public sealed class GrassPlacementAreaTests
                     cleanupFailures.Insert(0, bodyFailure);
                 throw new AggregateException("Supporting-scene body/owned cleanup failures retained.", cleanupFailures);
             }
-        }
-    }
-
-    private sealed class SupportingSceneFixture : IDisposable
-    {
-        private const string TemplateGuid = "c0293ca4b83f495b84033719ef793631";
-        private readonly Scene priorActive;
-        private readonly PriorScene[] priorScenes;
-        private readonly SceneSetup[] priorSetup;
-        private readonly string templatePath;
-        private readonly Hash128 templateHash;
-        private readonly string copyPath;
-        private bool copied;
-        public Scene Source { get; private set; }
-        public Scene Target { get; private set; }
-
-        private readonly struct PriorScene
-        {
-            public readonly Scene Scene;
-            public readonly string Path, Name;
-            public readonly bool Loaded, Dirty;
-            public readonly GameObject[] Roots;
-
-            public PriorScene(Scene scene)
-            {
-                Scene = scene; Path = scene.path; Name = scene.name;
-                Loaded = scene.isLoaded; Dirty = scene.isDirty;
-                Roots = scene.isLoaded ? scene.GetRootGameObjects() : Array.Empty<GameObject>();
-            }
-        }
-
-        public SupportingSceneFixture()
-        {
-            Assert.That(EditorApplication.isPlaying, Is.False, "This scene control retains its Edit-only domain.");
-            priorActive = SceneManager.GetActiveScene();
-            priorSetup = EditorSceneManager.GetSceneManagerSetup();
-            priorScenes = new PriorScene[SceneManager.sceneCount];
-            for (int i = 0; i < priorScenes.Length; i++)
-                priorScenes[i] = new PriorScene(SceneManager.GetSceneAt(i));
-            templatePath = AssetDatabase.GUIDToAssetPath(TemplateGuid);
-            Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(templatePath), Is.Not.Null);
-            Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False,
-                "Never take ownership of a fixture scene already present in the owner's hierarchy.");
-            templateHash = AssetDatabase.GetAssetDependencyHash(templatePath);
-            copyPath = AssetDatabase.GenerateUniqueAssetPath("Assets/GrassSupportingScene60_" + Guid.NewGuid().ToString("N") + ".unity");
-            Assert.That(AssetDatabase.AssetPathToGUID(copyPath), Is.Empty);
-            try
-            {
-                copied = AssetDatabase.CopyAsset(templatePath, copyPath);
-                Assert.That(copied, Is.True, "Only a successfully created unique asset copy is owned for cleanup.");
-                Source = OpenOwnedScene(copyPath);
-                Target = OpenOwnedScene(templatePath);
-                AssertEmptyNormalScene(Source, copyPath);
-                AssertEmptyNormalScene(Target, templatePath);
-                Assert.That(Source, Is.Not.EqualTo(Target));
-                Assert.That(SceneManager.sceneCount, Is.EqualTo(priorScenes.Length + 2));
-                Assert.That(SceneManager.SetActiveScene(Source), Is.True);
-            }
-            catch (Exception bodyError)
-            {
-                try { Dispose(); }
-                catch (Exception cleanupError)
-                { throw new AggregateException("Scene acquisition/owned cleanup failures retained.", bodyError, cleanupError); }
-                throw;
-            }
-        }
-
-        private Scene OpenOwnedScene(string path)
-        {
-            Scene opened = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
-            // A failed/ambiguous return must never grant ownership of an old
-            // scene. Leave any unproven partial acquisition for diagnosis.
-            Assert.That(opened.IsValid(), Is.True);
-            Assert.That(opened.path, Is.EqualTo(path));
-            foreach (PriorScene previous in priorScenes)
-                Assert.That(opened, Is.Not.EqualTo(previous.Scene));
-            return opened;
-        }
-
-        private static void AssertEmptyNormalScene(Scene scene, string path)
-        {
-            Assert.That(scene.IsValid() && scene.isLoaded, Is.True);
-            Assert.That(scene.path, Is.EqualTo(path));
-            Assert.That(EditorSceneManager.IsPreviewScene(scene), Is.False,
-                "The surface-event control requires normal loaded supporting scenes.");
-            Assert.That(scene.rootCount, Is.Zero, "The readonly fixture contains no GameObjects or scripts.");
-        }
-
-        public void RestorePriorActive()
-        {
-            Assert.That(priorActive.IsValid() && priorActive.isLoaded, Is.True);
-            Assert.That(SceneManager.SetActiveScene(priorActive), Is.True);
-        }
-
-        public Scene SaveAndReopenSource()
-        {
-            Assert.That(copied && Source.IsValid() && Source.isLoaded, Is.True);
-            Assert.That(Source.path, Is.EqualTo(copyPath), "Only the fixture-owned copy may be saved.");
-            RestorePriorActive();
-            Assert.That(EditorSceneManager.SaveScene(Source, copyPath), Is.True);
-            Assert.That(EditorSceneManager.CloseScene(Source, true), Is.True);
-            Source = default;
-            Source = OpenOwnedScene(copyPath);
-            return Source;
-        }
-
-        public void Dispose()
-        {
-            var failures = new List<Exception>();
-            try { RestorePriorActive(); }
-            catch (Exception error) { failures.Add(error); }
-            foreach (Scene owned in new[] { Target, Source })
-            {
-                try
-                {
-                    if (owned.IsValid())
-                        Assert.That(EditorSceneManager.CloseScene(owned, true), Is.True);
-                }
-                catch (Exception error) { failures.Add(error); }
-            }
-            try
-            {
-                bool remainingCopyScene = SceneManager.GetSceneByPath(copyPath).IsValid();
-                if (copied && !remainingCopyScene)
-                {
-                    Assert.That(AssetDatabase.DeleteAsset(copyPath), Is.True);
-                    copied = false;
-                }
-                Assert.That(remainingCopyScene, Is.False,
-                    "An uncertain or still loaded copy is retained for diagnosis, not deleted.");
-                Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False);
-                Assert.That(AssetDatabase.GetAssetDependencyHash(templatePath), Is.EqualTo(templateHash),
-                    "Opening the readonly template must never save or rewrite its package asset.");
-                Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(priorActive));
-                Assert.That(SceneManager.sceneCount, Is.EqualTo(priorScenes.Length));
-                for (int i = 0; i < priorScenes.Length; i++)
-                {
-                    PriorScene previous = priorScenes[i];
-                    Scene current = SceneManager.GetSceneAt(i);
-                    Assert.That(current, Is.EqualTo(previous.Scene));
-                    Assert.That(current.path, Is.EqualTo(previous.Path));
-                    Assert.That(current.name, Is.EqualTo(previous.Name));
-                    Assert.That(current.isLoaded, Is.EqualTo(previous.Loaded));
-                    Assert.That(current.isDirty, Is.EqualTo(previous.Dirty));
-                    if (current.isLoaded)
-                        Assert.That(current.GetRootGameObjects(), Is.EqualTo(previous.Roots));
-                }
-                SceneSetup[] after = EditorSceneManager.GetSceneManagerSetup();
-                Assert.That(after.Length, Is.EqualTo(priorSetup.Length));
-                for (int i = 0; i < after.Length; i++)
-                {
-                    Assert.That(after[i].path, Is.EqualTo(priorSetup[i].path));
-                    Assert.That(after[i].isLoaded, Is.EqualTo(priorSetup[i].isLoaded));
-                    Assert.That(after[i].isActive, Is.EqualTo(priorSetup[i].isActive));
-                }
-            }
-            catch (Exception error) { failures.Add(error); }
-            if (failures.Count > 0)
-                throw new AggregateException("Owned-scene cleanup/state checks failed; uncertain artifacts retained.", failures);
         }
     }
 
@@ -1955,19 +1796,19 @@ public sealed class GrassPlacementAreaTests
     [Test]
     public void AnAreaRegistersWhenASavedSceneIsOpenedAdditively()
     {
-        var fixture = new SupportingSceneFixture();
+        var fixture = new GrassSavedSceneFixture(includeTarget: true);
         Exception bodyFailure = null;
         try
         {
             GrassPlacementArea area = NewArea();
-            Assert.That(area.gameObject.scene, Is.EqualTo(fixture.Source));
+            Assert.That(area.gameObject.scene, Is.EqualTo(fixture.Source), $"Create area in owned source '{fixture.Source.path}'.");
             Scene testScene = fixture.SaveAndReopenSource();
             GrassPlacementArea loaded = testScene.GetRootGameObjects()[0].GetComponent<GrassPlacementArea>();
 
-            Assert.That(loaded, Is.Not.Null);
+            Assert.That(loaded, Is.Not.Null, $"Reopen owned source '{testScene.path}': saved area must be present.");
             Assert.That(GrassPlacementArea.ActiveAreas, Does.Contain(loaded),
                 "OnEnable runs before Scene.isLoaded becomes true; registration must still occur during loading.");
-            Assert.That(loaded.TryGetCaptureData(out _), Is.True);
+            Assert.That(loaded.TryGetCaptureData(out _), Is.True, $"Reopen owned source '{testScene.path}': loaded area must provide capture data.");
         }
         catch (Exception error)
         {
