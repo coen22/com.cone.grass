@@ -190,14 +190,7 @@ public sealed class GrassInteractorSupport
                 !Finite(ownershipMargin) || ownershipMargin < 0f)
                 return Reject(GrassInteractorSupportStatus.InvalidSettings, out status);
 
-            bool hasExplicit = !ReferenceEquals(explicitSupport, null);
-#if UNITY_EDITOR
-            // Serialized empty Editor fields can retain a managed zero-ID placeholder.
-            // Assigned destroyed Editor objects keep their ID and must still reject.
-            // Player destruction can clear the ID, so keep the managed-reference guard there.
-            if (hasExplicit && explicitSupport.GetEntityId() == EntityId.None)
-                hasExplicit = false;
-#endif
+            bool hasExplicit = GrassPlacementArea.HasAssignedReference(explicitSupport);
             if (hasExplicit && (!IsUsableSupport(explicitSupport) || !AcceptedLayer(explicitSupport, acceptedSupportLayers) ||
                 IsSelf(explicitSupport, shape) ||
                 explicitSupport.gameObject.scene.GetPhysicsScene() != scene))
@@ -325,7 +318,7 @@ public sealed class GrassInteractorSupport
                 support = terrainCollider && terrainCollider.terrainData == terrain.terrainData ? terrainCollider : null;
             }
             else
-                support = !ReferenceEquals(area.PaintSurface, null) ? area.PaintSurface : explicitSupport;
+                support = area.HasAssignedPaintSurface ? area.PaintSurface : explicitSupport;
             if (!IsUsableSupport(support) || !AcceptedLayer(support, acceptedSupportLayers) || IsSelf(support, shape) ||
                 support.gameObject.scene.GetPhysicsScene() != shape.PhysicsScene)
                 return Reject(GrassInteractorSupportStatus.MissingSupport, out status);

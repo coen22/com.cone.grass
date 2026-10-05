@@ -700,7 +700,7 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
     public void SerializedEmptyExplicitSupportUsesAuthoredOwnershipButDestroyedAssignmentRejects()
     {
         BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
-        NewArea(floor, Vector3.zero, new Vector2(10f, 10f));
+        GrassPlacementArea area = NewArea(floor, Vector3.zero, new Vector2(10f, 10f));
         CapsuleCollider actor = NewCapsule(Vector3.up);
         var interactor = actor.gameObject.AddComponent<GrassColliderInteractor>();
         interactor.SamplingMode = GrassColliderInteractor.UpdateMode.Manual;
@@ -721,6 +721,25 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
         Assert.That(resolver.TryResolve(shape, empty, 0.1f, 0.05f, out var sample, out var status), Is.True);
         Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.Supported));
         Assert.That(sample.Support, Is.SameAs(floor));
+
+        using (var serialized = new SerializedObject(area))
+        {
+            serialized.FindProperty("paintSurface").objectReferenceValue = null;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+        Assert.That(ReferenceEquals(area.PaintSurface, null), Is.False,
+            "Exercise the native empty area binding before checking explicit-support fallback.");
+        Assert.That(area.PaintSurface == null, Is.True);
+        Assert.That(area.PaintSurface.GetEntityId(), Is.EqualTo(EntityId.None));
+        Assert.That(resolver.TryResolve(shape, floor, 0.1f, 0.05f, out sample, out status), Is.True,
+            "An empty area binding must not shadow its valid explicit support.");
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+        Assert.That(sample.Support, Is.SameAs(floor));
+        using (var serialized = new SerializedObject(area))
+        {
+            serialized.FindProperty("paintSurface").objectReferenceValue = floor;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
 
         BoxCollider assigned = NewFloor(Vector3.right * 20f, new Vector2(10f, 10f));
         interactor.Configure(actor, assigned, actor.transform);

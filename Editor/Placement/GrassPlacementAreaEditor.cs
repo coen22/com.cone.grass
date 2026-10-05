@@ -305,7 +305,8 @@ public sealed class GrassPlacementAreaEditor : Editor
     private bool TryGetBrushPoint(GrassPlacementArea area, Ray ray, out Vector3 point, out Vector3 normal)
     {
         Collider collider = area.PaintSurface;
-        if (!ReferenceEquals(area.Terrain, null))
+        bool hasTerrain = area.HasAssignedTerrain;
+        if (hasTerrain)
             collider = area.Terrain ? area.Terrain.GetComponent<TerrainCollider>() : null;
 
         if (collider)
@@ -317,7 +318,7 @@ public sealed class GrassPlacementAreaEditor : Editor
                 return true;
             }
         }
-        else if (ReferenceEquals(area.Terrain, null) && ReferenceEquals(area.PaintSurface, null))
+        else if (!hasTerrain && !area.HasAssignedPaintSurface)
         {
             // Only an intentionally unbound area uses a horizontal brush plane.
             Plane plane = new Plane(Vector3.up, area.transform.position);

@@ -73,7 +73,7 @@ public struct GrassPlacementDrawData
             return false;
         if (shape == GrassPlacementShape.Texture)
         {
-            if (!ReferenceEquals(densityAsset, null) && !densityAsset)
+            if (GrassPlacementArea.HasAssignedReference(densityAsset) && !densityAsset)
                 return false;
             if (!densityAsset && !IsReadyDensityTexture(densityTexture))
                 return false;
@@ -210,22 +210,25 @@ public sealed class GrassPlacementArea : MonoBehaviour
 
     public GrassPlacementShape Shape => shape;
     public Terrain Terrain => terrain;
-    internal bool HasAssignedTerrain
+    /// <summary>Whether a terrain binding exists, including an assigned object that has been destroyed.</summary>
+    public bool HasAssignedTerrain => HasAssignedReference(terrain);
+    /// <summary>Whether a mesh binding exists, including an assigned object that has been destroyed.</summary>
+    public bool HasAssignedPaintSurface => HasAssignedReference(paintSurface);
+    private bool HasAssignedDensityAsset => HasAssignedReference(densityAsset);
+
+    internal static bool HasAssignedReference(UnityEngine.Object value)
     {
-        get
-        {
-            if (ReferenceEquals(terrain, null))
-                return false;
+        if (ReferenceEquals(value, null))
+            return false;
 #if UNITY_EDITOR
-            // Unset Editor fields can have zero-ID placeholders. Destroyed
-            // assigned objects retain their IDs here and still require validation.
-            return terrain.GetEntityId() != EntityId.None;
+        // Unset Editor fields can have zero-ID placeholders. Destroyed
+        // assigned objects retain their IDs here and still require validation.
+        return value.GetEntityId() != EntityId.None;
 #else
-            // Destroyed player objects can also have zero IDs. Keep their managed
-            // references assigned so validity checks reject them instead of falling back.
-            return true;
+        // Destroyed player objects can also have zero IDs. Keep their managed
+        // references assigned so validity checks reject them instead of falling back.
+        return true;
 #endif
-        }
     }
     public bool UsesTerrainBounds => useTerrainBounds;
     public Collider PaintSurface => paintSurface;
@@ -234,7 +237,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
     {
         get
         {
-            if (!ReferenceEquals(densityAsset, null))
+            if (HasAssignedDensityAsset)
                 return densityAsset ? densityAsset.Texture : null;
             return densityTexture;
         }
@@ -258,7 +261,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         GrassPlacementChange changes = GrassPlacementChange.None;
         if (terrain != supportingTerrain || !useTerrainBounds)
             changes |= GrassPlacementChange.All;
-        if (shape != GrassPlacementShape.Texture || !ReferenceEquals(densityAsset, null) || densityTexture != coverage || edgeFalloff != 0f)
+        if (shape != GrassPlacementShape.Texture || HasAssignedDensityAsset || densityTexture != coverage || edgeFalloff != 0f)
             changes |= GrassPlacementChange.Density;
         float strength = matchingGroundLayer || matchingGroundColor ? 1f : 0f;
         if (groundLayer != matchingGroundLayer || groundColorTexture != matchingGroundColor ||
@@ -721,7 +724,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
                 return false;
 #endif
         }
-        else if (!ReferenceEquals(paintSurface, null))
+        else if (HasAssignedPaintSurface)
         {
             // An explicitly assigned mesh surface must not turn into generic coverage
             // when its collider is destroyed, unloaded or moved into a preview scene.
@@ -831,7 +834,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         bounds = frameBounds;
         if (shape == GrassPlacementShape.Texture)
         {
-            if (!ReferenceEquals(densityAsset, null))
+            if (HasAssignedDensityAsset)
             {
                 if (!densityAsset || !densityAsset.TryGetCoverageBounds(out uvBounds))
                     return false;
@@ -905,7 +908,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
             int hash = (int)shape;
             hash = hash * 397 ^ density.GetHashCode();
             hash = hash * 397 ^ edgeFalloff.GetHashCode();
-            hash = hash * 397 ^ (!ReferenceEquals(densityAsset, null)).GetHashCode();
+            hash = hash * 397 ^ HasAssignedDensityAsset.GetHashCode();
             hash = hash * 397 ^ (densityAsset ? densityAsset.GetEntityId().GetHashCode() : 0);
             hash = hash * 397 ^ (densityAsset ? densityAsset.Width : 0);
             hash = hash * 397 ^ (densityAsset ? densityAsset.Height : 0);
