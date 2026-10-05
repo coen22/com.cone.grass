@@ -26,35 +26,69 @@ public sealed class GrassSettingsLifecycleTests
     public void AdditiveSceneActivationRegistersSettingsBeforeFirstUpdate()
     {
         InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
-        if (previous)
-            previous.enabled = false;
-        Scene scene = default;
-        string path = "Assets/GrassSettingsLifecycle_" + Guid.NewGuid().ToString("N") + ".unity";
+        bool previousEnabled = previous && previous.enabled;
+        GrassSavedSceneFixture fixture = null;
+        InfiniteGrassRenderer settings = null, loaded = null;
+        Exception bodyFailure = null;
         try
         {
-            scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            fixture = new GrassSavedSceneFixture();
+            if (previous)
+                previous.enabled = false;
             var gameObject = new GameObject("Grass settings registration");
-            SceneManager.MoveGameObjectToScene(gameObject, scene);
-            InfiniteGrassRenderer settings = gameObject.AddComponent<InfiniteGrassRenderer>();
-            Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(settings));
-            Assert.That(EditorSceneManager.SaveScene(scene, path), Is.True);
-            Assert.That(EditorSceneManager.CloseScene(scene, true), Is.True);
-            Assert.That(InfiniteGrassRenderer.Instance, Is.Null);
+            Assert.That(gameObject.scene, Is.EqualTo(fixture.Source), "Create settings in the owned saved source scene.");
+            settings = gameObject.AddComponent<InfiniteGrassRenderer>();
+            Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(settings),
+                $"Initial registration in owned source '{fixture.Source.path}'.");
+            fixture.SaveAndCloseSource();
+            Assert.That(InfiniteGrassRenderer.Instance, Is.Null, "After saving and closing owned source: settings ownership must be released.");
 
-            scene = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
-            InfiniteGrassRenderer loaded = scene.GetRootGameObjects()[0].GetComponent<InfiniteGrassRenderer>();
-            Assert.That(loaded, Is.Not.Null);
+            Scene scene = fixture.ReopenSource();
+            loaded = scene.GetRootGameObjects()[0].GetComponent<InfiniteGrassRenderer>();
+            Assert.That(loaded, Is.Not.Null, $"Reopen owned source '{scene.path}': saved settings must be present.");
             Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(loaded),
                 "Registration must not wait for Update: OnEnable runs while the additive scene is becoming loaded.");
-            Assert.That(loaded.Revision, Is.GreaterThan(0));
+            Assert.That(loaded.Revision, Is.GreaterThan(0), $"Reopen owned source '{scene.path}': registration must initialize the revision.");
+        }
+        catch (Exception error)
+        {
+            bodyFailure = error;
+            throw;
         }
         finally
         {
-            if (scene.IsValid() && scene.isLoaded)
-                EditorSceneManager.CloseScene(scene, true);
-            AssetDatabase.DeleteAsset(path);
-            if (previous)
-                previous.enabled = true;
+            var cleanupFailures = new List<Exception>();
+            try { fixture?.CloseSource(); }
+            catch (Exception error) { cleanupFailures.Add(error); }
+            // A failed close remains a failure, but a retained owned component
+            // must not reject the previous owner when its enabled state is restored.
+            foreach (InfiniteGrassRenderer owned in new[] { settings, loaded })
+            {
+                try
+                {
+                    if (owned && owned.enabled)
+                        owned.enabled = false;
+                }
+                catch (Exception error)
+                { cleanupFailures.Add(new InvalidOperationException("Disable retained owned settings after source closure failed.", error)); }
+            }
+            try
+            {
+                if (previous && previous.enabled != previousEnabled)
+                    previous.enabled = previousEnabled;
+                if (previous)
+                    Assert.That(previous.enabled, Is.EqualTo(previousEnabled), "Restore exact prior grass settings enabled state.");
+            }
+            catch (Exception error)
+            { cleanupFailures.Add(new InvalidOperationException("Restore prior grass settings enabled state.", error)); }
+            try { fixture?.Dispose(); }
+            catch (Exception error) { cleanupFailures.Add(error); }
+            if (cleanupFailures.Count > 0)
+            {
+                if (bodyFailure != null)
+                    cleanupFailures.Insert(0, bodyFailure);
+                throw new AggregateException("Settings registration body/owned cleanup failures retained.", cleanupFailures);
+            }
         }
     }
 
