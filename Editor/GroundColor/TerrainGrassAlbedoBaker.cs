@@ -9,7 +9,7 @@ using UnityEngine.Rendering.Universal;
 using Object = UnityEngine.Object;
 
 /// <summary>
-/// Editor-only, unlit ground-albedo capture for the native URP Terrain/Lit shader.
+/// Editor-only, unlit ground-albedo capture for the native URP Terrain/Lit albedo contract.
 /// The saved texture maps the complete Terrain XZ extent to UV 0..1. No source
 /// texture needs CPU readability; only the completed GPU capture is read back.
 /// </summary>
@@ -20,8 +20,11 @@ public static partial class TerrainGrassAlbedoBaker
     public const int MaximumResolution = 4096;
     public const string NativeTerrainShaderName = "Universal Render Pipeline/Terrain/Lit";
     public const string BakeShaderName = "Hidden/InfiniteGrass/Editor/TerrainAlbedoBake";
+    // Custom shaders opt in only when their painted albedo uses unmodified TerrainLit mixing.
+    public const string TerrainAlbedoTag = "GrassAlbedo";
+    public const string TerrainAlbedoContract = "TerrainLit";
     // Increment when the output contract changes, invalidating adapter caches.
-    public const int BakerVersion = 1;
+    public const int BakerVersion = 2;
     private const double SignatureRetentionSeconds = 600d;
     private sealed class TerrainSourceState
     {
@@ -173,7 +176,7 @@ public static partial class TerrainGrassAlbedoBaker
     /// <summary>
     /// Bake to a linear RGBAHalf Texture2D .asset below Assets/. An existing main
     /// Texture2D asset is updated in place, preserving its GUID and references.
-    /// This explicitly supports the native URP Terrain/Lit material only.
+    /// Supports native Terrain/Lit and shaders explicitly declaring its painted-albedo contract.
     /// </summary>
     public static bool TryBake(Terrain terrain, int resolution, string assetPath,
         out Texture2D texture, out string error)
@@ -301,10 +304,10 @@ public static partial class TerrainGrassAlbedoBaker
             return false;
         }
         material = terrain.materialTemplate ? terrain.materialTemplate : pipeline.defaultTerrainMaterial;
-        if (!material || !material.shader || material.shader.name != NativeTerrainShaderName)
+        if (!SupportsTerrainAlbedo(material))
         {
-            error = "Ground-albedo baking supports only the native '" + NativeTerrainShaderName +
-                "' shader. Custom terrain materials, Shader Graph terrain shaders and MicroSplat need their own final-albedo output.";
+            error = "Ground-albedo baking requires native '" + NativeTerrainShaderName +
+                "' or a shader declaring GrassAlbedo=TerrainLit. Other custom shaders need their own final-albedo output.";
             return false;
         }
         TerrainData data = terrain.terrainData;
@@ -344,6 +347,11 @@ public static partial class TerrainGrassAlbedoBaker
         error = null;
         return true;
     }
+
+    private static bool SupportsTerrainAlbedo(Material material) => material && material.shader &&
+        material.HasProperty("_HeightTransition") &&
+        (material.shader.name == NativeTerrainShaderName ||
+            material.GetTag(TerrainAlbedoTag, false, string.Empty) == TerrainAlbedoContract);
 
     private static bool TryValidateOutputPath(string path, TerrainLayer[] layers, out string normalized,
         out Texture2D existing, out string error)
