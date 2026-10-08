@@ -95,6 +95,31 @@ public sealed class GrassAntialiasingRenderingTests
         Assert.That(CoveredArea(first), Is.GreaterThan(0f).And.LessThan(BladePixelWidth * BladePixelHeight * 0.5f));
         AssertSamePixels(first, later,
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
+
+        Color[] full = Render(0, 1, 1f, BladePixelWidth, 0f);
+        Color[] widened = Render(0, 1, 1f, .25f, BladePixelWidth);
+        Assert.That(CoveredArea(full), Is.GreaterThan(0f));
+        AssertSamePixels(full, widened,
+            "An opaque projected-width floor must retain its expanded silhouette instead of dithering it back into holes.");
+        Assert.That(CoveredArea(first), Is.LessThan(CoveredArea(full)),
+            "Retaining expanded width must not remove the independent fractional-density fade.");
+
+        material.SetFloat("_RandomNormal", 0f);
+        Color[] unresolvedBase = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
+        Color[] resolvedBase = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        material.SetFloat("_RandomNormal", 1f);
+        Color[] unresolvedDetail = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
+        Color[] resolvedDetail = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        Assert.That(CoveredArea(unresolvedBase), Is.GreaterThan(0f));
+        AssertSamePixels(unresolvedBase, unresolvedDetail,
+            "A widened quarter-pixel physical blade must filter its unresolved normal detail, rather than use the expanded width.");
+        float resolvedDifference = 0f;
+        for (int index = 0; index < resolvedBase.Length; index++)
+            if (resolvedBase[index].a > .5f && resolvedDetail[index].a > .5f)
+                resolvedDifference = Mathf.Max(resolvedDifference,
+                    Mathf.Abs(resolvedBase[index].r - resolvedDetail[index].r));
+        Assert.That(resolvedDifference, Is.GreaterThan(1f / 255f),
+            "Resolved physical blades must retain measurable seeded detail; globally disabling normal randomness is not filtering.");
     }
 
     [TestCase(1, 4f, 0f, 1f / 16384f)]
@@ -283,7 +308,7 @@ public sealed class GrassAntialiasingRenderingTests
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
         float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
         Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null,
-        float orthographicScale = 1f, Texture groundTexture = null)
+        float orthographicScale = 1f, Texture groundTexture = null, bool directionalAmbient = false)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -321,6 +346,15 @@ public sealed class GrassAntialiasingRenderingTests
             material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
 
             MaterialPropertyBlock properties = CreateDrawProperties(positions, empty, windTexture, groundTexture, time);
+            if (directionalAmbient)
+            {
+                // Identical grayscale SH channels isolate normal response with
+                // no main light, fog, ground blend or albedo-contrast change.
+                var ambient = new Vector4(.5f, 0f, 0f, .5f);
+                properties.SetVector("_GrassSHAr", ambient);
+                properties.SetVector("_GrassSHAg", ambient);
+                properties.SetVector("_GrassSHAb", ambient);
+            }
 
             Matrix4x4 cameraWorld = cameraToWorld ?? Matrix4x4.identity;
             Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) * cameraWorld.inverse;
@@ -351,7 +385,7 @@ public sealed class GrassAntialiasingRenderingTests
             foreach (Color pixel in pixels)
             {
                 Assert.That(pixel.g, Is.EqualTo(pixel.r).Within(1f / 255f),
-                    "The configured blade must be white, including at covered samples; an error shader is not a valid mask.");
+                    "The configured blade must be grayscale, including at covered samples; an error shader is not a valid mask.");
                 Assert.That(pixel.b, Is.EqualTo(pixel.r).Within(1f / 255f));
             }
             return pixels;

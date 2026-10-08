@@ -75,6 +75,8 @@ struct GrassVertexData
 {
     float3 positionWS;
     half3 normalWS;
+    half3 stableNormalWS;
+    float physicalPixelWidth;
     float2 mapUV;
     float2 shapeCoordinates;
     float height;
@@ -111,6 +113,7 @@ struct GrassRootData
     float2 curvature;
     float2 mapUV;
     float width;
+    float physicalPixelWidth;
     float height;
     float coverage;
     float cameraDistance;
@@ -195,9 +198,12 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     float widthRange = max(shape.ranges.y - shape.ranges.x, 0.001);
     width += saturate((root.cameraDistance - shape.ranges.x) / widthRange) * max(0.0, shape.shaping.y);
 
-    // Expand subpixel blades and compensate coverage by the same ratio.
+    // Keep lighting detail tied to physical width before minimum-pixel expansion.
     float originalFullWidth = width * 0.5;
-    float minimumFullWidth = max(0.0, shape.ranges.w) * GrassWorldUnitsPerPixel(root.pivot, view);
+    float worldUnitsPerPixel = GrassWorldUnitsPerPixel(root.pivot, view);
+    root.physicalPixelWidth = worldUnitsPerPixel > 0.0 ? originalFullWidth / worldUnitsPerPixel : 0.0;
+    if (!isfinite(root.physicalPixelWidth)) root.physicalPixelWidth = 0.0;
+    float minimumFullWidth = max(0.0, shape.ranges.w) * worldUnitsPerPixel;
     // Unrepresentable expansion must not turn an otherwise finite blade into
     // infinite vertices. root.width stores twice this full geometric width.
     if (!isfinite(minimumFullWidth) || minimumFullWidth > 0.5 * FLT_MAX)
@@ -206,6 +212,12 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     // Preserve the ratio at small world scales too. A fixed denominator floor
     // would thin even an unexpanded blade that projects to several full pixels.
     float widthCoverage = expandedFullWidth > 0.0 ? originalFullWidth / expandedFullWidth : 0.0;
+    // A2C can represent the fractional area compensation. An opaque single
+    // sample cannot: dithering it back into holes defeats its sampling floor.
+    // Retain the widened silhouette there, while density fade stays separate.
+    // A zero physical width must still produce no grass in either path.
+    if (_GrassAlphaToCoverage <= 0.5)
+        widthCoverage = originalFullWidth > 0.0 ? 1.0 : 0.0;
     root.coverage = saturate(positionData.w) * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
     root.height = max(0.0, shape.dimensions.y) *
@@ -279,10 +291,13 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     blade.cameraDistance = root.cameraDistance;
     blade.mapUV = root.mapUV;
     blade.coverage = root.coverage;
+    blade.physicalPixelWidth = root.physicalPixelWidth;
 
     float3 normalJitter = float3(GrassRandom(blade.seed + 5u) * 2.0 - 1.0,
         0.0, GrassRandom(blade.seed + 6u) * 2.0 - 1.0);
-    blade.normalWS = SafeNormalize(GrassDirectionAtHeight(root, blade.height) - view.cameraForward * 0.5 + _RandomNormal * normalJitter);
+    float3 stableNormal = GrassDirectionAtHeight(root, blade.height) - view.cameraForward * 0.5;
+    blade.stableNormalWS = SafeNormalize(stableNormal);
+    blade.normalWS = SafeNormalize(stableNormal + _RandomNormal * normalJitter);
     // This coordinate remains linear across the tapered mesh, including its final
     // triangle, so the same analytic edge coverage works for every geometry LOD.
     blade.shapeCoordinates = float2((input.uv.x - 0.5) * (1.0 - blade.height), blade.height);
@@ -353,16 +368,20 @@ half3 GrassGroundNormal(float2 uv)
 
 half GrassFragmentCoverageWithMode(float2 shapeCoordinates, float instanceCoverage, uint seed, bool alphaToCoverage)
 {
-    float edgeDistance = (1.0 - shapeCoordinates.y) * 0.5 - abs(shapeCoordinates.x);
-    float edgeFootprint = max(fwidth(shapeCoordinates.x) + 0.5 * fwidth(shapeCoordinates.y), 0.0001);
-    float edgeCoverage = saturate(edgeDistance / edgeFootprint + 0.5);
-    float coverage = saturate(instanceCoverage * edgeCoverage);
-    clip(coverage - 0.00001);
-
-    // The single-sample contact pass stores this analytic silhouette estimate
-    // beside raw depth, so a partly covered blade is not a solid occluder.
+    float coverage = saturate(instanceCoverage);
+    // The single-sample contact pass stores the analytic silhouette beside
+    // depth when color uses A2C. In the opaque path the rasterizer already
+    // owns the tapered mesh edge: randomly clipping that edge a second time
+    // adds holes without providing fractional color coverage.
     if (alphaToCoverage)
+    {
+        float edgeDistance = (1.0 - shapeCoordinates.y) * 0.5 - abs(shapeCoordinates.x);
+        float edgeFootprint = max(fwidth(shapeCoordinates.x) + 0.5 * fwidth(shapeCoordinates.y), 0.0001);
+        coverage *= saturate(edgeDistance / edgeFootprint + 0.5);
+        clip(coverage - 0.00001);
         return coverage;
+    }
+    clip(coverage - 0.00001);
 
     // Quantize in blade coordinates and hash its stable world pivot. Camera motion
     // and time never reseed the pattern. Without MSAA the contact pass clips the

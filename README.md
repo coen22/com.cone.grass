@@ -87,6 +87,12 @@ The MicroVerse Texture Stamp remains visible as distant blades thin out. Keep it
 
 Ground color is captured in a shared XZ projection. Vertically overlapping surfaces cannot retain different ground colors at the same XZ coordinates. Use this workflow for terrain tiles and surfaces whose ground-color footprints do not overlap vertically.
 
+## Projected blade stability
+
+Minimum Blade Width is measured in projected pixels, independent of world scale. With MSAA, widening keeps proportional A2C coverage. With AA disabled, a nonzero blade retains the widened opaque silhouette; it is intentionally denser than a subpixel blade rather than clipping the width compensation into holes. Density fade keeps its separate, world-seeded pattern. Zero physical width remains invisible. The opaque color, contact and motion paths share that clipping policy, while A2C contact depth retains analytic fractional edge coverage.
+
+Seeded normal detail and specular strength fade over one to two pixels of the physical tapered width before expansion. Resolved blades retain their detail; widening a tiny blade does not make its lighting detail resolved. This policy does not introduce AA or temporal history and does not guarantee that the remaining binary raster edges and tips cannot crawl. Validate slow camera pans at the actual target resolution with AA disabled, identical density/lighting and a constant-color coverage control. Native GPU cost and temporal measurements remain necessary.
+
 ## Collider-driven interaction
 
 Add **Cone > Grass > Collider Interactor** to a character and assign its actual **Actor Collider**. The optional component feeds the existing grass slope capture, so it works with the shared blade deformation used by color, contact depth and optional motion vectors. Keep TAA disabled and motion history Off for the required quality baseline.
