@@ -215,6 +215,69 @@ public sealed class GrassAntialiasingRenderingTests
             reflectance * Mathf.SmoothStep(0f, 1f, 1f / BladePixelHeight);
         Assert.That(darkest, Is.EqualTo(1f - reflectance).Within(tolerance),
             "A ground-matched root must not use the full albedo where TerrainLit uses dielectric diffuse energy.");
+
+        Assert.That(material.GetFloat("_GroundBlendFloor"), Is.Zero,
+            "Existing materials must retain the original root-to-tip transition by default.");
+        material.SetColor("_Color", Color.black);
+        material.SetColor("_AOColor", Color.black);
+        const float lightingWidth = 32f;
+        Color[] legacy = Render(0, 1, 1f, lightingWidth, 0f, groundTexture: Texture2D.whiteTexture);
+        Vector2 legacyRange = CoveredColorRange(legacy);
+        Assert.That(legacyRange.x, Is.LessThan(1f / BladePixelHeight),
+            "The wide blade must include covered tip pixels where the legacy ground fade approaches zero.");
+
+        const float floor = .9f;
+        material.SetFloat("_GroundBlendFloor", floor);
+        Vector2 bodyRange = CoveredColorRange(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture));
+        // Black authored albedo isolates ground weight. Dielectric diffuse energy
+        // is 1 - reflectance * weight; thus the minimum body response is derived
+        // from floor * (1 - reflectance * floor), rather than a fitted image bound.
+        float bodyMinimum = floor * (1f - reflectance * floor);
+        const float readbackTolerance = 1f / 255f + 1f / 2048f;
+        Assert.That(bodyRange.x, Is.EqualTo(bodyMinimum).Within(readbackTolerance),
+            "The body/tip must retain the requested ground colour and its matching diffuse energy.");
+        Assert.That(bodyRange.y, Is.EqualTo(1f - reflectance).Within(tolerance));
+        Assert.That(bodyRange.y - bodyRange.x,
+            Is.GreaterThan(((1f - reflectance) - bodyMinimum) * .5f),
+            "The nonempty root and tip domains must still retain the height transition above the floor.");
+
+        material.SetFloat("_GroundBlendFloor", 1f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 1f - reflectance, readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", .25f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), .25f * (1f - reflectance * .25f), readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", 0f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", 1f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f), 0f, readbackTolerance);
+        material.SetFloat("_GroundBlendHeight", 0f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
+    }
+
+    private static Vector2 CoveredColorRange(Color[] pixels)
+    {
+        float darkest = float.PositiveInfinity, brightest = float.NegativeInfinity;
+        int covered = 0;
+        foreach (Color pixel in pixels)
+        {
+            if (pixel.a <= .5f) continue;
+            covered++;
+            darkest = Mathf.Min(darkest, pixel.r);
+            brightest = Mathf.Max(brightest, pixel.r);
+        }
+        Assert.That(covered, Is.GreaterThan(0), "Lighting assertions require actual covered blade pixels.");
+        return new Vector2(darkest, brightest);
+    }
+
+    private static void AssertConstantCoveredColor(Color[] pixels, float expected, float tolerance)
+    {
+        Vector2 range = CoveredColorRange(pixels);
+        Assert.That(range.x, Is.EqualTo(expected).Within(tolerance));
+        Assert.That(range.y, Is.EqualTo(expected).Within(tolerance));
     }
 
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,

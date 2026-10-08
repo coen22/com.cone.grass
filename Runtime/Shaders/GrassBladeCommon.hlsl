@@ -18,6 +18,7 @@ CBUFFER_START(UnityPerMaterial)
     half _RandomNormal;
     half _GroundBlendStrength;
     float _GroundBlendHeight;
+    half _GroundBlendFloor;
     float _UseGroundNormal;
     float _UseAdditionalLights;
     float _SpecularFadeStart;
@@ -291,7 +292,8 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
 half GrassGroundBlend(float bladeHeight, half mapStrength)
 {
     float rootFalloff = 1.0 - smoothstep(0.0, max(_GroundBlendHeight, 0.0001), bladeHeight);
-    return saturate(mapStrength * _GroundBlendStrength) * rootFalloff * step(0.0001, _GroundBlendHeight);
+    float heightWeight = lerp(saturate(_GroundBlendFloor), 1.0, rootFalloff);
+    return saturate(mapStrength * _GroundBlendStrength) * heightWeight * step(0.0001, _GroundBlendHeight);
 }
 
 float GrassGroundHeight(float2 uv, float fallback)

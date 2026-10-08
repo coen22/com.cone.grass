@@ -23,6 +23,7 @@ Shader "InfiniteGrass/GrassBladeShader"
         [Header(Ground Blending)][Space]
         _GroundBlendStrength("Ground Color Blend", Range(0, 1)) = 1
         _GroundBlendHeight("Ground Blend Height (Blade Fraction)", Range(0, 1)) = 0.25
+        _GroundBlendFloor("Ground Blend Along Whole Blade", Range(0, 1)) = 0
         [Toggle(_GRASS_GROUND_NORMAL)] _UseGroundNormal("Match Ground Normal at Roots", Float) = 0
 
         [Header(Lighting)][Space]
