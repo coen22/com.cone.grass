@@ -183,6 +183,9 @@ Shader "InfiniteGrass/GrassBladeShader"
                 half alpha = GrassForwardCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 half groundBlend = GrassGroundBlend(input.shapeCoordinates.y, input.groundColor.a);
                 half3 albedo = lerp(input.grassAlbedo, input.groundColor.rgb, groundBlend);
+                // TerrainLit reserves the dielectric reflectance from diffuse energy.
+                // Match that response at roots for both the ambient and direct light.
+                albedo *= lerp(1.0h, kDielectricSpec.a, groundBlend);
                 // This stylized blade/ground normal is independent of winding.
                 // Flipping it on a bent back face would create a lighting seam.
                 half3 normalWS = SafeNormalize(input.normalWSAndSpecular.xyz);

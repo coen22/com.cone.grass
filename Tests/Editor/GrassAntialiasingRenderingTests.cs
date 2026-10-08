@@ -198,10 +198,29 @@ public sealed class GrassAntialiasingRenderingTests
         }
     }
 
+    [Test]
+    public void GroundMatchedRootsUseNativeTerrainDielectricDiffuseEnergy()
+    {
+        material.SetFloat("_GroundBlendStrength", 1f);
+        material.SetFloat("_GroundBlendHeight", 1f);
+        Color[] pixels = Render(0, 1, 1f, BladePixelWidth, 0f, groundTexture: Texture2D.whiteTexture);
+        float darkest = float.PositiveInfinity;
+        foreach (Color pixel in pixels)
+            if (pixel.a > .5f) darkest = Mathf.Min(darkest, pixel.r);
+        // URP BRDF.hlsl uses dielectric reflectance .04. The first raster row
+        // is at most 1/64 of this blade's height. Allow its gradient, one RGBA8
+        // readback code and one half-float rounding step, rather than a fitted limit.
+        const float reflectance = .04f;
+        float tolerance = 1f / 255f + 1f / 2048f +
+            reflectance * Mathf.SmoothStep(0f, 1f, 1f / BladePixelHeight);
+        Assert.That(darkest, Is.EqualTo(1f - reflectance).Within(tolerance),
+            "A ground-matched root must not use the full albedo where TerrainLit uses dielectric diffuse energy.");
+    }
+
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
         float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
         Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null,
-        float orthographicScale = 1f)
+        float orthographicScale = 1f, Texture groundTexture = null)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -238,26 +257,7 @@ public sealed class GrassAntialiasingRenderingTests
             material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
             material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
 
-            var properties = new MaterialPropertyBlock();
-            properties.SetBuffer("_GrassPositions", positions);
-            properties.SetInteger("_GrassInstanceOffset", 0);
-            properties.SetInteger("_GrassUseExplicitTime", 1);
-            properties.SetFloat("_GrassTime", time);
-            properties.SetFloat("_DrawDistance", 100f);
-            properties.SetFloat("_TextureUpdateThreshold", 1f);
-            properties.SetVector("_CenterPos", Vector4.zero);
-            properties.SetTexture("_GrassColorRT", empty);
-            properties.SetTexture("_GrassGroundColorRT", empty);
-            properties.SetTexture("_GrassSlopeRT", empty);
-            properties.SetTexture("_GrassHeightMapRT", empty);
-            properties.SetTexture("_WindTexture", windTexture ? windTexture : Texture2D.grayTexture);
-            properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHBr", Vector4.zero);
-            properties.SetVector("_GrassSHBg", Vector4.zero);
-            properties.SetVector("_GrassSHBb", Vector4.zero);
-            properties.SetVector("_GrassSHC", Vector4.zero);
+            MaterialPropertyBlock properties = CreateDrawProperties(positions, empty, windTexture, groundTexture, time);
 
             Matrix4x4 cameraWorld = cameraToWorld ?? Matrix4x4.identity;
             Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) * cameraWorld.inverse;
@@ -265,30 +265,7 @@ public sealed class GrassAntialiasingRenderingTests
                 ? Matrix4x4.Perspective(60f, 1f, 0.1f, 10f)
                 : Matrix4x4.Ortho(-orthographicScale, orthographicScale,
                     -orthographicScale, orthographicScale, 0.1f, 10f), true);
-            string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
-            var previousMatrices = new Matrix4x4[matrixNames.Length];
-            for (int index = 0; index < matrixNames.Length; index++)
-                previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
-            string[] vectorNames =
-            {
-                "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
-                "_MainLightColor", "_MainLightPosition", "unity_FogColor", "unity_FogParams", "_Time", "_TimeParameters"
-            };
-            Vector4[] vectors =
-            {
-                cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
-                new Vector4(2f * orthographicScale, 2f * orthographicScale, 0f, perspective ? 0f : 1f),
-                new Vector4(1f, 0.1f, 10f, 0.1f),
-                Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
-                new Vector4(time / 20f, time, time * 2f, time * 3f),
-                new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
-            };
-            var previousVectors = new Vector4[vectorNames.Length];
-            for (int index = 0; index < vectorNames.Length; index++)
-            {
-                previousVectors[index] = Shader.GetGlobalVector(vectorNames[index]);
-                commands.SetGlobalVector(vectorNames[index], vectors[index]);
-            }
+            System.Action restoreGlobals = RecordViewGlobals(commands, cameraWorld, view, projection, orthographicScale, perspective, time);
             commands.SetRenderTarget(target);
             commands.SetViewport(new Rect(0f, 0f, Size, Size));
             commands.ClearRenderTarget(false, true, Color.clear);
@@ -300,10 +277,7 @@ public sealed class GrassAntialiasingRenderingTests
                 commands.ResolveAntiAliasedSurface(target, resolved);
             else
                 commands.CopyTexture(target, resolved);
-            for (int index = 0; index < matrixNames.Length; index++)
-                commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
-            for (int index = 0; index < vectorNames.Length; index++)
-                commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+            restoreGlobals();
             GL.sRGBWrite = false;
             Graphics.ExecuteCommandBuffer(commands);
 
@@ -329,6 +303,69 @@ public sealed class GrassAntialiasingRenderingTests
             if (resolved) Object.DestroyImmediate(resolved);
             if (readback) Object.DestroyImmediate(readback);
         }
+    }
+
+    private static MaterialPropertyBlock CreateDrawProperties(GraphicsBuffer positions, Texture empty,
+        Texture windTexture, Texture groundTexture, float time)
+    {
+        var properties = new MaterialPropertyBlock();
+        properties.SetBuffer("_GrassPositions", positions);
+        properties.SetInteger("_GrassInstanceOffset", 0);
+        properties.SetInteger("_GrassUseExplicitTime", 1);
+        properties.SetFloat("_GrassTime", time);
+        properties.SetFloat("_DrawDistance", 100f);
+        properties.SetFloat("_TextureUpdateThreshold", 1f);
+        properties.SetVector("_CenterPos", Vector4.zero);
+        properties.SetTexture("_GrassColorRT", empty);
+        properties.SetTexture("_GrassGroundColorRT", groundTexture ? groundTexture : empty);
+        properties.SetTexture("_GrassSlopeRT", empty);
+        properties.SetTexture("_GrassHeightMapRT", empty);
+        properties.SetTexture("_WindTexture", windTexture ? windTexture : Texture2D.grayTexture);
+        properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHBr", Vector4.zero);
+        properties.SetVector("_GrassSHBg", Vector4.zero);
+        properties.SetVector("_GrassSHBb", Vector4.zero);
+        properties.SetVector("_GrassSHC", Vector4.zero);
+
+        return properties;
+    }
+
+    private static System.Action RecordViewGlobals(CommandBuffer commands, Matrix4x4 cameraWorld,
+        Matrix4x4 view, Matrix4x4 projection, float orthographicScale, bool perspective, float time)
+    {
+        string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
+        var previousMatrices = new Matrix4x4[matrixNames.Length];
+        for (int index = 0; index < matrixNames.Length; index++)
+            previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
+        string[] vectorNames =
+        {
+            "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
+            "_MainLightColor", "_MainLightPosition", "unity_FogColor", "unity_FogParams", "_Time", "_TimeParameters"
+        };
+        Vector4[] vectors =
+        {
+            cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
+            new Vector4(2f * orthographicScale, 2f * orthographicScale, 0f, perspective ? 0f : 1f),
+            new Vector4(1f, 0.1f, 10f, 0.1f),
+            Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
+            new Vector4(time / 20f, time, time * 2f, time * 3f),
+            new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
+        };
+        var previousVectors = new Vector4[vectorNames.Length];
+        for (int index = 0; index < vectorNames.Length; index++)
+        {
+            previousVectors[index] = Shader.GetGlobalVector(vectorNames[index]);
+            commands.SetGlobalVector(vectorNames[index], vectors[index]);
+        }
+        return () =>
+        {
+            for (int index = 0; index < matrixNames.Length; index++)
+                commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
+            for (int index = 0; index < vectorNames.Length; index++)
+                commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+        };
     }
 
     private static float CoveredArea(Color[] pixels)
