@@ -348,10 +348,12 @@ public static partial class TerrainGrassAlbedoBaker
         return true;
     }
 
+    // Before the first URP render, Unity may select a built-in fallback SubShader.
+    // Validate the declared albedo contract across SubShaders; material override tags still take precedence.
     private static bool SupportsTerrainAlbedo(Material material) => material && material.shader &&
         material.HasProperty("_HeightTransition") &&
         (material.shader.name == NativeTerrainShaderName ||
-            material.GetTag(TerrainAlbedoTag, false, string.Empty) == TerrainAlbedoContract);
+            material.GetTag(TerrainAlbedoTag, true, string.Empty) == TerrainAlbedoContract);
 
     private static bool TryValidateOutputPath(string path, TerrainLayer[] layers, out string normalized,
         out Texture2D existing, out string error)
