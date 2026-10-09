@@ -474,6 +474,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.VertexTextures[2] = slope;
             state.VertexTextures[3] = ground;
             state.VertexTextures[4] = wind;
+            state.VertexTextures[5] = density;
 
             using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<DrawPass>(
                        "Grass Indirect LODs", out DrawPass pass))
@@ -1672,7 +1673,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public readonly MaterialPropertyBlock CaptureProperties = new MaterialPropertyBlock();
             public readonly List<int> CaptureTextureIds = new List<int>();
             public readonly List<Texture> CaptureTextures = new List<Texture>();
-            public readonly TextureHandle[] VertexTextures = new TextureHandle[5];
+            public readonly TextureHandle[] VertexTextures = new TextureHandle[6];
             public Renderer[] CaptureRenderers;
             public IReadOnlyList<Renderer> ModifierRenderers;
             public readonly HashSet<Renderer> ExplicitSurfaces = new HashSet<Renderer>();
@@ -1844,6 +1845,9 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     properties.SetTexture(Id.Color, Color.rt);
                     properties.SetTexture(Id.Slope, Slope.rt);
                     properties.SetTexture(Id.Ground, Ground.rt);
+                    // The canopy over a root follows its population's density (GrassPopulationDensity).
+                    properties.SetTexture(Id.Density, Density.rt);
+                    properties.SetInteger(Id.Authored, Authored ? 1 : 0);
                     properties.SetTexture(Id.Wind, wind);
                     properties.SetVector(Id.HeightTexelSize, new Vector4(1f / Height.rt.width,
                         1f / Height.rt.height, Height.rt.width, Height.rt.height));

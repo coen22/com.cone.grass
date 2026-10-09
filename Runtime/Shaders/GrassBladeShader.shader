@@ -142,7 +142,7 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // The blade keeps the ground's colour to its tip; light, not a tint, shades it.
                 if (_GroundAlbedoAlongBlade > 0.5)
                     output.grassAlbedo = lerp(output.groundColor.rgb, colorModifier.rgb, saturate(colorModifier.a));
-                output.canopyArea = _CanopyOcclusion > 0.5 ? GrassCanopyAreaIndex(blade.density) : 0.0;
+                output.canopyArea = _CanopyOcclusion > 0.5 ? GrassCanopyAreaIndex(GrassPopulationDensity(blade.mapUV, blade.cameraDistance)) : 0.0;
 
                 float specularFade = 1.0 - smoothstep(_SpecularFadeStart,
                     max(_SpecularFadeStart + 0.001, _SpecularFadeEnd), blade.cameraDistance);

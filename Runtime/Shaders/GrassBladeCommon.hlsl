@@ -76,6 +76,9 @@ TEXTURE2D(_GrassGroundColorRT);
 SAMPLER(sampler_GrassGroundColorRT);
 TEXTURE2D(_GrassHeightMapRT);
 SAMPLER(sampler_GrassHeightMapRT);
+// The authored surface density the compute thinned the population with, and whether it applies.
+TEXTURE2D(_GrassDensityRT);
+int _AuthoredAreas;
 TEXTURE2D(_GrassSplatControl);
 TEXTURE2D(_GrassSplatDiffuse0);
 TEXTURE2D(_GrassSplatDiffuse1);
@@ -109,7 +112,6 @@ struct GrassVertexData
     float height;
     float cameraDistance;
     float coverage;
-    float density;
     float worldUnitsPerPixel;
     uint seed;
 };
@@ -146,7 +148,6 @@ struct GrassRootData
     float physicalPixelWidth;
     float height;
     float coverage;
-    float density;
     float worldUnitsPerPixel;
     float cameraDistance;
     uint seed;
@@ -251,7 +252,6 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     if (_GrassAlphaToCoverage <= 0.5)
         widthCoverage = originalFullWidth > 0.0 ? 1.0 : 0.0;
     float densityCoverage = saturate(positionData.w);
-    root.density = densityCoverage;
     root.worldUnitsPerPixel = worldUnitsPerPixel;
     root.coverage = densityCoverage * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
@@ -364,7 +364,6 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     GrassVertexData blade;
     blade.positionWS = EvaluateGrassPosition(root, view, input.uv);
     blade.pivotWS = root.pivot;
-    blade.density = root.density;
     blade.worldUnitsPerPixel = root.worldUnitsPerPixel;
     blade.seed = root.seed;
     blade.height = saturate(input.uv.y);
@@ -395,6 +394,23 @@ float GrassCanopyAreaIndex(float density)
     float baseWidth = 0.5 * max(_GrassWidth, 0.0) * (1.0 - 0.5 * saturate(_GrassWidthRandomness));
     float height = max(_GrassHeight, 0.0) * (1.0 - 0.5 * saturate(_GrassHeightRandomness));
     return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
+}
+
+// Blades per square metre around a root as a fraction of full density: the authored surface density
+// and the distance fade the compute thinned the population with. A surviving blade's own coverage
+// stays near one, so it cannot tell a sparse edge from the dense interior.
+float GrassPopulationDensity(float2 mapUV, float cameraDistance)
+{
+    float authored = 1.0;
+    if (_AuthoredAreas != 0)
+    {
+        authored = saturate(SAMPLE_TEXTURE2D_LOD(_GrassDensityRT, sampler_LinearClamp, mapUV, 0).r);
+        // Only the first surface's map is bound. A blade stands only where its own surface's density
+        // is positive, so zero here is another surface's map; that blade keeps the full canopy.
+        if (authored <= 0.0)
+            authored = 1.0;
+    }
+    return authored * GrassDistanceDensity(cameraDistance);
 }
 
 // Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.
