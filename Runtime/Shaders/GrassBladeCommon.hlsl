@@ -396,10 +396,10 @@ float GrassCanopyAreaIndex(float density)
     return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
 }
 
-// Blades per square metre around a root as a fraction of full density: the authored surface density
-// and the distance fade the compute thinned the population with. A surviving blade's own coverage
-// stays near one, so it cannot tell a sparse edge from the dense interior.
-float GrassPopulationDensity(float2 mapUV, float cameraDistance)
+// The authored surface density at a root, as a fraction of full density. With the distance fade it is
+// the population the compute thinned the blades to; a surviving blade's own coverage stays near one,
+// so it cannot tell a sparse edge from the dense interior.
+float GrassAuthoredDensity(float2 mapUV)
 {
     float authored = 1.0;
     if (_AuthoredAreas != 0)
@@ -410,7 +410,7 @@ float GrassPopulationDensity(float2 mapUV, float cameraDistance)
         if (authored <= 0.0)
             authored = 1.0;
     }
-    return authored * GrassDistanceDensity(cameraDistance);
+    return authored;
 }
 
 // Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.
@@ -420,19 +420,19 @@ float GrassCanopyAreaAbove(float areaIndex, float bladeHeight)
     return areaIndex * above * above;
 }
 
-// Fraction of light from a direction that passes the blades above a point (Beer-Lambert). Near-vertical
-// blades project (2/pi) sin(theta) of their area toward a direction at zenith angle theta, and the ray
-// crosses the canopy, a layer on the ground, along 1 / (n . l) of its depth for the ground normal n. On
-// level ground the optical depth is (2/pi) tan(theta) times the area above.
+// Optical depth per unit of blade area toward a direction (Beer-Lambert): near-vertical blades project
+// (2/pi) sin(theta) of their area toward a direction at zenith angle theta, and the ray crosses the canopy,
+// a layer on the ground, along 1 / (n . d) of its depth for the ground normal n; (2/pi) tan(theta) on level
+// ground. The transmission is the fraction of light from that direction passing the blades above a point.
+float GrassCanopyDepth(float3 direction, float3 groundNormal)
+{
+    float across = dot(groundNormal, direction);
+    return across > 0.0001 ? 0.6366198 * sqrt(saturate(1.0 - direction.y * direction.y)) / across : 1e4;
+}
+
 half GrassCanopyTransmission(float areaAbove, float3 direction, float3 groundNormal)
 {
-    if (areaAbove <= 0.0)
-        return 1.0h;
-    float across = dot(groundNormal, direction);
-    if (across <= 0.0001)
-        return 0.0h;
-    float sine = sqrt(saturate(1.0 - direction.y * direction.y));
-    return exp(-0.6366198 * sine / across * areaAbove);
+    return areaAbove > 0.0 ? exp(-GrassCanopyDepth(direction, groundNormal) * areaAbove) : 1.0h;
 }
 
 // Turns a normal by the rotation that takes unit direction a to unit direction b (Rodrigues).
@@ -446,12 +446,41 @@ half3 GrassTurn(half3 normal, half3 a, half3 b)
 
 // The cosine-weighted mean of that transmission over the sky: the ambient a point still receives.
 // Four-point Gauss-Legendre quadrature over cos(theta); it is exact without blades.
+static const float4 kGrassSkyCosine = float4(0.0694318, 0.3300095, 0.6699905, 0.9305682);
+// The quadrature weights times 2 cos(theta), and the optical depth (2/pi) tan(theta) at each node.
+static const float4 kGrassSkyWeight = 2.0 * float4(0.1739274, 0.3260726, 0.3260726, 0.1739274) * kGrassSkyCosine;
+static const float4 kGrassSkyDepth = 0.6366198 * sqrt(1.0 - kGrassSkyCosine * kGrassSkyCosine) / kGrassSkyCosine;
+
 half GrassCanopySkyVisibility(float areaAbove)
 {
-    const float4 cosine = float4(0.0694318, 0.3300095, 0.6699905, 0.9305682);
-    const float4 weight = float4(0.1739274, 0.3260726, 0.3260726, 0.1739274);
-    float4 tangent = sqrt(1.0 - cosine * cosine) / cosine;
-    return 2.0 * dot(weight * cosine, exp(-0.6366198 * tangent * areaAbove));
+    return dot(kGrassSkyWeight, exp(-kGrassSkyDepth * areaAbove));
+}
+
+// The canopy shows its shaded ground and blade bases from above and only its lit tops along the ground,
+// so its mean would brighten with distance. These scale a point's sky and sun light so that every view
+// sees one mean. A view of optical depth k sees a canopy term exp(-c a) at the first blade on its ray, at
+// area above a with density k exp(-k a), or at the ground under all the area A: on average
+// (k + c exp(-(k + c) A)) / (k + c). The scale is that mean over views from every side (cosine-weighted,
+// as the sky) at the painted area without the distance fade, over this view's mean at the area drawn.
+// Beyond the drawn grass the ground takes the every-side mean alone; without blades both are one.
+half GrassCanopySkyViewScale(float drawnArea, float paintedArea, float viewDepth)
+{
+    // Over every side, the sky's pairs of nodes sum to (1 + S^2) / 2 for the sky visibility S at the ground.
+    float painted = dot(kGrassSkyWeight, exp(-kGrassSkyDepth * paintedArea));
+    float everySide = 0.5 * (1.0 + painted * painted);
+    float4 terms = viewDepth + kGrassSkyDepth * exp(-(viewDepth + kGrassSkyDepth) * drawnArea);
+    float seen = dot(kGrassSkyWeight, terms / (viewDepth + kGrassSkyDepth));
+    return everySide / max(seen, 1e-4);
+}
+
+half GrassCanopySunViewScale(float drawnArea, float paintedArea, float viewDepth, float sunDepth)
+{
+    float4 sides = kGrassSkyDepth + sunDepth;
+    float everySide = dot(kGrassSkyWeight, (kGrassSkyDepth + sunDepth * exp(-sides * paintedArea)) / sides);
+    // Looking straight down with the sun overhead, neither the view nor the light meets a blade.
+    float sum = viewDepth + sunDepth;
+    float seen = sum > 1e-5 ? (viewDepth + sunDepth * exp(-sum * drawnArea)) / sum : 1.0;
+    return everySide / max(seen, 1e-4);
 }
 
 // TerrainLit's albedo and tangent-space normal for the bound terrain's first four layers at a
