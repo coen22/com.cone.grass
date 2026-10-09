@@ -104,9 +104,19 @@ public sealed class GrassAntialiasingRenderingTests
         Assert.That(CoveredArea(first), Is.LessThan(CoveredArea(full)),
             "Retaining expanded width must not remove the independent fractional-density fade.");
 
+        // Fractional density scales width and height by sqrt(coverage). A
+        // four-pixel base at .5 coverage spans only 2.828 pixels around the
+        // pixel boundary and has no sample between its two covered extremes.
+        // Use an eight-pixel witness so even .25 coverage has a four-pixel
+        // base and a meaningful interior. Lower density may validly have no
+        // multi-pixel interior; zero density must still stay absent.
+        const float solidDensityPixelWidth = BladePixelWidth * 2f;
         foreach (int subdivisions in new[] { 0, 2, 5 })
         {
-            AssertSolidRows(Render(subdivisions, 1, .5f, BladePixelWidth, 0f));
+            foreach (float coverage in new[] { .25f, .5f, .75f })
+                AssertSolidRows(Render(subdivisions, 1, coverage, solidDensityPixelWidth, 0f));
+            Assert.That(CoveredArea(Render(subdivisions, 1, 0f, solidDensityPixelWidth, 0f)), Is.Zero,
+                "The solid fractional-density witness cannot resurrect zero density.");
             Color[] capped = Render(subdivisions, 1, 1f, .25f, BladePixelWidth);
             AssertSolidRows(capped);
             Assert.That(CoveredArea(capped), Is.EqualTo(BladePixelWidth * BladePixelHeight).Within(4f),
