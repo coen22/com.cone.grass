@@ -113,6 +113,7 @@ struct GrassRootData
     float2 curvature;
     float2 mapUV;
     float width;
+    float tipWidth;
     float physicalPixelWidth;
     float height;
     float coverage;
@@ -218,12 +219,34 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     // A zero physical width must still produce no grass in either path.
     if (_GrassAlphaToCoverage <= 0.5)
         widthCoverage = originalFullWidth > 0.0 ? 1.0 : 0.0;
-    root.coverage = saturate(positionData.w) * saturate(widthCoverage);
+    float densityCoverage = saturate(positionData.w);
+    root.coverage = densityCoverage * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
+    root.tipWidth = 0.0;
+    float opaqueDensityScale = 1.0;
+    if (_GrassAlphaToCoverage <= 0.5)
+    {
+        // Preserve a solid blade during the compute population transition.
+        // Scale the already expanded silhouette, not its physical width before
+        // the floor, so width and height both fade instead of puncturing fragment cells.
+        // The last part of that fade may become subpixel; zero remains absent.
+        opaqueDensityScale = sqrt(densityCoverage);
+        float minimumPixels = max(0.0, shape.ranges.w);
+        if (minimumFullWidth > 0.0 && originalFullWidth > 0.0 && minimumPixels > 0.0)
+        {
+            float resolved = smoothstep(minimumPixels, minimumPixels * 2.0, root.physicalPixelWidth);
+            root.tipWidth = minimumFullWidth * (1.0 - resolved);
+        }
+        root.width *= opaqueDensityScale;
+        root.tipWidth *= opaqueDensityScale;
+        // Lighting resolution follows the physically shortened transition blade.
+        root.physicalPixelWidth *= opaqueDensityScale;
+        root.coverage = densityCoverage > 0.0 && originalFullWidth > 0.0 ? 1.0 : 0.0;
+    }
     root.height = max(0.0, shape.dimensions.y) *
         (1.0 - GrassRandom(root.seed + 2u) * saturate(shape.dimensions.w));
     float bump = saturate(1.0 - abs(root.cameraDistance - shape.ranges.z) / max(shape.shaping.w, 0.001));
-    root.height *= max(0.0, 1.0 + shape.shaping.z * bump);
+    root.height *= max(0.0, 1.0 + shape.shaping.z * bump) * opaqueDensityScale;
 
     // Decode the captured direction before strength interpolation. Clear pixels
     // contain zero RG and alpha; their neutral signed direction must remain zero.
@@ -233,7 +256,7 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
         1.0 - max(abs(slopeXZ.x), abs(slopeXZ.y)) * 0.5, slopeXZ.y));
     root.slopeDirection = SafeNormalize(lerp(float3(0, 1, 0), slopeDirection, saturate(slope.a)));
     root.wind = wind * shape.windMotion.z * (1.0 - saturate(slope.a));
-    root.curvature = (float2(GrassRandom(root.seed + 3u), GrassRandom(root.seed + 4u)) * 2.0 - 1.0) * shape.shaping.x;
+    root.curvature = (float2(GrassRandom(root.seed + 3u), GrassRandom(root.seed + 4u)) * 2.0 - 1.0) * shape.shaping.x * opaqueDensityScale;
     return root;
 }
 
@@ -260,7 +283,9 @@ void EvaluateGrassRow(GrassRootData root, GrassViewParameters view, float height
     if (dot(rightTangent, rightTangent) < 0.00001)
         rightTangent = view.cameraRight;
     rightTangent = SafeNormalize(rightTangent);
-    halfSpan = rightTangent * 0.25 * root.width * (1.0 - height);
+    // A continuously vanishing cap replaces only physically unresolved tips.
+    // Resolved and A2C blades keep the same pointed silhouette (tipWidth0).
+    halfSpan = rightTangent * 0.5 * lerp(root.width * 0.5, root.tipWidth, height);
 }
 
 float3 EvaluateGrassPosition(GrassRootData root, GrassViewParameters view, float2 uv)
@@ -382,6 +407,10 @@ half GrassFragmentCoverageWithMode(float2 shapeCoordinates, float instanceCovera
         return coverage;
     }
     clip(coverage - 0.00001);
+    // Single-sample geometry already carries density through its solid area.
+    // Motion on an MSAA camera still uses the legacy fractional sample estimate.
+    if (_GrassAlphaToCoverage <= 0.5)
+        return 1.0h;
 
     // Quantize in blade coordinates and hash its stable world pivot. Camera motion
     // and time never reseed the pattern. Without MSAA the contact pass clips the

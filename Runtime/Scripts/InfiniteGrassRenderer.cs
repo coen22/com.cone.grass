@@ -228,14 +228,15 @@ public class InfiniteGrassRenderer : MonoBehaviour
         return meshes;
     }
 
-    /// <summary>Shares each rectangular row's two vertices; UV.y is the true normalized blade height.</summary>
+    /// <summary>Shares row vertices, including a two-vertex tip for opaque footprint caps.
+    /// The shader collapses that tip for pointed/A2C blades; UV.y remains true normalized height.</summary>
     public static Mesh CreateBladeMesh(int subdivisions)
     {
         subdivisions = Mathf.Clamp(subdivisions, 0, 8);
         int rows = subdivisions + 1;
-        var vertices = new Vector3[rows * 2 + 1];
+        var vertices = new Vector3[rows * 2 + 2];
         var uv = new Vector2[vertices.Length];
-        var indices = new int[(subdivisions * 2 + 1) * 3];
+        var indices = new int[(subdivisions + 1) * 6];
 
         for (int row = 0; row < rows; row++)
         {
@@ -259,13 +260,18 @@ public class InfiniteGrassRenderer : MonoBehaviour
             indices[index + 5] = upperLeft + 1;
         }
 
-        int tip = vertices.Length - 1;
-        vertices[tip] = new Vector3(0f, 1f, 0f);
-        uv[tip] = new Vector2(0.5f, 1f);
-        int last = indices.Length - 3;
+        int tip = rows * 2;
+        vertices[tip] = new Vector3(-0.25f, 1f, 0f);
+        vertices[tip + 1] = new Vector3(0.25f, 1f, 0f);
+        uv[tip] = new Vector2(0f, 1f);
+        uv[tip + 1] = new Vector2(1f, 1f);
+        int last = indices.Length - 6;
         indices[last] = (rows - 1) * 2;
-        indices[last + 1] = tip;
+        indices[last + 1] = tip + 1;
         indices[last + 2] = (rows - 1) * 2 + 1;
+        indices[last + 3] = (rows - 1) * 2;
+        indices[last + 4] = tip;
+        indices[last + 5] = tip + 1;
 
         var mesh = new Mesh
         {

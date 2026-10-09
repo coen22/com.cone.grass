@@ -4,9 +4,9 @@ using UnityEngine;
 
 public sealed class GrassBladeMeshTests
 {
-    [TestCase(5, 13, 11)]
-    [TestCase(2, 7, 5)]
-    [TestCase(0, 3, 1)]
+    [TestCase(5, 14, 12)]
+    [TestCase(2, 8, 6)]
+    [TestCase(0, 4, 2)]
     public void LodMeshHasSharedVerticesValidWindingAndBladeAlignedUvs(
         int subdivisions, int expectedVertices, int expectedTriangles)
     {
@@ -41,7 +41,9 @@ public sealed class GrassBladeMeshTests
             Assert.That(referenced.Count, Is.EqualTo(positions.Length));
             Assert.That(new HashSet<Vector3>(positions), Does.Contain(new Vector3(-0.25f, 0f, 0f)));
             Assert.That(new HashSet<Vector3>(positions), Does.Contain(new Vector3(0.25f, 0f, 0f)));
-            Assert.That(new HashSet<Vector3>(positions), Does.Contain(Vector3.up));
+            Assert.That(new HashSet<Vector3>(positions), Does.Contain(new Vector3(-0.25f, 1f, 0f)));
+            Assert.That(new HashSet<Vector3>(positions), Does.Contain(new Vector3(0.25f, 1f, 0f)),
+                "Both cap vertices are required; the shader can continuously collapse their span.");
             for (int i = 0; i < positions.Length; i++)
             {
                 Assert.That(positions[i].z, Is.Zero);
@@ -72,9 +74,9 @@ public sealed class GrassBladeMeshTests
             settings.grassMeshSubdivision = 5;
             original = settings.GetLodMeshes();
             Assert.That(original.Length, Is.EqualTo(3));
-            Assert.That(original[0].vertexCount, Is.EqualTo(13));
-            Assert.That(original[1].vertexCount, Is.EqualTo(7));
-            Assert.That(original[2].vertexCount, Is.EqualTo(3));
+            Assert.That(original[0].vertexCount, Is.EqualTo(14));
+            Assert.That(original[1].vertexCount, Is.EqualTo(8));
+            Assert.That(original[2].vertexCount, Is.EqualTo(4));
             Assert.That(original[0], Is.Not.SameAs(original[1]));
             Assert.That(original[1], Is.Not.SameAs(original[2]));
             Assert.That(settings.GetLodMeshes(), Is.SameAs(original));
@@ -82,9 +84,9 @@ public sealed class GrassBladeMeshTests
 
             settings.grassMeshSubdivision = 3;
             rebuilt = settings.GetLodMeshes();
-            Assert.That(rebuilt[0].vertexCount, Is.EqualTo(9));
-            Assert.That(rebuilt[1].vertexCount, Is.EqualTo(7));
-            Assert.That(rebuilt[2].vertexCount, Is.EqualTo(3));
+            Assert.That(rebuilt[0].vertexCount, Is.EqualTo(10));
+            Assert.That(rebuilt[1].vertexCount, Is.EqualTo(8));
+            Assert.That(rebuilt[2].vertexCount, Is.EqualTo(4));
             foreach (Mesh oldMesh in original)
                 Assert.That(oldMesh == null, Is.True, "An obsolete native mesh must be destroyed when quality changes.");
         }

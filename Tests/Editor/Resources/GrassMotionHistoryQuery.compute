@@ -8,6 +8,9 @@ StructuredBuffer<float4> _Edges;
 RWStructuredBuffer<float4> _Results;
 RWStructuredBuffer<uint> _Found;
 int _QueryCount;
+int _TrapezoidCoordinates;
+float _CurrentTipRatio;
+float _PreviousTipRatio;
 int _HashMask;
 Texture2D<float4> _DeformationSource;
 SamplerState sampler_DeformationSource;
@@ -32,8 +35,12 @@ void QueryTriangles(uint3 id : SV_DispatchThreadID)
         return;
     float4 query = _Queries[id.x];
     uint start = id.x * 4u;
-    _Results[id.x] = float4(GrassInterpolatePreviousTriangle(query.xy, query.z, query.w,
-        _Edges[start].xyz, _Edges[start + 1u].xyz, _Edges[start + 2u].xyz, _Edges[start + 3u].xyz), 1.0);
+    float3 previous = _TrapezoidCoordinates != 0
+        ? GrassInterpolatePreviousTrapezoid(GrassPreviousShape(query.xy, _CurrentTipRatio, _PreviousTipRatio), query.z, query.w, _PreviousTipRatio, _Edges[start].xyz,
+            _Edges[start + 1u].xyz, _Edges[start + 2u].xyz, _Edges[start + 3u].xyz)
+        : GrassInterpolatePreviousTriangle(query.xy, query.z, query.w, _Edges[start].xyz,
+            _Edges[start + 1u].xyz, _Edges[start + 2u].xyz, _Edges[start + 3u].xyz);
+    _Results[id.x] = float4(previous, 1.0);
 }
 
 [numthreads(64, 1, 1)]

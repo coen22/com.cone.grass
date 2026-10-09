@@ -53,9 +53,10 @@ struct GrassMotionVaryings
     nointerpolation float4 previousPivotAndRows : TEXCOORD2;
     nointerpolation float4 previousDirectionAndWidth : TEXCOORD3;
     nointerpolation float4 previousWindAndHeight : TEXCOORD4;
-    nointerpolation float2 previousCurvature : TEXCOORD5;
+    nointerpolation float3 previousCurvatureAndTipWidth : TEXCOORD5;
     nointerpolation float coverage : TEXCOORD6;
     nointerpolation uint seed : TEXCOORD7;
+    nointerpolation float currentTipRatio : TEXCOORD8;
 };
 
 GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : SV_InstanceID)
@@ -66,7 +67,9 @@ GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : S
     output.currentPositionWS = EvaluateGrassPosition(current, GrassCurrentView(), input.uv);
     // Rasterization includes the current camera jitter, exactly as the color pass.
     output.positionCS = TransformWorldToHClip(output.currentPositionWS);
-    output.shapeCoordinates = float2((input.uv.x - 0.5) * (1.0 - input.uv.y), input.uv.y);
+    float currentFullWidth = current.width * 0.5;
+    output.currentTipRatio = currentFullWidth > 0.0 ? saturate(current.tipWidth / currentFullWidth) : 0.0;
+    output.shapeCoordinates = float2((input.uv.x - 0.5) * lerp(1.0, output.currentTipRatio, input.uv.y), input.uv.y);
     output.coverage = current.coverage;
     output.seed = current.seed;
 
@@ -90,7 +93,7 @@ GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : S
         output.previousPivotAndRows = float4(root.pivot, rows);
         output.previousDirectionAndWidth = float4(root.slopeDirection, root.width);
         output.previousWindAndHeight = float4(root.wind, root.height, root.coverage);
-        output.previousCurvature = root.curvature;
+        output.previousCurvatureAndTipWidth = float3(root.curvature, root.tipWidth);
     }
     return output;
 }
@@ -103,7 +106,8 @@ float3 PreviousGrassSurface(GrassMotionVaryings input)
     root.width = input.previousDirectionAndWidth.w;
     root.wind = input.previousWindAndHeight.xy;
     root.height = input.previousWindAndHeight.z;
-    root.curvature = input.previousCurvature;
+    root.curvature = input.previousCurvatureAndTipWidth.xy;
+    root.tipWidth = input.previousCurvatureAndTipWidth.z;
     float rows = input.previousPivotAndRows.w;
     float height = saturate(input.shapeCoordinates.y);
     float row = min(floor(height * rows), rows - 1.0);
@@ -116,7 +120,10 @@ float3 PreviousGrassSurface(GrassMotionVaryings input)
     // Reconstruct the actual previous triangles, including their LL-to-UR
     // diagonal. Evaluating a continuous curve, or interpolating only the current
     // LOD's vertices, gives wrong velocities when a curved blade becomes a triangle.
-    return GrassInterpolatePreviousTriangle(input.shapeCoordinates, lowerHeight, upperHeight,
+    float previousFullWidth = root.width * 0.5;
+    float previousTipRatio = previousFullWidth > 0.0 ? saturate(root.tipWidth / previousFullWidth) : 0.0;
+    float2 previousShape = GrassPreviousShape(input.shapeCoordinates, input.currentTipRatio, previousTipRatio);
+    return GrassInterpolatePreviousTrapezoid(previousShape, lowerHeight, upperHeight, previousTipRatio,
         lowerCenter, lowerSpan, upperCenter, upperSpan);
 }
 

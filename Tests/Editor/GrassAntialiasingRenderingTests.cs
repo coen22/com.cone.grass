@@ -96,7 +96,7 @@ public sealed class GrassAntialiasingRenderingTests
         AssertSamePixels(first, later,
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
 
-        Color[] full = Render(0, 1, 1f, BladePixelWidth, 0f);
+        Color[] full = Render(0, 1, 1f, BladePixelWidth, BladePixelWidth);
         Color[] widened = Render(0, 1, 1f, .25f, BladePixelWidth);
         Assert.That(CoveredArea(full), Is.GreaterThan(0f));
         AssertSamePixels(full, widened,
@@ -104,12 +104,33 @@ public sealed class GrassAntialiasingRenderingTests
         Assert.That(CoveredArea(first), Is.LessThan(CoveredArea(full)),
             "Retaining expanded width must not remove the independent fractional-density fade.");
 
+        foreach (int subdivisions in new[] { 0, 2, 5 })
+        {
+            AssertSolidRows(Render(subdivisions, 1, .5f, BladePixelWidth, 0f));
+            Color[] capped = Render(subdivisions, 1, 1f, .25f, BladePixelWidth);
+            AssertSolidRows(capped);
+            Assert.That(CoveredArea(capped), Is.EqualTo(BladePixelWidth * BladePixelHeight).Within(4f),
+                "An unresolved opaque blade retains its full cap footprint through its tip, in every geometry LOD.");
+            Assert.That(CoveredArea(Render(subdivisions, 1, 0f, .25f, BladePixelWidth)), Is.Zero,
+                "The cap cannot resurrect zero density.");
+        }
+
         material.SetFloat("_RandomNormal", 0f);
         Color[] unresolvedBase = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
         Color[] resolvedBase = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        // Center the one-pixel base on a pixel center so its narrow triangular
+        // interior is nonempty, rather than aligning both base edges to centers.
+        Vector3 fadedRoot = new Vector3(1f / Size, -.5f, 2f);
+        Color[] fadedBase = Render(0, 1, .0625f, BladePixelWidth, 0f,
+            rootPosition: fadedRoot, directionalAmbient: true);
         material.SetFloat("_RandomNormal", 1f);
         Color[] unresolvedDetail = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
         Color[] resolvedDetail = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        Color[] fadedDetail = Render(0, 1, .0625f, BladePixelWidth, 0f,
+            rootPosition: fadedRoot, directionalAmbient: true);
+        Assert.That(CoveredArea(fadedBase), Is.GreaterThan(0f));
+        AssertSamePixels(fadedBase, fadedDetail,
+            "Density-scaled physical width must filter detail when a resolved blade fades below one pixel.");
         Assert.That(CoveredArea(unresolvedBase), Is.GreaterThan(0f));
         AssertSamePixels(unresolvedBase, unresolvedDetail,
             "A widened quarter-pixel physical blade must filter its unresolved normal detail, rather than use the expanded width.");
@@ -303,6 +324,27 @@ public sealed class GrassAntialiasingRenderingTests
         Vector2 range = CoveredColorRange(pixels);
         Assert.That(range.x, Is.EqualTo(expected).Within(tolerance));
         Assert.That(range.y, Is.EqualTo(expected).Within(tolerance));
+    }
+
+    private static void AssertSolidRows(Color[] pixels)
+    {
+        int checkedInterior = 0, coveredRows = 0;
+        for (int y = 0; y < Size; y++)
+        {
+            int left = Size, right = -1;
+            for (int x = 0; x < Size; x++)
+                if (pixels[y * Size + x].a > .5f) { left = Mathf.Min(left, x); right = Mathf.Max(right, x); }
+            if (right < left) continue;
+            coveredRows++;
+            for (int x = left + 1; x < right; x++)
+            {
+                checkedInterior++;
+                Assert.That(pixels[y * Size + x].a, Is.GreaterThan(.5f),
+                    "Fractional density must fade a solid geometric blade, not puncture its interior into blade-local cells.");
+            }
+        }
+        Assert.That(coveredRows, Is.GreaterThan(5));
+        Assert.That(checkedInterior, Is.GreaterThan(5), "A nonempty multi-pixel interior is the assertion domain.");
     }
 
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,

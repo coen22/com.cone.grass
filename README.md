@@ -89,9 +89,11 @@ Ground color is captured in a shared XZ projection. Vertically overlapping surfa
 
 ## Projected blade stability
 
-Minimum Blade Width is measured in projected pixels, independent of world scale. With MSAA, widening keeps proportional A2C coverage. With AA disabled, a nonzero blade retains the widened opaque silhouette; it is intentionally denser than a subpixel blade rather than clipping the width compensation into holes. Density fade keeps its separate, world-seeded pattern. Zero physical width remains invisible. The opaque color, contact and motion paths share that clipping policy, while A2C contact depth retains analytic fractional edge coverage.
+Minimum Blade Width is measured in projected pixels, independent of world scale. With MSAA, widening keeps proportional A2C coverage. With AA disabled, a nonzero blade retains the widened opaque silhouette; it is intentionally denser than a subpixel blade rather than clipping the width compensation into holes. Compute population decisions keep their stable world seed. An opaque transition blade fades by scaling its already expanded width, height and curvature by the square root of coverage; this scales the blade silhouette instead of puncturing it into fragment cells, while perspective and row-facing geometry can change the resulting projected area. The final fade can become subpixel and zero density stays absent. Zero physical width remains invisible. The opaque color, contact and motion paths share that clipping policy, while A2C contact depth retains analytic fractional edge coverage.
 
-Seeded normal detail and specular strength fade over one to two pixels of the physical tapered width before expansion. Resolved blades retain their detail; widening a tiny blade does not make its lighting detail resolved. This policy does not introduce AA or temporal history and does not guarantee that the remaining binary raster edges and tips cannot crawl. Validate slow camera pans at the actual target resolution with AA disabled, identical density/lighting and a constant-color coverage control. Native GPU cost and temporal measurements remain necessary.
+Physically unresolved opaque blades use a low-frequency cap instead of an ever-narrowing apex. Its span fades continuously to the pointed form as the physical root width moves from the requested pixel minimum to twice that minimum. The extra tip vertex/triangle is shared across LODs; A2C and resolved pointed tips collapse it to the same old silhouette. Previous-frame motion carries the exact previous cap and reconstructs actual trapezoid triangles in material coordinates that remap current and previous cap widths. This adds one vertex and triangle per LOD; its cost is derived and must be measured.
+
+The cap decision uses the physical root width before density scaling. Seeded normal detail and specular strength fade over one to two pixels of the physical tapered width after density scaling and before expansion. Resolved blades retain their detail; widening a tiny blade does not make its lighting detail resolved. This policy does not introduce AA or temporal history and does not guarantee that the remaining binary raster edges and tips cannot crawl. Validate slow camera pans at the actual target resolution with AA disabled, identical density/lighting and a constant-color coverage control. Native GPU cost and temporal measurements remain necessary.
 
 ## Collider-driven interaction
 
@@ -158,8 +160,8 @@ Evaluate grass quality with **TAA disabled**. New renderer settings use **Motion
 - Fractional population coverage near density transitions.
 - Real geometry LOD with a stable transition band.
 - A projected **Minimum Pixel Width**, with proportional coverage compensation so widening thin blades does not simply make the field denser.
-- Native triangle-edge coverage under MSAA; analytic blade-edge coverage for the single-sample fallback.
-- **Alpha to Coverage** enabled only when the actual camera target uses MSAA; deterministic coverage discard otherwise.
+- Native triangle-edge coverage under MSAA; solid geometric density fading and an unresolved-tip cap with AA disabled.
+- **Alpha to Coverage** enabled only when the actual camera target uses MSAA; no blade-cell fragment discard in the opaque path.
 - A distance range that fades narrow specular highlights.
 - Shared deformation and per-blade density/width coverage for color and contact depth.
 
@@ -167,7 +169,7 @@ Width compensation uses the original-to-expanded width ratio at every positive w
 
 Perspective blades face the viewing ray at each blade row, including roots visible behind the camera in world XZ during steep downward views. Orthographic blades keep parallel facing directions. The shared deformation also keeps contact depth and optional previous-frame motion geometry consistent with this orientation.
 
-Blade color, contact depth and optional motion passes render both sides. Wind can reverse a triangle's projected winding at steep camera angles, especially for the one-triangle far LOD; both sides retain the same authored blade normals so the reversal does not introduce a lighting switch. Missing or released wind textures use the existing gray fallback until their producer supplies a ready texture.
+Blade color, contact depth and optional motion passes render both sides. Wind can reverse a triangle's projected winding at steep camera angles, especially for the pointed far LOD; both sides retain the same authored blade normals so the reversal does not introduce a lighting switch. Missing or released wind textures use the existing gray fallback until their producer supplies a ready texture.
 
 Wind RenderTextures must supply a single-sample texture binding. An unresolved multisampled source (`antiAliasing > 1` with `bindTextureMS` enabled) uses that same fallback; automatically resolved MSAA sources remain eligible. The renderer leaves source storage and material assignments under producer ownership.
 
