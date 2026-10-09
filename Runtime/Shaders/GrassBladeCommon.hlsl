@@ -100,6 +100,9 @@ struct GrassVertexData
     float3 pivotWS;
     half3 normalWS;
     half3 stableNormalWS;
+    // The blade's direction at its root and at this height, curvature and wind included.
+    half3 rootTangentWS;
+    half3 tangentWS;
     float physicalPixelWidth;
     float2 mapUV;
     float2 shapeCoordinates;
@@ -297,13 +300,27 @@ float3 GrassDirectionAtHeight(GrassRootData root, float height)
     return SafeNormalize(direction);
 }
 
+float3 GrassCenterAtHeight(GrassRootData root, float height)
+{
+    float3 center = root.pivot + GrassDirectionAtHeight(root, height) * height * root.height;
+    center.xz += height * height * root.curvature;
+    return center;
+}
+
+// The blade's unit direction at a fraction of its height: the slope of its centre line.
+half3 GrassTangentAtHeight(GrassRootData root, float height)
+{
+    float low = saturate(height - 0.01), high = saturate(height + 0.01);
+    float3 tangent = GrassCenterAtHeight(root, high) - GrassCenterAtHeight(root, low);
+    return dot(tangent, tangent) > 1e-12 ? half3(normalize(tangent)) : half3(GrassDirectionAtHeight(root, height));
+}
+
 void EvaluateGrassRow(GrassRootData root, GrassViewParameters view, float height,
     out float3 center, out float3 halfSpan)
 {
     height = saturate(height);
     float3 bladeDirection = GrassDirectionAtHeight(root, height);
-    center = root.pivot + bladeDirection * height * root.height;
-    center.xz += height * height * root.curvature;
+    center = GrassCenterAtHeight(root, height);
     // Perspective rays vary across the image. Facing every blade along the
     // camera's central ray can backface-cull visible roots behind the camera in
     // world XZ when looking down. Orthographic rays remain parallel instead.
@@ -325,14 +342,19 @@ float3 EvaluateGrassPosition(GrassRootData root, GrassViewParameters view, float
     return center + (uv.x * 2.0 - 1.0) * halfSpan;
 }
 
-GrassRootData BuildCurrentGrassRoot(float4 positionData)
+GrassRootData BuildGrassRootForView(float4 positionData, GrassViewParameters view)
 {
     GrassShapeParameters shape = GrassCurrentShape();
     float2 mapUV = GrassWorldToMapUV(positionData.xyz);
     float4 slope = SAMPLE_TEXTURE2D_LOD(_GrassSlopeRT, sampler_GrassSlopeRT, mapUV, 0);
     float2 windUV = positionData.xz * shape.windST.xy + shape.windST.zw + shape.windMotion.xy * shape.windMotion.w;
     float2 wind = SAMPLE_TEXTURE2D_LOD(_WindTexture, sampler_WindTexture, windUV, 0).rg * 2.0 - 1.0;
-    return BuildGrassRoot(positionData, shape, GrassCurrentView(), slope, wind, mapUV);
+    return BuildGrassRoot(positionData, shape, view, slope, wind, mapUV);
+}
+
+GrassRootData BuildCurrentGrassRoot(float4 positionData)
+{
+    return BuildGrassRootForView(positionData, GrassCurrentView());
 }
 
 GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
@@ -356,6 +378,8 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     float3 stableNormal = GrassDirectionAtHeight(root, blade.height) - view.cameraForward * 0.5;
     blade.stableNormalWS = SafeNormalize(stableNormal);
     blade.normalWS = SafeNormalize(stableNormal + _RandomNormal * normalJitter);
+    blade.rootTangentWS = GrassTangentAtHeight(root, 0.0);
+    blade.tangentWS = GrassTangentAtHeight(root, blade.height);
     // This coordinate remains linear across the tapered mesh, including its final
     // triangle, so the same analytic edge coverage works for every geometry LOD.
     blade.shapeCoordinates = float2((input.uv.x - 0.5) * (1.0 - blade.height), blade.height);
@@ -380,17 +404,28 @@ float GrassCanopyAreaAbove(float areaIndex, float bladeHeight)
     return areaIndex * above * above;
 }
 
-// Fraction of light from a direction with this upward component that passes the blades above a
-// point (Beer-Lambert). Near-vertical blades project (2/pi) sin(theta) of their area toward a
-// direction at zenith angle theta, so the optical depth is (2/pi) tan(theta) times the area above.
-half GrassCanopyTransmission(float areaAbove, float upward)
+// Fraction of light from a direction that passes the blades above a point (Beer-Lambert). Near-vertical
+// blades project (2/pi) sin(theta) of their area toward a direction at zenith angle theta, and the ray
+// crosses the canopy, a layer on the ground, along 1 / (n . l) of its depth for the ground normal n. On
+// level ground the optical depth is (2/pi) tan(theta) times the area above.
+half GrassCanopyTransmission(float areaAbove, float3 direction, float3 groundNormal)
 {
     if (areaAbove <= 0.0)
         return 1.0h;
-    if (upward <= 0.0001)
+    float across = dot(groundNormal, direction);
+    if (across <= 0.0001)
         return 0.0h;
-    float tangent = sqrt(saturate(1.0 - upward * upward)) / upward;
-    return exp(-0.6366198 * tangent * areaAbove);
+    float sine = sqrt(saturate(1.0 - direction.y * direction.y));
+    return exp(-0.6366198 * sine / across * areaAbove);
+}
+
+// Turns a normal by the rotation that takes unit direction a to unit direction b (Rodrigues).
+// A blade never folds back onto itself, so a and b are never opposite.
+half3 GrassTurn(half3 normal, half3 a, half3 b)
+{
+    float3 axis = cross(a, b);
+    float cosine = dot(a, b);
+    return SafeNormalize(normal * cosine + cross(axis, normal) + axis * (dot(axis, normal) / max(1.0 + cosine, 1e-4)));
 }
 
 // The cosine-weighted mean of that transmission over the sky: the ambient a point still receives.
