@@ -95,6 +95,62 @@ public sealed class GrassAntialiasingRenderingTests
         Assert.That(CoveredArea(first), Is.GreaterThan(0f).And.LessThan(BladePixelWidth * BladePixelHeight * 0.5f));
         AssertSamePixels(first, later,
             "With wind disabled, the single-sample coverage pattern must stay fixed without temporal accumulation.");
+
+        Color[] full = Render(0, 1, 1f, BladePixelWidth, BladePixelWidth);
+        Color[] widened = Render(0, 1, 1f, .25f, BladePixelWidth);
+        Assert.That(CoveredArea(full), Is.GreaterThan(0f));
+        AssertSamePixels(full, widened,
+            "An opaque projected-width floor must retain its expanded silhouette instead of dithering it back into holes.");
+        Assert.That(CoveredArea(first), Is.LessThan(CoveredArea(full)),
+            "Retaining expanded width must not remove the independent fractional-density fade.");
+
+        // Fractional density scales width and height by sqrt(coverage). A
+        // four-pixel base at .5 coverage spans only 2.828 pixels around the
+        // pixel boundary and has no sample between its two covered extremes.
+        // Use an eight-pixel witness so even .25 coverage has a four-pixel
+        // base and a meaningful interior. Lower density may validly have no
+        // multi-pixel interior; zero density must still stay absent.
+        const float solidDensityPixelWidth = BladePixelWidth * 2f;
+        foreach (int subdivisions in new[] { 0, 2, 5 })
+        {
+            foreach (float coverage in new[] { .25f, .5f, .75f })
+                AssertSolidRows(Render(subdivisions, 1, coverage, solidDensityPixelWidth, 0f));
+            Assert.That(CoveredArea(Render(subdivisions, 1, 0f, solidDensityPixelWidth, 0f)), Is.Zero,
+                "The solid fractional-density witness cannot resurrect zero density.");
+            Color[] capped = Render(subdivisions, 1, 1f, .25f, BladePixelWidth);
+            AssertSolidRows(capped);
+            Assert.That(CoveredArea(capped), Is.EqualTo(BladePixelWidth * BladePixelHeight).Within(4f),
+                "An unresolved opaque blade retains its full cap footprint through its tip, in every geometry LOD.");
+            Assert.That(CoveredArea(Render(subdivisions, 1, 0f, .25f, BladePixelWidth)), Is.Zero,
+                "The cap cannot resurrect zero density.");
+        }
+
+        material.SetFloat("_RandomNormal", 0f);
+        Color[] unresolvedBase = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
+        Color[] resolvedBase = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        // Center the one-pixel base on a pixel center so its narrow triangular
+        // interior is nonempty, rather than aligning both base edges to centers.
+        Vector3 fadedRoot = new Vector3(1f / Size, -.5f, 2f);
+        Color[] fadedBase = Render(0, 1, .0625f, BladePixelWidth, 0f,
+            rootPosition: fadedRoot, directionalAmbient: true);
+        material.SetFloat("_RandomNormal", 1f);
+        Color[] unresolvedDetail = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
+        Color[] resolvedDetail = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
+        Color[] fadedDetail = Render(0, 1, .0625f, BladePixelWidth, 0f,
+            rootPosition: fadedRoot, directionalAmbient: true);
+        Assert.That(CoveredArea(fadedBase), Is.GreaterThan(0f));
+        AssertSamePixels(fadedBase, fadedDetail,
+            "Density-scaled physical width must filter detail when a resolved blade fades below one pixel.");
+        Assert.That(CoveredArea(unresolvedBase), Is.GreaterThan(0f));
+        AssertSamePixels(unresolvedBase, unresolvedDetail,
+            "A widened quarter-pixel physical blade must filter its unresolved normal detail, rather than use the expanded width.");
+        float resolvedDifference = 0f;
+        for (int index = 0; index < resolvedBase.Length; index++)
+            if (resolvedBase[index].a > .5f && resolvedDetail[index].a > .5f)
+                resolvedDifference = Mathf.Max(resolvedDifference,
+                    Mathf.Abs(resolvedBase[index].r - resolvedDetail[index].r));
+        Assert.That(resolvedDifference, Is.GreaterThan(1f / 255f),
+            "Resolved physical blades must retain measurable seeded detail; globally disabling normal randomness is not filtering.");
     }
 
     [TestCase(1, 4f, 0f, 1f / 16384f)]
@@ -198,10 +254,113 @@ public sealed class GrassAntialiasingRenderingTests
         }
     }
 
+    [Test]
+    public void GroundMatchedRootsUseNativeTerrainDielectricDiffuseEnergy()
+    {
+        material.SetFloat("_GroundBlendStrength", 1f);
+        material.SetFloat("_GroundBlendHeight", 1f);
+        Color[] pixels = Render(0, 1, 1f, BladePixelWidth, 0f, groundTexture: Texture2D.whiteTexture);
+        float darkest = float.PositiveInfinity;
+        foreach (Color pixel in pixels)
+            if (pixel.a > .5f) darkest = Mathf.Min(darkest, pixel.r);
+        // URP BRDF.hlsl uses dielectric reflectance .04. The first raster row
+        // is at most 1/64 of this blade's height. Allow its gradient, one RGBA8
+        // readback code and one half-float rounding step, rather than a fitted limit.
+        const float reflectance = .04f;
+        float tolerance = 1f / 255f + 1f / 2048f +
+            reflectance * Mathf.SmoothStep(0f, 1f, 1f / BladePixelHeight);
+        Assert.That(darkest, Is.EqualTo(1f - reflectance).Within(tolerance),
+            "A ground-matched root must not use the full albedo where TerrainLit uses dielectric diffuse energy.");
+
+        Assert.That(material.GetFloat("_GroundBlendFloor"), Is.Zero,
+            "Existing materials must retain the original root-to-tip transition by default.");
+        material.SetColor("_Color", Color.black);
+        material.SetColor("_AOColor", Color.black);
+        const float lightingWidth = 32f;
+        Color[] legacy = Render(0, 1, 1f, lightingWidth, 0f, groundTexture: Texture2D.whiteTexture);
+        Vector2 legacyRange = CoveredColorRange(legacy);
+        Assert.That(legacyRange.x, Is.LessThan(1f / BladePixelHeight),
+            "The wide blade must include covered tip pixels where the legacy ground fade approaches zero.");
+
+        const float floor = .9f;
+        material.SetFloat("_GroundBlendFloor", floor);
+        Vector2 bodyRange = CoveredColorRange(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture));
+        // Black authored albedo isolates ground weight. Dielectric diffuse energy
+        // is 1 - reflectance * weight; thus the minimum body response is derived
+        // from floor * (1 - reflectance * floor), rather than a fitted image bound.
+        float bodyMinimum = floor * (1f - reflectance * floor);
+        const float readbackTolerance = 1f / 255f + 1f / 2048f;
+        Assert.That(bodyRange.x, Is.EqualTo(bodyMinimum).Within(readbackTolerance),
+            "The body/tip must retain the requested ground colour and its matching diffuse energy.");
+        Assert.That(bodyRange.y, Is.EqualTo(1f - reflectance).Within(tolerance));
+        Assert.That(bodyRange.y - bodyRange.x,
+            Is.GreaterThan(((1f - reflectance) - bodyMinimum) * .5f),
+            "The nonempty root and tip domains must still retain the height transition above the floor.");
+
+        material.SetFloat("_GroundBlendFloor", 1f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 1f - reflectance, readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", .25f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), .25f * (1f - reflectance * .25f), readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", 0f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
+        material.SetFloat("_GroundBlendStrength", 1f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f), 0f, readbackTolerance);
+        material.SetFloat("_GroundBlendHeight", 0f);
+        AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
+            groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
+    }
+
+    private static Vector2 CoveredColorRange(Color[] pixels)
+    {
+        float darkest = float.PositiveInfinity, brightest = float.NegativeInfinity;
+        int covered = 0;
+        foreach (Color pixel in pixels)
+        {
+            if (pixel.a <= .5f) continue;
+            covered++;
+            darkest = Mathf.Min(darkest, pixel.r);
+            brightest = Mathf.Max(brightest, pixel.r);
+        }
+        Assert.That(covered, Is.GreaterThan(0), "Lighting assertions require actual covered blade pixels.");
+        return new Vector2(darkest, brightest);
+    }
+
+    private static void AssertConstantCoveredColor(Color[] pixels, float expected, float tolerance)
+    {
+        Vector2 range = CoveredColorRange(pixels);
+        Assert.That(range.x, Is.EqualTo(expected).Within(tolerance));
+        Assert.That(range.y, Is.EqualTo(expected).Within(tolerance));
+    }
+
+    private static void AssertSolidRows(Color[] pixels)
+    {
+        int checkedInterior = 0, coveredRows = 0;
+        for (int y = 0; y < Size; y++)
+        {
+            int left = Size, right = -1;
+            for (int x = 0; x < Size; x++)
+                if (pixels[y * Size + x].a > .5f) { left = Mathf.Min(left, x); right = Mathf.Max(right, x); }
+            if (right < left) continue;
+            coveredRows++;
+            for (int x = left + 1; x < right; x++)
+            {
+                checkedInterior++;
+                Assert.That(pixels[y * Size + x].a, Is.GreaterThan(.5f),
+                    "Fractional density must fade a solid geometric blade, not puncture its interior into blade-local cells.");
+            }
+        }
+        Assert.That(coveredRows, Is.GreaterThan(5));
+        Assert.That(checkedInterior, Is.GreaterThan(5), "A nonempty multi-pixel interior is the assertion domain.");
+    }
+
     private Color[] Render(int subdivisions, int samples, float coverage, float originalPixelWidth,
         float minimumPixelWidth, float time = 0f, Vector3? rootPosition = null,
         Matrix4x4? cameraToWorld = null, bool perspective = false, Texture windTexture = null,
-        float orthographicScale = 1f)
+        float orthographicScale = 1f, Texture groundTexture = null, bool directionalAmbient = false)
     {
         var descriptor = new RenderTextureDescriptor(Size, Size)
         {
@@ -238,26 +397,16 @@ public sealed class GrassAntialiasingRenderingTests
             material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
             material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
 
-            var properties = new MaterialPropertyBlock();
-            properties.SetBuffer("_GrassPositions", positions);
-            properties.SetInteger("_GrassInstanceOffset", 0);
-            properties.SetInteger("_GrassUseExplicitTime", 1);
-            properties.SetFloat("_GrassTime", time);
-            properties.SetFloat("_DrawDistance", 100f);
-            properties.SetFloat("_TextureUpdateThreshold", 1f);
-            properties.SetVector("_CenterPos", Vector4.zero);
-            properties.SetTexture("_GrassColorRT", empty);
-            properties.SetTexture("_GrassGroundColorRT", empty);
-            properties.SetTexture("_GrassSlopeRT", empty);
-            properties.SetTexture("_GrassHeightMapRT", empty);
-            properties.SetTexture("_WindTexture", windTexture ? windTexture : Texture2D.grayTexture);
-            properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));
-            properties.SetVector("_GrassSHBr", Vector4.zero);
-            properties.SetVector("_GrassSHBg", Vector4.zero);
-            properties.SetVector("_GrassSHBb", Vector4.zero);
-            properties.SetVector("_GrassSHC", Vector4.zero);
+            MaterialPropertyBlock properties = CreateDrawProperties(positions, empty, windTexture, groundTexture, time);
+            if (directionalAmbient)
+            {
+                // Identical grayscale SH channels isolate normal response with
+                // no main light, fog, ground blend or albedo-contrast change.
+                var ambient = new Vector4(.5f, 0f, 0f, .5f);
+                properties.SetVector("_GrassSHAr", ambient);
+                properties.SetVector("_GrassSHAg", ambient);
+                properties.SetVector("_GrassSHAb", ambient);
+            }
 
             Matrix4x4 cameraWorld = cameraToWorld ?? Matrix4x4.identity;
             Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) * cameraWorld.inverse;
@@ -265,30 +414,7 @@ public sealed class GrassAntialiasingRenderingTests
                 ? Matrix4x4.Perspective(60f, 1f, 0.1f, 10f)
                 : Matrix4x4.Ortho(-orthographicScale, orthographicScale,
                     -orthographicScale, orthographicScale, 0.1f, 10f), true);
-            string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
-            var previousMatrices = new Matrix4x4[matrixNames.Length];
-            for (int index = 0; index < matrixNames.Length; index++)
-                previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
-            string[] vectorNames =
-            {
-                "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
-                "_MainLightColor", "_MainLightPosition", "unity_FogColor", "unity_FogParams", "_Time", "_TimeParameters"
-            };
-            Vector4[] vectors =
-            {
-                cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
-                new Vector4(2f * orthographicScale, 2f * orthographicScale, 0f, perspective ? 0f : 1f),
-                new Vector4(1f, 0.1f, 10f, 0.1f),
-                Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
-                new Vector4(time / 20f, time, time * 2f, time * 3f),
-                new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
-            };
-            var previousVectors = new Vector4[vectorNames.Length];
-            for (int index = 0; index < vectorNames.Length; index++)
-            {
-                previousVectors[index] = Shader.GetGlobalVector(vectorNames[index]);
-                commands.SetGlobalVector(vectorNames[index], vectors[index]);
-            }
+            System.Action restoreGlobals = RecordViewGlobals(commands, cameraWorld, view, projection, orthographicScale, perspective, time);
             commands.SetRenderTarget(target);
             commands.SetViewport(new Rect(0f, 0f, Size, Size));
             commands.ClearRenderTarget(false, true, Color.clear);
@@ -300,10 +426,7 @@ public sealed class GrassAntialiasingRenderingTests
                 commands.ResolveAntiAliasedSurface(target, resolved);
             else
                 commands.CopyTexture(target, resolved);
-            for (int index = 0; index < matrixNames.Length; index++)
-                commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
-            for (int index = 0; index < vectorNames.Length; index++)
-                commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+            restoreGlobals();
             GL.sRGBWrite = false;
             Graphics.ExecuteCommandBuffer(commands);
 
@@ -314,7 +437,7 @@ public sealed class GrassAntialiasingRenderingTests
             foreach (Color pixel in pixels)
             {
                 Assert.That(pixel.g, Is.EqualTo(pixel.r).Within(1f / 255f),
-                    "The configured blade must be white, including at covered samples; an error shader is not a valid mask.");
+                    "The configured blade must be grayscale, including at covered samples; an error shader is not a valid mask.");
                 Assert.That(pixel.b, Is.EqualTo(pixel.r).Within(1f / 255f));
             }
             return pixels;
@@ -329,6 +452,69 @@ public sealed class GrassAntialiasingRenderingTests
             if (resolved) Object.DestroyImmediate(resolved);
             if (readback) Object.DestroyImmediate(readback);
         }
+    }
+
+    private static MaterialPropertyBlock CreateDrawProperties(GraphicsBuffer positions, Texture empty,
+        Texture windTexture, Texture groundTexture, float time)
+    {
+        var properties = new MaterialPropertyBlock();
+        properties.SetBuffer("_GrassPositions", positions);
+        properties.SetInteger("_GrassInstanceOffset", 0);
+        properties.SetInteger("_GrassUseExplicitTime", 1);
+        properties.SetFloat("_GrassTime", time);
+        properties.SetFloat("_DrawDistance", 100f);
+        properties.SetFloat("_TextureUpdateThreshold", 1f);
+        properties.SetVector("_CenterPos", Vector4.zero);
+        properties.SetTexture("_GrassColorRT", empty);
+        properties.SetTexture("_GrassGroundColorRT", groundTexture ? groundTexture : empty);
+        properties.SetTexture("_GrassSlopeRT", empty);
+        properties.SetTexture("_GrassHeightMapRT", empty);
+        properties.SetTexture("_WindTexture", windTexture ? windTexture : Texture2D.grayTexture);
+        properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHAg", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHAb", new Vector4(0f, 0f, 0f, 1f));
+        properties.SetVector("_GrassSHBr", Vector4.zero);
+        properties.SetVector("_GrassSHBg", Vector4.zero);
+        properties.SetVector("_GrassSHBb", Vector4.zero);
+        properties.SetVector("_GrassSHC", Vector4.zero);
+
+        return properties;
+    }
+
+    private static System.Action RecordViewGlobals(CommandBuffer commands, Matrix4x4 cameraWorld,
+        Matrix4x4 view, Matrix4x4 projection, float orthographicScale, bool perspective, float time)
+    {
+        string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
+        var previousMatrices = new Matrix4x4[matrixNames.Length];
+        for (int index = 0; index < matrixNames.Length; index++)
+            previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
+        string[] vectorNames =
+        {
+            "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
+            "_MainLightColor", "_MainLightPosition", "unity_FogColor", "unity_FogParams", "_Time", "_TimeParameters"
+        };
+        Vector4[] vectors =
+        {
+            cameraWorld.GetColumn(3), new Vector4(Size, Size, 1f + 1f / Size, 1f + 1f / Size),
+            new Vector4(2f * orthographicScale, 2f * orthographicScale, 0f, perspective ? 0f : 1f),
+            new Vector4(1f, 0.1f, 10f, 0.1f),
+            Vector4.zero, new Vector4(0f, 1f, 0f, 0f), Vector4.one, Vector4.zero,
+            new Vector4(time / 20f, time, time * 2f, time * 3f),
+            new Vector4(time, Mathf.Sin(time), Mathf.Cos(time), 0f)
+        };
+        var previousVectors = new Vector4[vectorNames.Length];
+        for (int index = 0; index < vectorNames.Length; index++)
+        {
+            previousVectors[index] = Shader.GetGlobalVector(vectorNames[index]);
+            commands.SetGlobalVector(vectorNames[index], vectors[index]);
+        }
+        return () =>
+        {
+            for (int index = 0; index < matrixNames.Length; index++)
+                commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
+            for (int index = 0; index < vectorNames.Length; index++)
+                commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+        };
     }
 
     private static float CoveredArea(Color[] pixels)

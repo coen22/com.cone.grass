@@ -1,6 +1,6 @@
 {
   "name": "com.cone.grass",
-  "version": "2.0.0-preview.2",
+  "version": "2.0.0-preview.3",
   "displayName": "Infinite Grass",
   "description": "GPU procedural grass for Unity 6.6 URP with authored density areas, geometric LOD, ground blending, and optional contact shadows.",
   "unity": "6000.6",

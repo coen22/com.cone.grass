@@ -23,6 +23,7 @@ Shader "InfiniteGrass/GrassBladeShader"
         [Header(Ground Blending)][Space]
         _GroundBlendStrength("Ground Color Blend", Range(0, 1)) = 1
         _GroundBlendHeight("Ground Blend Height (Blade Fraction)", Range(0, 1)) = 0.25
+        _GroundBlendFloor("Ground Blend Along Whole Blade", Range(0, 1)) = 0
         [Toggle(_GRASS_GROUND_NORMAL)] _UseGroundNormal("Match Ground Normal at Roots", Float) = 0
 
         [Header(Lighting)][Space]
@@ -100,6 +101,7 @@ Shader "InfiniteGrass/GrassBladeShader"
                 nointerpolation float coverage : TEXCOORD4;
                 nointerpolation uint seed : TEXCOORD5;
                 nointerpolation half4 groundColor : TEXCOORD6;
+                float4 stableNormalAndPhysicalWidth : TEXCOORD8;
                 #if defined(_GRASS_GROUND_NORMAL)
                     nointerpolation half3 groundNormal : TEXCOORD7;
                 #endif
@@ -130,6 +132,7 @@ Shader "InfiniteGrass/GrassBladeShader"
                     max(_SpecularFadeStart + 0.001, _SpecularFadeEnd), blade.cameraDistance);
                 half specular = blade.height * 0.12h * (1.0h - saturate(colorModifier.a)) * specularFade;
                 output.normalWSAndSpecular = half4(blade.normalWS, specular);
+                output.stableNormalAndPhysicalWidth = float4(blade.stableNormalWS, blade.physicalPixelWidth);
 
                 #if defined(_GRASS_GROUND_NORMAL)
                     output.groundNormal = GrassGroundNormal(blade.mapUV);
@@ -183,9 +186,20 @@ Shader "InfiniteGrass/GrassBladeShader"
                 half alpha = GrassForwardCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 half groundBlend = GrassGroundBlend(input.shapeCoordinates.y, input.groundColor.a);
                 half3 albedo = lerp(input.grassAlbedo, input.groundColor.rgb, groundBlend);
+                // TerrainLit reserves the dielectric reflectance from diffuse energy.
+                // Match that response at roots for both the ambient and direct light.
+                albedo *= lerp(1.0h, kDielectricSpec.a, groundBlend);
                 // This stylized blade/ground normal is independent of winding.
                 // Flipping it on a bent back face would create a lighting seam.
-                half3 normalWS = SafeNormalize(input.normalWSAndSpecular.xyz);
+                // Filter unresolved lighting using the physical tapered width,
+                // not the expanded raster width. One-to-two pixels is the
+                // reconstruction transition; resolved detail stays unchanged.
+                float physicalPixels = input.stableNormalAndPhysicalWidth.w *
+                    saturate(1.0 - input.shapeCoordinates.y);
+                half detailWeight = smoothstep(1.0, 2.0, physicalPixels);
+                half3 normalWS = SafeNormalize(lerp(input.stableNormalAndPhysicalWidth.xyz,
+                    input.normalWSAndSpecular.xyz, detailWeight));
+                half specularStrength = input.normalWSAndSpecular.w * detailWeight;
                 #if defined(_GRASS_GROUND_NORMAL)
                     normalWS = SafeNormalize(lerp(normalWS, input.groundNormal, groundBlend));
                 #endif
@@ -199,7 +213,7 @@ Shader "InfiniteGrass/GrassBladeShader"
                 Light mainLight = GrassMainLight(inputData.positionWS);
                 half3 lighting = GrassAmbientLight(normalWS) * albedo;
                 lighting += GrassDirectLight(mainLight, normalWS, inputData.viewDirectionWS,
-                    albedo, input.normalWSAndSpecular.w, groundBlend);
+                    albedo, specularStrength, groundBlend);
 
                 // Forward+ supplies a spatial light list without MeshRenderer light indices.
                 // The material keyword compiles these loops out in the default quality mode.
@@ -210,13 +224,13 @@ Shader "InfiniteGrass/GrassBladeShader"
                         CLUSTER_LIGHT_LOOP_SUBTRACTIVE_LIGHT_CHECK
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
                         lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, input.normalWSAndSpecular.w, groundBlend);
+                            albedo, specularStrength, groundBlend);
                     }
                     uint pixelLightCount = GetAdditionalLightsCount();
                     LIGHT_LOOP_BEGIN(pixelLightCount)
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
                         lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, input.normalWSAndSpecular.w, groundBlend);
+                            albedo, specularStrength, groundBlend);
                     LIGHT_LOOP_END
                 #endif
 

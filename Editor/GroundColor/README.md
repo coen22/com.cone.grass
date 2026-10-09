@@ -15,7 +15,7 @@ The editor shader directly includes the installed URP package's `TerrainLitInput
 - The material's active `_TERRAIN_BLEND_HEIGHT` keyword. Changing `_EnableHeightBlend` from a script also requires updating the native material's keyword, as it does for the terrain itself.
 - Original control-group weight after the native height/density normalization, followed by additive composition of groups.
 
-The result is the material's blended albedo. Lighting, shadowing, terrain normal maps, decals, and custom shader effects are outside this capture. Custom terrain shaders, including Shader Graph terrain variants and MicroSplat, are rejected explicitly; use their final-albedo output as a ground-color map instead.
+The result is the material's blended albedo. Lighting, shadowing, terrain normal maps, decals, and custom shader effects are outside this capture. Custom shaders that retain the unmodified TerrainLit painted-albedo calculation can explicitly declare `"GrassAlbedo" = "TerrainLit"` in their SubShader tags. This opts into the same layer/remap/height-blend contract and requires `_HeightTransition`; it does not capture post-light effects such as Alice's footprint darkening or puddles. The compatibility query searches all SubShaders, so it also works before the first URP render has selected its active SubShader. Material override tags still take precedence and can decline the contract. Other custom terrain shaders, including Shader Graph terrain variants and MicroSplat, are rejected; use their final-albedo output as a ground-color map instead.
 
 The implementation follows the native forward albedo path rather than copying the basemap generator's different opacity-normalization shortcut. Source references:
 

@@ -16,6 +16,7 @@ internal static class GrassBatchRunReloadInventory
         "GrassAntialiasingRenderingTests.DensityAndMinimumWidthCompensationAttenuateTheSameExpandedGeometry(System.Single,System.Single)",
         "GrassAntialiasingRenderingTests.DownwardPerspectiveViewKeepsVisibleBladesOnBothSidesOfTheCamera(System.Int32)",
         "GrassAntialiasingRenderingTests.FullBladeCoveragePreservesNativeMsaaSilhouetteArea(System.Int32)",
+        "GrassAntialiasingRenderingTests.GroundMatchedRootsUseNativeTerrainDielectricDiffuseEnergy()",
         "GrassAntialiasingRenderingTests.ProjectedCoverageIsInvariantToOrthographicWorldScale(System.Int32,System.Single,System.Single,System.Single)",
         "GrassAntialiasingRenderingTests.SingleSampleCoverageDoesNotChangeWhenOnlyTimeAdvances()",
         "GrassAntialiasingRenderingTests.WindBentBladesRemainVisibleWhenTheirTrianglesTurnAwayFromTheCamera(System.Int32)",

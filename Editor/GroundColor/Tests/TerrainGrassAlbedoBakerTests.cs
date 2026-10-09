@@ -11,7 +11,7 @@ using Object = UnityEngine.Object;
 
 /// <summary>Run in a URP Editor test project with a graphics device; these exercise the actual GPU bake and saved assets.</summary>
 [Category("GrassGPU")]
-public sealed class TerrainGrassAlbedoBakerTests
+public sealed partial class TerrainGrassAlbedoBakerTests
 {
     private readonly List<Object> owned = new List<Object>();
     private Terrain terrain;
@@ -432,6 +432,9 @@ public sealed class TerrainGrassAlbedoBakerTests
         terrain.materialTemplate = Own(new Material(custom));
         Assert.That(TerrainGrassAlbedoBaker.TryBake(terrain, 16, outputPath, out _, out string error), Is.False);
         StringAssert.Contains("native", error);
+        Assert.That(TerrainGrassAlbedoBaker.TryBakeTransient(terrain, 16, out Texture2D transient, out error), Is.False);
+        Assert.That(transient, Is.Null);
+        StringAssert.Contains("GrassAlbedo=TerrainLit", error);
         Assert.That(AssetDatabase.LoadMainAssetAtPath(outputPath), Is.Null);
         terrain.materialTemplate = Own(new Material(Shader.Find(TerrainGrassAlbedoBaker.NativeTerrainShaderName)));
         owned.Remove(layer.diffuseTexture);

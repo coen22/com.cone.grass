@@ -112,51 +112,58 @@ public sealed class GrassMotionHistoryTests
         var buffers = new List<GraphicsBuffer>();
         try
         {
-            Vector2[] uv = mesh.uv;
-            var materialCoordinates = new Vector2[uv.Length];
-            var worldPositions = new Vector3[uv.Length];
-            for (int i = 0; i < uv.Length; i++)
+            foreach (bool capped in new[] { false, true })
             {
-                materialCoordinates[i] = new Vector2((uv[i].x - 0.5f) * (1f - uv[i].y), uv[i].y);
-                worldPositions[i] = TestRowCenter(uv[i].y) + (uv[i].x * 2f - 1f) * TestRowSpan(uv[i].y);
-            }
-            var queries = new List<Vector4>();
-            var edges = new List<Vector4>();
-            var expected = new List<Vector3>();
-            int rows = subdivisions + 1;
-            for (int heightIndex = 1; heightIndex < 20; heightIndex++)
-            {
-                float height = heightIndex / 20f;
-                int row = Mathf.Min(Mathf.FloorToInt(height * rows), rows - 1);
-                float lower = row / (float)rows;
-                float upper = (row + 1) / (float)rows;
-                for (int across = 1; across < 10; across++)
+                Vector2[] uv = mesh.uv;
+                var materialCoordinates = new Vector2[uv.Length];
+                var worldPositions = new Vector3[uv.Length];
+                for (int i = 0; i < uv.Length; i++)
                 {
-                    var point = new Vector2((across / 10f - 0.5f) * (1f - height), height);
-                    queries.Add(new Vector4(point.x, point.y, lower, upper));
-                    edges.Add(TestRowCenter(lower));
-                    edges.Add(TestRowSpan(lower));
-                    edges.Add(TestRowCenter(upper));
-                    edges.Add(TestRowSpan(upper));
-                    expected.Add(SampleActualTriangles(point, materialCoordinates, worldPositions, mesh.triangles));
+                    materialCoordinates[i] = new Vector2((uv[i].x - 0.5f) * (capped ? 1f - .6f * uv[i].y : 1f - uv[i].y), uv[i].y);
+                    worldPositions[i] = TestRowCenter(uv[i].y) + (uv[i].x * 2f - 1f) * TestRowSpan(uv[i].y, capped);
                 }
+                var queries = new List<Vector4>();
+                var edges = new List<Vector4>();
+                var expected = new List<Vector3>();
+                int rows = subdivisions + 1;
+                for (int heightIndex = 1; heightIndex < 20; heightIndex++)
+                {
+                    float height = heightIndex / 20f;
+                    int row = Mathf.Min(Mathf.FloorToInt(height * rows), rows - 1);
+                    float lower = row / (float)rows;
+                    float upper = (row + 1) / (float)rows;
+                    for (int across = 1; across < 10; across++)
+                    {
+                        var point = new Vector2((across / 10f - 0.5f) * (capped ? 1f - .6f * height : 1f - height), height);
+                        queries.Add(new Vector4(point.x, point.y, lower, upper));
+                        edges.Add(TestRowCenter(lower));
+                        edges.Add(TestRowSpan(lower, capped));
+                        edges.Add(TestRowCenter(upper));
+                        edges.Add(TestRowSpan(upper, capped));
+                        expected.Add(SampleActualTriangles(point, materialCoordinates, worldPositions, mesh.triangles));
+                    }
+                }
+                GraphicsBuffer queryBuffer = Allocate(buffers, queries.Count, 16);
+                GraphicsBuffer edgeBuffer = Allocate(buffers, edges.Count, 16);
+                GraphicsBuffer resultBuffer = Allocate(buffers, queries.Count, 16);
+                queryBuffer.SetData(queries);
+                edgeBuffer.SetData(edges);
+                int kernel = shader.FindKernel("QueryTriangles");
+                shader.SetInt("_TrapezoidCoordinates", capped ? 1 : 0);
+                shader.SetFloat("_CurrentTipRatio", capped ? .4f : 0f);
+                shader.SetFloat("_PreviousTipRatio", capped ? .4f : 0f);
+                shader.SetInt("_QueryCount", queries.Count);
+                shader.SetBuffer(kernel, "_Queries", queryBuffer);
+                shader.SetBuffer(kernel, "_Edges", edgeBuffer);
+                shader.SetBuffer(kernel, "_Results", resultBuffer);
+                shader.Dispatch(kernel, (queries.Count + 63) / 64, 1, 1);
+                var actual = new Vector4[queries.Count];
+                resultBuffer.GetData(actual);
+                for (int i = 0; i < actual.Length; i++)
+                    Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
+                        "Motion must follow the previous triangulated surface at a fragment, even when the current LOD has fewer vertices.");
             }
-            GraphicsBuffer queryBuffer = Allocate(buffers, queries.Count, 16);
-            GraphicsBuffer edgeBuffer = Allocate(buffers, edges.Count, 16);
-            GraphicsBuffer resultBuffer = Allocate(buffers, queries.Count, 16);
-            queryBuffer.SetData(queries);
-            edgeBuffer.SetData(edges);
-            int kernel = shader.FindKernel("QueryTriangles");
-            shader.SetInt("_QueryCount", queries.Count);
-            shader.SetBuffer(kernel, "_Queries", queryBuffer);
-            shader.SetBuffer(kernel, "_Edges", edgeBuffer);
-            shader.SetBuffer(kernel, "_Results", resultBuffer);
-            shader.Dispatch(kernel, (queries.Count + 63) / 64, 1, 1);
-            var actual = new Vector4[queries.Count];
-            resultBuffer.GetData(actual);
-            for (int i = 0; i < actual.Length; i++)
-                Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
-                    "Motion must follow the previous triangulated surface at a fragment, even when the current LOD has fewer vertices.");
+            AssertPlanarMotionAcrossLods(shader, buffers);
         }
         finally
         {
@@ -166,16 +173,65 @@ public sealed class GrassMotionHistoryTests
         }
     }
 
+    private static void AssertPlanarMotionAcrossLods(ComputeShader shader, List<GraphicsBuffer> buffers)
+    {
+        // Same-pose planar surfaces must stay still even when their mesh LOD changes.
+        // Different cap pairs additionally exercise the explicit material remapping.
+        foreach (Vector2 tips in new[] { Vector2.zero, new Vector2(.4f, .4f), new Vector2(0f, .4f), new Vector2(.4f, 0f) })
+            foreach (int currentLod in new[] { 0, 2, 5 })
+                foreach (int previousLod in new[] { 0, 2, 5 })
+                {
+                    Mesh current = InfiniteGrassRenderer.CreateBladeMesh(currentLod);
+                    var queries = new List<Vector4>(); var edges = new List<Vector4>(); var expected = new List<Vector3>();
+                    try
+                    {
+                        Vector2[] uv = current.uv; int[] triangles = current.triangles;
+                        for (int i = 0; i < triangles.Length; i += 3)
+                        {
+                            var shape = new Vector2[3]; var world = new Vector3[3];
+                            for (int corner = 0; corner < 3; corner++)
+                            {
+                                Vector2 v = uv[triangles[i + corner]];
+                                shape[corner] = new Vector2((v.x - .5f) * Mathf.Lerp(1f, tips.x, v.y), v.y);
+                                world[corner] = new Vector3(shape[corner].x, v.y, 0f);
+                            }
+                            if (Vector3.Cross(world[1] - world[0], world[2] - world[0]).sqrMagnitude < 1e-12f) continue;
+                            foreach (Vector3 weights in new[] { new Vector3(.1f, .8f, .1f), new Vector3(.2f, .2f, .6f) })
+                            {
+                                Vector2 point = shape[0] * weights.x + shape[1] * weights.y + shape[2] * weights.z;
+                                Vector3 currentWorld = world[0] * weights.x + world[1] * weights.y + world[2] * weights.z;
+                                int rows = previousLod + 1; int row = Mathf.Min(Mathf.FloorToInt(point.y * rows), rows - 1);
+                                float lower = row / (float)rows, upper = (row + 1f) / rows;
+                                queries.Add(new Vector4(point.x, point.y, lower, upper));
+                                edges.Add(new Vector3(0f, lower, 0f)); edges.Add(new Vector3(.5f * Mathf.Lerp(1f, tips.y, lower), 0f, 0f));
+                                edges.Add(new Vector3(0f, upper, 0f)); edges.Add(new Vector3(.5f * Mathf.Lerp(1f, tips.y, upper), 0f, 0f));
+                                if (tips.x == tips.y) expected.Add(currentWorld);
+                                else expected.Add(new Vector3(point.x * Mathf.Lerp(1f, tips.y, point.y) / Mathf.Lerp(1f, tips.x, point.y), point.y, 0f));
+                            }
+                        }
+                    }
+                    finally { UnityEngine.Object.DestroyImmediate(current); }
+                    Assert.That(queries.Count, Is.GreaterThan(0));
+                    GraphicsBuffer query = Allocate(buffers, queries.Count, 16), edge = Allocate(buffers, edges.Count, 16), result = Allocate(buffers, queries.Count, 16);
+                    query.SetData(queries); edge.SetData(edges); int kernel = shader.FindKernel("QueryTriangles");
+                    shader.SetInt("_TrapezoidCoordinates", 1); shader.SetFloat("_CurrentTipRatio", tips.x); shader.SetFloat("_PreviousTipRatio", tips.y);
+                    shader.SetInt("_QueryCount", queries.Count); shader.SetBuffer(kernel, "_Queries", query); shader.SetBuffer(kernel, "_Edges", edge); shader.SetBuffer(kernel, "_Results", result);
+                    shader.Dispatch(kernel, (queries.Count + 63) / 64, 1, 1); var actual = new Vector4[queries.Count]; result.GetData(actual);
+                    for (int i = 0; i < actual.Length; i++) Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
+                        "An unchanged planar capped/pointed blade cannot gain velocity from a LOD switch; changed caps must map the same material across fraction.");
+                }
+    }
+
     private static Vector3 TestRowCenter(float height)
     {
         return new Vector3(height * height + 0.1f * Mathf.Sin(height * 9f), height * 2f, height * height * height);
     }
 
-    private static Vector3 TestRowSpan(float height)
+    private static Vector3 TestRowSpan(float height, bool capped = false)
     {
         // Turning row spans make quads non-planar, so bilinear interpolation is
         // insufficient; the actual mesh's diagonal must be respected.
-        return new Vector3(Mathf.Cos(height * 2f), 0.1f * height, Mathf.Sin(height * 2f)) * (0.5f * (1f - height));
+        return new Vector3(Mathf.Cos(height * 2f), 0.1f * height, Mathf.Sin(height * 2f)) * (0.5f * (1f - height) + (capped ? 0.2f * height : 0f));
     }
 
     private static Vector3 SampleActualTriangles(Vector2 point, Vector2[] uv, Vector3[] positions, int[] triangles)
@@ -185,6 +241,8 @@ public sealed class GrassMotionHistoryTests
             int ia = triangles[i], ib = triangles[i + 1], ic = triangles[i + 2];
             Vector2 a = uv[ia], b = uv[ib], c = uv[ic];
             float denominator = Cross(b - a, c - a);
+            // Pointed/A2C tips collapse the extra cap triangle; it has no surface.
+            if (Mathf.Abs(denominator) <= 0.00000001f) continue;
             float wb = Cross(point - a, c - a) / denominator;
             float wc = Cross(b - a, point - a) / denominator;
             float wa = 1f - wb - wc;
