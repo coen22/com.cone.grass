@@ -107,6 +107,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int Spacing = Shader.PropertyToID("_Spacing");
         public static readonly int FullDensity = Shader.PropertyToID("_FullDensityDistance");
         public static readonly int DensityExponent = Shader.PropertyToID("_DensityFalloffExponent");
+        public static readonly int Spacing = Shader.PropertyToID("_GrassSpacing");
         public static readonly int DensityTransition = Shader.PropertyToID("_DensityTransition");
         public static readonly int Authored = Shader.PropertyToID("_AuthoredAreas");
         public static readonly int GridStart = Shader.PropertyToID("_GridStartIndex");
@@ -467,7 +468,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             Texture windTexture = ResolveWindTexture(state.BladeMaterial);
             TextureHandle wind = ImportTexture(graph, state, windTexture);
             state.SetDrawProperties(center, distanceLimit, capturePadding, windTexture,
-                frameData.Get<UniversalShadowData>().mainLightShadowCascadesCount);
+                frameData.Get<UniversalShadowData>().mainLightShadowCascadesCount, SplatTerrain(state));
             state.VertexTextures[0] = height;
             state.VertexTextures[1] = color;
             state.VertexTextures[2] = slope;
@@ -513,6 +514,15 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 state.VertexTextures);
             BuildReadback(graph, state, counts, owner);
             state.PruneTextureWrappers();
+        }
+
+        // The first active terrain group supplies TerrainLit colour and detail at blade roots.
+        private static Terrain SplatTerrain(CameraState state)
+        {
+            foreach (TerrainGroup group in state.ActiveGroups)
+                if (group.Terrain && group.Terrain.terrainData)
+                    return group.Terrain;
+            return null;
         }
 
         public bool WantsMotion(Camera camera, bool postProcessEnabled, AntialiasingMode antialiasing,
@@ -1801,11 +1811,12 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 BladeMaterial.SetFloat(Id.SubdivisionBumpWidth, owner.subdivisionBumpWidth);
                 BladeMaterial.SetFloat(Id.FullDensity, owner.fullDensityDistance);
                 BladeMaterial.SetFloat(Id.DensityExponent, owner.densityFalloffExponent);
+                BladeMaterial.SetFloat(Id.Spacing, owner.spacing);
                 return changed;
             }
 
             public void SetDrawProperties(Vector2 center, float distance,
-                float capturePadding, Texture wind, int mainLightCascades)
+                float capturePadding, Texture wind, int mainLightCascades, Terrain splatTerrain)
             {
                 // Indirect draws have no per-renderer UnityPerDraw probe setup.
                 // Use the scene ambient probe, packed by Core's official helper;
@@ -1836,6 +1847,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     properties.SetTexture(Id.Wind, wind);
                     properties.SetVector(Id.HeightTexelSize, new Vector4(1f / Height.rt.width,
                         1f / Height.rt.height, Height.rt.width, Height.rt.height));
+                    GrassTerrainSplat.Bind(properties, splatTerrain);
                 }
             }
 

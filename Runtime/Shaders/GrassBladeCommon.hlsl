@@ -19,6 +19,10 @@ CBUFFER_START(UnityPerMaterial)
     half _GroundBlendStrength;
     float _GroundBlendHeight;
     half _GroundBlendFloor;
+    half _GroundAlbedoAlongBlade;
+    half _TerrainSplatAtRoots;
+    half _CanopyOcclusion;
+    float _GrassSpacing;
     float _UseGroundNormal;
     float _UseAdditionalLights;
     float _SpecularFadeStart;
@@ -53,6 +57,14 @@ float2 _CenterPos;
 float _DrawDistance;
 float _TextureUpdateThreshold;
 float4 _GrassHeightMapRT_TexelSize;
+// The painted terrain under the camera, bound by the renderer: xy origin and zw size in world XZ
+// (zw zero when none), its control map's texel size, and per layer the world-to-UV scale and
+// offset, TerrainLit's diffuse remap scale with the normal scale in w, and the diffuse width.
+float4 _GrassSplatTerrain;
+float4 _GrassSplatControl_TexelSize;
+float4 _GrassSplatTile[4];
+float4 _GrassSplatRemap[4];
+float4 _GrassSplatWidths;
 
 TEXTURE2D(_WindTexture);
 SAMPLER(sampler_WindTexture);
@@ -64,6 +76,17 @@ TEXTURE2D(_GrassGroundColorRT);
 SAMPLER(sampler_GrassGroundColorRT);
 TEXTURE2D(_GrassHeightMapRT);
 SAMPLER(sampler_GrassHeightMapRT);
+TEXTURE2D(_GrassSplatControl);
+TEXTURE2D(_GrassSplatDiffuse0);
+TEXTURE2D(_GrassSplatDiffuse1);
+TEXTURE2D(_GrassSplatDiffuse2);
+TEXTURE2D(_GrassSplatDiffuse3);
+TEXTURE2D(_GrassSplatNormal0);
+TEXTURE2D(_GrassSplatNormal1);
+TEXTURE2D(_GrassSplatNormal2);
+TEXTURE2D(_GrassSplatNormal3);
+SAMPLER(sampler_linear_clamp);
+SAMPLER(sampler_trilinear_repeat);
 
 struct GrassAttributes
 {
@@ -74,6 +97,7 @@ struct GrassAttributes
 struct GrassVertexData
 {
     float3 positionWS;
+    float3 pivotWS;
     half3 normalWS;
     half3 stableNormalWS;
     float physicalPixelWidth;
@@ -82,6 +106,8 @@ struct GrassVertexData
     float height;
     float cameraDistance;
     float coverage;
+    float density;
+    float worldUnitsPerPixel;
     uint seed;
 };
 
@@ -117,6 +143,8 @@ struct GrassRootData
     float physicalPixelWidth;
     float height;
     float coverage;
+    float density;
+    float worldUnitsPerPixel;
     float cameraDistance;
     uint seed;
 };
@@ -220,6 +248,8 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     if (_GrassAlphaToCoverage <= 0.5)
         widthCoverage = originalFullWidth > 0.0 ? 1.0 : 0.0;
     float densityCoverage = saturate(positionData.w);
+    root.density = densityCoverage;
+    root.worldUnitsPerPixel = worldUnitsPerPixel;
     root.coverage = densityCoverage * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
     root.tipWidth = 0.0;
@@ -311,6 +341,9 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     GrassViewParameters view = GrassCurrentView();
     GrassVertexData blade;
     blade.positionWS = EvaluateGrassPosition(root, view, input.uv);
+    blade.pivotWS = root.pivot;
+    blade.density = root.density;
+    blade.worldUnitsPerPixel = root.worldUnitsPerPixel;
     blade.seed = root.seed;
     blade.height = saturate(input.uv.y);
     blade.cameraDistance = root.cameraDistance;
@@ -327,6 +360,99 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     // triangle, so the same analytic edge coverage works for every geometry LOD.
     blade.shapeCoordinates = float2((input.uv.x - 0.5) * (1.0 - blade.height), blade.height);
     return blade;
+}
+
+// One-sided blade area per square metre of ground (leaf area index) at a root: blades per square
+// metre at this spacing and local density, times the mean blade's triangle of physical base width
+// (half the width parameter, before pixel widening) and height, each after its mean randomness.
+float GrassCanopyAreaIndex(float density)
+{
+    float spacing = max(_GrassSpacing, 0.001);
+    float baseWidth = 0.5 * max(_GrassWidth, 0.0) * (1.0 - 0.5 * saturate(_GrassWidthRandomness));
+    float height = max(_GrassHeight, 0.0) * (1.0 - 0.5 * saturate(_GrassHeightRandomness));
+    return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
+}
+
+// Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.
+float GrassCanopyAreaAbove(float areaIndex, float bladeHeight)
+{
+    float above = 1.0 - saturate(bladeHeight);
+    return areaIndex * above * above;
+}
+
+// Fraction of light from a direction with this upward component that passes the blades above a
+// point (Beer-Lambert). Near-vertical blades project (2/pi) sin(theta) of their area toward a
+// direction at zenith angle theta, so the optical depth is (2/pi) tan(theta) times the area above.
+half GrassCanopyTransmission(float areaAbove, float upward)
+{
+    if (areaAbove <= 0.0)
+        return 1.0h;
+    if (upward <= 0.0001)
+        return 0.0h;
+    float tangent = sqrt(saturate(1.0 - upward * upward)) / upward;
+    return exp(-0.6366198 * tangent * areaAbove);
+}
+
+// The cosine-weighted mean of that transmission over the sky: the ambient a point still receives.
+// Four-point Gauss-Legendre quadrature over cos(theta); it is exact without blades.
+half GrassCanopySkyVisibility(float areaAbove)
+{
+    const float4 cosine = float4(0.0694318, 0.3300095, 0.6699905, 0.9305682);
+    const float4 weight = float4(0.1739274, 0.3260726, 0.3260726, 0.1739274);
+    float4 tangent = sqrt(1.0 - cosine * cosine) / cosine;
+    return 2.0 * dot(weight * cosine, exp(-0.6366198 * tangent * areaAbove));
+}
+
+// TerrainLit's albedo and tangent-space normal for the bound terrain's first four layers at a
+// root, filtered at the mip the terrain itself uses at that distance, so a blade takes the colour
+// and the detail of the ground it stands in. Returns false outside that terrain.
+void GrassSplatLayer(TEXTURE2D_PARAM(diffuseMap, diffuseSampler), TEXTURE2D_PARAM(normalMap, normalSampler),
+    float4 tile, float4 remap, float width, half weight, float3 positionWS, float worldUnitsPerPixel,
+    inout half3 albedo, inout half3 normalTS)
+{
+    float2 layerUV = positionWS.xz * tile.xy + tile.zw;
+    float lod = max(0.0, log2(max(worldUnitsPerPixel * width * tile.x, 0.000001)));
+    albedo += weight * SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, lod).rgb * remap.rgb;
+    normalTS += weight * UnpackNormalScale(SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, lod), remap.a);
+}
+
+bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 albedo, out half3 normalTS)
+{
+    albedo = 0.0h;
+    normalTS = 0.0h;
+    if (_GrassSplatTerrain.z <= 0.0 || _GrassSplatTerrain.w <= 0.0)
+        return false;
+    float2 terrainUV = (positionWS.xz - _GrassSplatTerrain.xy) / _GrassSplatTerrain.zw;
+    if (any(terrainUV < 0.0) || any(terrainUV > 1.0))
+        return false;
+    // TerrainLit maps normalized terrain UVs to the control map's texel centres.
+    float2 controlUV = (terrainUV * (_GrassSplatControl_TexelSize.zw - 1.0) + 0.5) * _GrassSplatControl_TexelSize.xy;
+    half4 control = SAMPLE_TEXTURE2D_LOD(_GrassSplatControl, sampler_linear_clamp, controlUV, 0);
+    control /= max(dot(control, 1.0h), 0.0001h);
+    GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse0, sampler_trilinear_repeat),
+        TEXTURE2D_ARGS(_GrassSplatNormal0, sampler_trilinear_repeat), _GrassSplatTile[0], _GrassSplatRemap[0],
+        _GrassSplatWidths.x, control.r, positionWS, worldUnitsPerPixel, albedo, normalTS);
+    GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse1, sampler_trilinear_repeat),
+        TEXTURE2D_ARGS(_GrassSplatNormal1, sampler_trilinear_repeat), _GrassSplatTile[1], _GrassSplatRemap[1],
+        _GrassSplatWidths.y, control.g, positionWS, worldUnitsPerPixel, albedo, normalTS);
+    GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse2, sampler_trilinear_repeat),
+        TEXTURE2D_ARGS(_GrassSplatNormal2, sampler_trilinear_repeat), _GrassSplatTile[2], _GrassSplatRemap[2],
+        _GrassSplatWidths.z, control.b, positionWS, worldUnitsPerPixel, albedo, normalTS);
+    GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse3, sampler_trilinear_repeat),
+        TEXTURE2D_ARGS(_GrassSplatNormal3, sampler_trilinear_repeat), _GrassSplatTile[3], _GrassSplatRemap[3],
+        _GrassSplatWidths.w, control.a, positionWS, worldUnitsPerPixel, albedo, normalTS);
+    normalTS.z += 0.00001h;
+    normalTS = normalize(normalTS);
+    return true;
+}
+
+// TerrainLit's tangent frame on a surface with normal n: tangent along +X and bitangent along +Z
+// on level ground.
+half3 GrassTerrainNormalToWorld(half3 normalTS, half3 normal)
+{
+    half3 vertexTangent = cross(half3(0.0h, 0.0h, 1.0h), normal);
+    half3 bitangent = cross(normal, vertexTangent);
+    return SafeNormalize(-vertexTangent * normalTS.x + bitangent * normalTS.y + normal * normalTS.z);
 }
 
 half GrassGroundBlend(float bladeHeight, half mapStrength)

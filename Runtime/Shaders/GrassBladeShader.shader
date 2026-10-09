@@ -24,6 +24,9 @@ Shader "InfiniteGrass/GrassBladeShader"
         _GroundBlendStrength("Ground Color Blend", Range(0, 1)) = 1
         _GroundBlendHeight("Ground Blend Height (Blade Fraction)", Range(0, 1)) = 0.25
         _GroundBlendFloor("Ground Blend Along Whole Blade", Range(0, 1)) = 0
+        [ToggleUI] _GroundAlbedoAlongBlade("Ground Colour Along Whole Blade", Float) = 0
+        [ToggleUI] _TerrainSplatAtRoots("Terrain Splat Colour And Detail At Roots", Float) = 0
+        [ToggleUI] _CanopyOcclusion("Canopy Occlusion", Float) = 0
         [Toggle(_GRASS_GROUND_NORMAL)] _UseGroundNormal("Match Ground Normal at Roots", Float) = 0
 
         [Header(Lighting)][Space]
@@ -44,6 +47,7 @@ Shader "InfiniteGrass/GrassBladeShader"
         [HideInInspector] _SubdivisionBumpWidth("Subdivision Bump Width", Float) = 20
         [HideInInspector] _FullDensityDistance("Full Density Distance", Float) = 30
         [HideInInspector] _DensityFalloffExponent("Density Falloff Exponent", Float) = 4
+        [HideInInspector] _GrassSpacing("Spacing", Float) = 0.1
     }
 
     SubShader
@@ -102,6 +106,7 @@ Shader "InfiniteGrass/GrassBladeShader"
                 nointerpolation uint seed : TEXCOORD5;
                 nointerpolation half4 groundColor : TEXCOORD6;
                 float4 stableNormalAndPhysicalWidth : TEXCOORD8;
+                nointerpolation float canopyArea : TEXCOORD9;
                 #if defined(_GRASS_GROUND_NORMAL)
                     nointerpolation half3 groundNormal : TEXCOORD7;
                 #endif
@@ -127,6 +132,17 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // Area captures use premultiplied over blending. Recover the albedo
                 // before applying its accumulated strength, avoiding dark soft edges.
                 output.groundColor.rgb /= max(output.groundColor.a, 0.0001h);
+                // A bound painted terrain gives the root the ground's own albedo and normal
+                // detail, at the mip the terrain uses there; the capture remains elsewhere.
+                half3 splatAlbedo, splatNormal;
+                bool splat = _TerrainSplatAtRoots > 0.5 &&
+                    GrassTerrainSplat(blade.pivotWS, blade.worldUnitsPerPixel, splatAlbedo, splatNormal);
+                if (splat)
+                    output.groundColor.rgb = splatAlbedo;
+                // The blade keeps the ground's colour to its tip; light, not a tint, shades it.
+                if (_GroundAlbedoAlongBlade > 0.5)
+                    output.grassAlbedo = lerp(output.groundColor.rgb, colorModifier.rgb, saturate(colorModifier.a));
+                output.canopyArea = _CanopyOcclusion > 0.5 ? GrassCanopyAreaIndex(blade.density) : 0.0;
 
                 float specularFade = 1.0 - smoothstep(_SpecularFadeStart,
                     max(_SpecularFadeStart + 0.001, _SpecularFadeEnd), blade.cameraDistance);
@@ -136,6 +152,8 @@ Shader "InfiniteGrass/GrassBladeShader"
 
                 #if defined(_GRASS_GROUND_NORMAL)
                     output.groundNormal = GrassGroundNormal(blade.mapUV);
+                    if (splat)
+                        output.groundNormal = GrassTerrainNormalToWorld(splatNormal, output.groundNormal);
                 #endif
                 return output;
             }
@@ -210,10 +228,12 @@ Shader "InfiniteGrass/GrassBladeShader"
                 inputData.viewDirectionWS = GetWorldSpaceNormalizeViewDir(inputData.positionWS);
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
 
+                // The blades above this point occlude its sky and the light reaching it.
+                float canopyAbove = GrassCanopyAreaAbove(input.canopyArea, input.shapeCoordinates.y);
                 Light mainLight = GrassMainLight(inputData.positionWS);
-                half3 lighting = GrassAmbientLight(normalWS) * albedo;
+                half3 lighting = GrassAmbientLight(normalWS) * albedo * GrassCanopySkyVisibility(canopyAbove);
                 lighting += GrassDirectLight(mainLight, normalWS, inputData.viewDirectionWS,
-                    albedo, specularStrength, groundBlend);
+                    albedo, specularStrength, groundBlend) * GrassCanopyTransmission(canopyAbove, mainLight.direction.y);
 
                 // Forward+ supplies a spatial light list without MeshRenderer light indices.
                 // The material keyword compiles these loops out in the default quality mode.
@@ -224,13 +244,15 @@ Shader "InfiniteGrass/GrassBladeShader"
                         CLUSTER_LIGHT_LOOP_SUBTRACTIVE_LIGHT_CHECK
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
                         lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, specularStrength, groundBlend);
+                            albedo, specularStrength, groundBlend) *
+                            GrassCanopyTransmission(canopyAbove, additionalLight.direction.y);
                     }
                     uint pixelLightCount = GetAdditionalLightsCount();
                     LIGHT_LOOP_BEGIN(pixelLightCount)
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
                         lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, specularStrength, groundBlend);
+                            albedo, specularStrength, groundBlend) *
+                            GrassCanopyTransmission(canopyAbove, additionalLight.direction.y);
                     LIGHT_LOOP_END
                 #endif
 
