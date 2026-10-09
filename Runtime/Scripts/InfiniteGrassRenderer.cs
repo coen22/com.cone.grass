@@ -165,6 +165,24 @@ public class InfiniteGrassRenderer : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// One-sided blade area per square metre of ground at full density, as the blade shader's
+    /// GrassCanopyAreaIndex computes it: blades per square metre at this spacing times the mean
+    /// blade's triangle of physical base width and height. Ground shaders can darken under the
+    /// grass with the same canopy.
+    /// </summary>
+    public float CanopyAreaIndex()
+    {
+        if (!grassMaterial || !grassMaterial.HasProperty("_GrassWidth") || !grassMaterial.HasProperty("_GrassHeight"))
+            return 0f;
+        float width = 0.5f * Mathf.Max(grassMaterial.GetFloat("_GrassWidth"), 0f) *
+            (1f - 0.5f * Mathf.Clamp01(grassMaterial.GetFloat("_GrassWidthRandomness")));
+        float height = Mathf.Max(grassMaterial.GetFloat("_GrassHeight"), 0f) *
+            (1f - 0.5f * Mathf.Clamp01(grassMaterial.GetFloat("_GrassHeightRandomness")));
+        float cell = Mathf.Max(spacing, 0.001f);
+        return 0.5f * width * height / (cell * cell);
+    }
+
     [ContextMenu("Refresh Grass Data")]
     public void RefreshGrassData()
     {
