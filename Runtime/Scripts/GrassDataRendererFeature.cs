@@ -107,7 +107,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int Spacing = Shader.PropertyToID("_Spacing");
         public static readonly int FullDensity = Shader.PropertyToID("_FullDensityDistance");
         public static readonly int DensityExponent = Shader.PropertyToID("_DensityFalloffExponent");
-        public static readonly int Spacing = Shader.PropertyToID("_GrassSpacing");
+        public static readonly int BladeSpacing = Shader.PropertyToID("_GrassSpacing");
         public static readonly int DensityTransition = Shader.PropertyToID("_DensityTransition");
         public static readonly int Authored = Shader.PropertyToID("_AuthoredAreas");
         public static readonly int GridStart = Shader.PropertyToID("_GridStartIndex");
@@ -1811,7 +1811,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 BladeMaterial.SetFloat(Id.SubdivisionBumpWidth, owner.subdivisionBumpWidth);
                 BladeMaterial.SetFloat(Id.FullDensity, owner.fullDensityDistance);
                 BladeMaterial.SetFloat(Id.DensityExponent, owner.densityFalloffExponent);
-                BladeMaterial.SetFloat(Id.Spacing, owner.spacing);
+                BladeMaterial.SetFloat(Id.BladeSpacing, owner.spacing);
                 return changed;
             }
 
