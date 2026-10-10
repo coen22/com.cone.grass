@@ -27,6 +27,9 @@ public class InfiniteGrassRenderer : MonoBehaviour
     [Min(0f)] public float fullDensityDistance = 30f;
     [Min(0.1f)] public float densityFalloffExponent = 4f;
     [Range(0f, 0.25f)] public float densityTransition = 0.05f;
+    [Tooltip("Authored areas keep every blade where their density is above zero and shorten it in proportion, "
+        + "instead of thinning the population. A painted falloff then tapers an edge to stubble.")]
+    public bool densityShortensBlades;
 
     [Header("Geometry LOD")]
     [Range(0, 8)] public int grassMeshSubdivision = 5;
