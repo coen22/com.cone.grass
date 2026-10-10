@@ -64,6 +64,8 @@ float4 _GrassSplatTerrain;
 float4 _GrassSplatControl_TexelSize;
 float4 _GrassSplatTile[4];
 float4 _GrassSplatRemap[4];
+// Per layer: TerrainLit's smoothness constant, its source and metallic.
+float4 _GrassSplatSurface[4];
 float4 _GrassSplatWidths;
 
 TEXTURE2D(_WindTexture);
@@ -113,6 +115,7 @@ struct GrassVertexData
     float cameraDistance;
     float coverage;
     float worldUnitsPerPixel;
+    float2 silhouette;
     uint seed;
 };
 
@@ -150,6 +153,8 @@ struct GrassRootData
     float coverage;
     float worldUnitsPerPixel;
     float cameraDistance;
+    // The drawn silhouette's base and tip widths over the physical triangle's base: what a view ray meets.
+    float2 silhouette;
     uint seed;
 };
 
@@ -256,6 +261,8 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     root.coverage = densityCoverage * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
     root.tipWidth = 0.0;
+    // A2C covers only the physical fraction of a widened blade.
+    root.silhouette = float2(1.0, 0.0);
     float opaqueDensityScale = 1.0;
     if (_GrassAlphaToCoverage <= 0.5)
     {
@@ -270,6 +277,9 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
             float resolved = smoothstep(minimumPixels, minimumPixels * 2.0, root.physicalPixelWidth);
             root.tipWidth = minimumFullWidth * (1.0 - resolved);
         }
+        // The opaque floor widens the base and blunts the tip of the physical triangle.
+        if (originalFullWidth > 0.0)
+            root.silhouette = float2(expandedFullWidth, root.tipWidth) / originalFullWidth;
         root.width *= opaqueDensityScale;
         root.tipWidth *= opaqueDensityScale;
         // Lighting resolution follows the physically shortened transition blade.
@@ -365,6 +375,7 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     blade.positionWS = EvaluateGrassPosition(root, view, input.uv);
     blade.pivotWS = root.pivot;
     blade.worldUnitsPerPixel = root.worldUnitsPerPixel;
+    blade.silhouette = root.silhouette;
     blade.seed = root.seed;
     blade.height = saturate(input.uv.y);
     blade.cameraDistance = root.cameraDistance;
@@ -396,10 +407,10 @@ float GrassCanopyAreaIndex(float density)
     return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
 }
 
-// Blades per square metre around a root as a fraction of full density: the authored surface density
-// and the distance fade the compute thinned the population with. A surviving blade's own coverage
-// stays near one, so it cannot tell a sparse edge from the dense interior.
-float GrassPopulationDensity(float2 mapUV, float cameraDistance)
+// The authored surface density at a root, as a fraction of full density. With the distance fade it is
+// the population the compute thinned the blades to; a surviving blade's own coverage stays near one,
+// so it cannot tell a sparse edge from the dense interior.
+float GrassAuthoredDensity(float2 mapUV)
 {
     float authored = 1.0;
     if (_AuthoredAreas != 0)
@@ -410,7 +421,7 @@ float GrassPopulationDensity(float2 mapUV, float cameraDistance)
         if (authored <= 0.0)
             authored = 1.0;
     }
-    return authored * GrassDistanceDensity(cameraDistance);
+    return authored;
 }
 
 // Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.
@@ -420,19 +431,26 @@ float GrassCanopyAreaAbove(float areaIndex, float bladeHeight)
     return areaIndex * above * above;
 }
 
-// Fraction of light from a direction that passes the blades above a point (Beer-Lambert). Near-vertical
-// blades project (2/pi) sin(theta) of their area toward a direction at zenith angle theta, and the ray
-// crosses the canopy, a layer on the ground, along 1 / (n . l) of its depth for the ground normal n. On
-// level ground the optical depth is (2/pi) tan(theta) times the area above.
+// Optical depth per unit of blade area toward a direction (Beer-Lambert): near-vertical blades project
+// (2/pi) sin(theta) of their area toward a direction at zenith angle theta, and the ray crosses the canopy,
+// a layer on the ground, along 1 / (n . d) of its depth for the ground normal n; (2/pi) tan(theta) on level
+// ground. The transmission is the fraction of light from that direction passing the blades above a point.
+float GrassCanopyDepth(float3 direction, float3 groundNormal)
+{
+    float across = dot(groundNormal, direction);
+    return across > 0.0001 ? 0.6366198 * sqrt(saturate(1.0 - direction.y * direction.y)) / across : 1e4;
+}
+
+// Blades turn to face the camera, so a view ray meets each one's full width: pi/2 times the depth toward
+// a light, which meets them at every azimuth.
+float GrassCanopyViewDepth(float3 viewDirection, float3 groundNormal)
+{
+    return 1.5707963 * GrassCanopyDepth(viewDirection, groundNormal);
+}
+
 half GrassCanopyTransmission(float areaAbove, float3 direction, float3 groundNormal)
 {
-    if (areaAbove <= 0.0)
-        return 1.0h;
-    float across = dot(groundNormal, direction);
-    if (across <= 0.0001)
-        return 0.0h;
-    float sine = sqrt(saturate(1.0 - direction.y * direction.y));
-    return exp(-0.6366198 * sine / across * areaAbove);
+    return areaAbove > 0.0 ? exp(-GrassCanopyDepth(direction, groundNormal) * areaAbove) : 1.0h;
 }
 
 // Turns a normal by the rotation that takes unit direction a to unit direction b (Rodrigues).
@@ -446,31 +464,84 @@ half3 GrassTurn(half3 normal, half3 a, half3 b)
 
 // The cosine-weighted mean of that transmission over the sky: the ambient a point still receives.
 // Four-point Gauss-Legendre quadrature over cos(theta); it is exact without blades.
+// Four-point Gauss-Legendre quadrature on [0, 1].
+static const float4 kGrassQuadratureNode = float4(0.0694318, 0.3300095, 0.6699905, 0.9305682);
+static const float4 kGrassQuadratureWeight = float4(0.1739274, 0.3260726, 0.3260726, 0.1739274);
+// Over the sky's cos(theta): the weights times 2 cos(theta), and the optical depth (2/pi) tan(theta) at each node.
+static const float4 kGrassSkyCosine = kGrassQuadratureNode;
+static const float4 kGrassSkyWeight = 2.0 * kGrassQuadratureWeight * kGrassSkyCosine;
+static const float4 kGrassSkyDepth = 0.6366198 * sqrt(1.0 - kGrassSkyCosine * kGrassSkyCosine) / kGrassSkyCosine;
+
 half GrassCanopySkyVisibility(float areaAbove)
 {
-    const float4 cosine = float4(0.0694318, 0.3300095, 0.6699905, 0.9305682);
-    const float4 weight = float4(0.1739274, 0.3260726, 0.3260726, 0.1739274);
-    float4 tangent = sqrt(1.0 - cosine * cosine) / cosine;
-    return 2.0 * dot(weight * cosine, exp(-0.6366198 * tangent * areaAbove));
+    return dot(kGrassSkyWeight, exp(-kGrassSkyDepth * areaAbove));
+}
+
+// The canopy shows its shaded ground and blade bases from above and only its lit tops along the ground.
+// The grass divides its light by the bare ground's light as this view sees it under the canopy on average,
+// so the grass and the ground between its blades average the bare terrain beside them from every view and
+// distance while the canopy's depth stays as contrast within the grass.
+//
+// A view ray meets the drawn silhouettes: trapezoids of base and tip widths (b, t) over the physical
+// triangle's base, so with optical depth k per unit of physical area it has crossed k A ((b - t) x^2 + 2 t x)
+// by (1 - x) of the blade height, while the light there is shaded by the physical area above, A x^2. Over
+// the probability u of having met a blade, x follows in closed form; four Gauss-Legendre nodes in u give
+// the physical area above each, and the ground under all of A takes the probability left.
+
+float4 GrassCanopySeenAbove(float drawnArea, float viewDepth, float2 silhouette, out float reach)
+{
+    float perDepth = max(viewDepth * drawnArea, 1e-6);
+    reach = 1.0 - exp(-perDepth * (silhouette.x + silhouette.y));
+    float4 crossed = -log(1.0 - reach * kGrassQuadratureNode) / perDepth;
+    float taper = silhouette.x - silhouette.y, tip = 2.0 * silhouette.y;
+    float4 x = abs(taper) > 1e-4 ?
+        (sqrt(tip * tip + 4.0 * taper * crossed) - tip) / (2.0 * taper) : crossed / max(tip, 1e-6);
+    x = saturate(x);
+    return drawnArea * x * x;
+}
+
+// The mean of a canopy term exp(-c a) over what the view sees (GrassCanopySeenAbove).
+float GrassCanopySeenTerm(float4 above, float reach, float c, float drawnArea)
+{
+    return reach * dot(kGrassQuadratureWeight, exp(-c * above)) + (1.0 - reach) * exp(-c * drawnArea);
+}
+
+// The sky's (x) and a light's (y) seen means; both are one without blades.
+half2 GrassCanopySeen(float drawnArea, float viewDepth, float2 silhouette, float lightDepth)
+{
+    if (drawnArea <= 0.0)
+        return 1.0h;
+    float reach;
+    float4 above = GrassCanopySeenAbove(drawnArea, viewDepth, silhouette, reach);
+    float sky = 0.0;
+    UNITY_UNROLL for (int i = 0; i < 4; i++)
+        sky += kGrassSkyWeight[i] * GrassCanopySeenTerm(above, reach, kGrassSkyDepth[i], drawnArea);
+    return half2(sky, GrassCanopySeenTerm(above, reach, lightDepth, drawnArea));
 }
 
 // TerrainLit's albedo and tangent-space normal for the bound terrain's first four layers at a
 // root, filtered at the mip the terrain itself uses at that distance, so a blade takes the colour
 // and the detail of the ground it stands in. Returns false outside that terrain.
 void GrassSplatLayer(TEXTURE2D_PARAM(diffuseMap, diffuseSampler), TEXTURE2D_PARAM(normalMap, normalSampler),
-    float4 tile, float4 remap, float width, half weight, float3 positionWS, float worldUnitsPerPixel,
-    inout half3 albedo, inout half3 normalTS)
+    float4 tile, float4 remap, float4 surface, float width, half weight, float3 positionWS, float worldUnitsPerPixel,
+    inout half3 albedo, inout half3 normalTS, inout half2 smoothnessMetallic)
 {
     float2 layerUV = positionWS.xz * tile.xy + tile.zw;
     float lod = max(0.0, log2(max(worldUnitsPerPixel * width * tile.x, 0.000001)));
-    albedo += weight * SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, lod).rgb * remap.rgb;
+    half4 diffuse = SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, lod);
+    albedo += weight * diffuse.rgb * remap.rgb;
     normalTS += weight * UnpackNormalScale(SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, lod), remap.a);
+    // TerrainLit's sources: the constant times the diffuse alpha, the diffuse alpha alone, or the constant.
+    half smoothness = surface.y < 0.5 ? diffuse.a * surface.x : (surface.y < 1.5 ? diffuse.a : surface.x);
+    smoothnessMetallic += weight * half2(smoothness, surface.z);
 }
 
-bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 albedo, out half3 normalTS)
+bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 albedo, out half3 normalTS,
+    out half2 smoothnessMetallic)
 {
     albedo = 0.0h;
     normalTS = 0.0h;
+    smoothnessMetallic = 0.0h;
     if (_GrassSplatTerrain.z <= 0.0 || _GrassSplatTerrain.w <= 0.0)
         return false;
     float2 terrainUV = (positionWS.xz - _GrassSplatTerrain.xy) / _GrassSplatTerrain.zw;
@@ -482,16 +553,20 @@ bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 al
     control /= max(dot(control, 1.0h), 0.0001h);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse0, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal0, sampler_trilinear_repeat), _GrassSplatTile[0], _GrassSplatRemap[0],
-        _GrassSplatWidths.x, control.r, positionWS, worldUnitsPerPixel, albedo, normalTS);
+        _GrassSplatSurface[0], _GrassSplatWidths.x, control.r, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse1, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal1, sampler_trilinear_repeat), _GrassSplatTile[1], _GrassSplatRemap[1],
-        _GrassSplatWidths.y, control.g, positionWS, worldUnitsPerPixel, albedo, normalTS);
+        _GrassSplatSurface[1], _GrassSplatWidths.y, control.g, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse2, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal2, sampler_trilinear_repeat), _GrassSplatTile[2], _GrassSplatRemap[2],
-        _GrassSplatWidths.z, control.b, positionWS, worldUnitsPerPixel, albedo, normalTS);
+        _GrassSplatSurface[2], _GrassSplatWidths.z, control.b, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse3, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal3, sampler_trilinear_repeat), _GrassSplatTile[3], _GrassSplatRemap[3],
-        _GrassSplatWidths.w, control.a, positionWS, worldUnitsPerPixel, albedo, normalTS);
+        _GrassSplatSurface[3], _GrassSplatWidths.w, control.a, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        smoothnessMetallic);
     normalTS.z += 0.00001h;
     normalTS = normalize(normalTS);
     return true;

@@ -2,7 +2,7 @@ using UnityEngine;
 
 /// <summary>
 /// Binds a painted terrain's first control map and its first four layers for the blade shader,
-/// so a blade can take TerrainLit's albedo and normal detail at its root (GrassTerrainSplat in
+/// so a blade can take TerrainLit's albedo, normal detail, smoothness and metallic at its root (GrassTerrainSplat in
 /// GrassBladeCommon.hlsl). Without a usable terrain the shader falls back to the ground capture.
 /// </summary>
 internal static class GrassTerrainSplat
@@ -14,6 +14,7 @@ internal static class GrassTerrainSplat
     private static readonly int Tile = Shader.PropertyToID("_GrassSplatTile");
     private static readonly int Remap = Shader.PropertyToID("_GrassSplatRemap");
     private static readonly int Widths = Shader.PropertyToID("_GrassSplatWidths");
+    private static readonly int Surface = Shader.PropertyToID("_GrassSplatSurface");
     private static readonly int[] Diffuse =
     {
         Shader.PropertyToID("_GrassSplatDiffuse0"), Shader.PropertyToID("_GrassSplatDiffuse1"),
@@ -26,6 +27,7 @@ internal static class GrassTerrainSplat
     };
     private static readonly Vector4[] tiles = new Vector4[Layers];
     private static readonly Vector4[] remaps = new Vector4[Layers];
+    private static readonly Vector4[] surfaces = new Vector4[Layers];
 
     public static void Bind(MaterialPropertyBlock properties, Terrain terrain)
     {
@@ -55,11 +57,15 @@ internal static class GrassTerrainSplat
             Vector4 scale = layer ? layer.diffuseRemapMax - layer.diffuseRemapMin : Vector4.zero;
             remaps[i] = new Vector4(scale.x, scale.y, scale.z, layer ? layer.normalScale : 1f);
             widths[i] = diffuse ? diffuse.width : 1f;
+            // TerrainLit's smoothness constant, its source (TerrainLitPasses SplatmapMix) and metallic.
+            surfaces[i] = layer ? new Vector4(layer.smoothness, (float)layer.smoothnessSource, layer.metallic, 0f)
+                : Vector4.zero;
             properties.SetTexture(Diffuse[i], diffuse ? diffuse : Texture2D.whiteTexture);
             properties.SetTexture(Normal[i], layer && layer.normalMapTexture ? layer.normalMapTexture : Texture2D.normalTexture);
         }
         properties.SetVectorArray(Tile, tiles);
         properties.SetVectorArray(Remap, remaps);
+        properties.SetVectorArray(Surface, surfaces);
         properties.SetVector(Widths, widths);
     }
 }
