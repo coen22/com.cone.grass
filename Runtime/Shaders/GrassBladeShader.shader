@@ -107,10 +107,14 @@ Shader "InfiniteGrass/GrassBladeShader"
                 nointerpolation half4 groundColor : TEXCOORD6;
                 float4 stableNormalAndPhysicalWidth : TEXCOORD8;
                 nointerpolation float canopyArea : TEXCOORD9;
-                nointerpolation float canopyPainted : TEXCOORD10;
-                half2 canopyViewScale : TEXCOORD11;
+                // What this view sees of the sky (x) and the main light (y) under the canopy.
+                half2 canopySeen : TEXCOORD10;
+                // The view's depth and the drawn silhouette, for additional lights.
+                half3 canopyView : TEXCOORD11;
                 #if defined(_GRASS_GROUND_NORMAL)
                     nointerpolation half3 groundNormal : TEXCOORD7;
+                    // The ground's smoothness and metallic at the root (zero without a bound terrain).
+                    nointerpolation half2 groundSurface : TEXCOORD12;
                 #endif
             };
 
@@ -137,16 +141,17 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // A bound painted terrain gives the root the ground's own albedo and normal
                 // detail, at the mip the terrain uses there; the capture remains elsewhere.
                 half3 splatAlbedo, splatNormal;
+                half2 splatSurface;
                 bool splat = _TerrainSplatAtRoots > 0.5 &&
-                    GrassTerrainSplat(blade.pivotWS, blade.worldUnitsPerPixel, splatAlbedo, splatNormal);
+                    GrassTerrainSplat(blade.pivotWS, blade.worldUnitsPerPixel, splatAlbedo, splatNormal, splatSurface);
                 if (splat)
                     output.groundColor.rgb = splatAlbedo;
                 // The blade keeps the ground's colour to its tip; light, not a tint, shades it.
                 if (_GroundAlbedoAlongBlade > 0.5)
                     output.grassAlbedo = lerp(output.groundColor.rgb, colorModifier.rgb, saturate(colorModifier.a));
-                // The painted canopy, and the part of it drawn here: the population the compute thinned.
-                output.canopyPainted = _CanopyOcclusion > 0.5 ? GrassCanopyAreaIndex(GrassAuthoredDensity(blade.mapUV)) : 0.0;
-                output.canopyArea = output.canopyPainted * GrassDistanceDensity(blade.cameraDistance);
+                // The canopy over this root: the population the compute thinned the blades to.
+                output.canopyArea = _CanopyOcclusion > 0.5 ?
+                    GrassCanopyAreaIndex(GrassAuthoredDensity(blade.mapUV) * GrassDistanceDensity(blade.cameraDistance)) : 0.0;
 
                 float specularFade = 1.0 - smoothstep(_SpecularFadeStart,
                     max(_SpecularFadeStart + 0.001, _SpecularFadeEnd), blade.cameraDistance);
@@ -164,24 +169,25 @@ Shader "InfiniteGrass/GrassBladeShader"
                     half3 bladeNormal = GrassTurn(rootNormal, blade.rootTangentWS, blade.tangentWS);
                     output.normalWSAndSpecular.xyz = bladeNormal;
                     output.stableNormalAndPhysicalWidth.xyz = bladeNormal;
+                    output.groundSurface = splat ? splatSurface : 0.0h;
                     float3 canopyNormal = output.groundNormal;
                 #else
                     float3 canopyNormal = float3(0.0, 1.0, 0.0);
                 #endif
-                // One mean at every distance (GrassCanopySkyViewScale); the view barely turns along a blade.
-                float viewDepth = GrassCanopyDepth(GetWorldSpaceNormalizeViewDir(blade.positionWS), canopyNormal);
-                output.canopyViewScale = half2(GrassCanopySkyViewScale(output.canopyArea, output.canopyPainted, viewDepth),
-                    GrassCanopySunViewScale(output.canopyArea, output.canopyPainted, viewDepth,
-                        GrassCanopyDepth(_MainLightPosition.xyz, canopyNormal)));
+                // What this view sees under the canopy (GrassCanopySeen); the view barely turns along a blade.
+                float viewDepth = GrassCanopyViewDepth(GetWorldSpaceNormalizeViewDir(blade.positionWS), canopyNormal);
+                output.canopySeen = GrassCanopySeen(output.canopyArea, viewDepth, blade.silhouette,
+                    GrassCanopyDepth(_MainLightPosition.xyz, canopyNormal));
+                output.canopyView = half3(viewDepth, blade.silhouette);
                 return output;
             }
 
             half3 GrassDirectLight(Light light, half3 normalWS, half3 viewDirectionWS,
-                half3 albedo, half specularStrength, half groundBlend, half lambert)
+                half3 albedo, half specularStrength, half groundBlend)
             {
                 half NdotL = dot(normalWS, light.direction);
-                // The softer stylized blade lighting turns into the terrain's Lambert response.
-                half diffuse = lerp(saturate(NdotL * 0.5h + 0.5h), saturate(NdotL), lambert);
+                // Preserve the softer blade lighting; roots approach the terrain's Lambert response.
+                half diffuse = lerp(saturate(NdotL * 0.5h + 0.5h), saturate(NdotL), groundBlend);
                 half3 halfDirection = SafeNormalize(light.direction + viewDirectionWS);
                 half specular = saturate(dot(normalWS, halfDirection));
                 specular *= specular;
@@ -191,6 +197,29 @@ Shader "InfiniteGrass/GrassBladeShader"
                 specular *= specularStrength * (1.0h - groundBlend);
                 return (albedo * diffuse + specular) * light.color *
                     (light.distanceAttenuation * light.shadowAttenuation);
+            }
+
+            // A light on the blade, and on the bare ground under it. Lit as the ground, both take TerrainLit's
+            // BRDF from the root's splat surface, so the grass reflects as the terrain beside it does; the
+            // stylized blade keeps its own response and the ground's diffuse share.
+            half3 GrassLight(Light light, half3 normalWS, half3 viewDirectionWS, half3 albedo,
+                half specularStrength, half groundBlend, BRDFData brdfData)
+            {
+                #if defined(_GRASS_GROUND_NORMAL)
+                    return LightingPhysicallyBased(brdfData, light, normalWS, viewDirectionWS);
+                #else
+                    return GrassDirectLight(light, normalWS, viewDirectionWS, albedo, specularStrength, groundBlend);
+                #endif
+            }
+
+            half3 GrassGroundLight(Light light, half3 groundNormal, half3 viewDirectionWS, BRDFData brdfData)
+            {
+                #if defined(_GRASS_GROUND_NORMAL)
+                    return LightingPhysicallyBased(brdfData, light, groundNormal, viewDirectionWS);
+                #else
+                    return light.color * (saturate(dot(groundNormal, light.direction)) *
+                        light.distanceAttenuation * light.shadowAttenuation);
+                #endif
             }
 
             Light GrassMainLight(float3 positionWS)
@@ -222,9 +251,11 @@ Shader "InfiniteGrass/GrassBladeShader"
                 half alpha = GrassForwardCoverage(input.shapeCoordinates, input.coverage, input.seed);
                 half groundBlend = GrassGroundBlend(input.shapeCoordinates.y, input.groundColor.a);
                 half3 albedo = lerp(input.grassAlbedo, input.groundColor.rgb, groundBlend);
-                // TerrainLit reserves the dielectric reflectance from diffuse energy.
-                // Match that response at roots for both the ambient and direct light.
-                albedo *= lerp(1.0h, kDielectricSpec.a, groundBlend);
+                #if !defined(_GRASS_GROUND_NORMAL)
+                    // TerrainLit reserves the dielectric reflectance from diffuse energy.
+                    // Match that response at roots for both the ambient and direct light.
+                    albedo *= lerp(1.0h, kDielectricSpec.a, groundBlend);
+                #endif
                 // This stylized blade/ground normal is independent of winding.
                 // Flipping it on a bent back face would create a lighting seam.
                 // Filter unresolved lighting using the physical tapered width,
@@ -237,13 +268,15 @@ Shader "InfiniteGrass/GrassBladeShader"
                     input.normalWSAndSpecular.xyz, detailWeight));
                 half specularStrength = input.normalWSAndSpecular.w * detailWeight;
                 #if defined(_GRASS_GROUND_NORMAL)
-                    // Lit as the ground (see the vertex stage): its Lambert response along the whole blade,
-                    // and the canopy crossed as a layer on the ground's own slope.
-                    half lambert = 1.0h;
+                    // Lit as the ground (see the vertex stage), and the canopy crossed as a layer on its slope.
                     half3 canopyNormal = input.groundNormal;
+                    BRDFData brdfData;
+                    half brdfAlpha = 1.0h;
+                    InitializeBRDFData(albedo, input.groundSurface.y, half3(0.0h, 0.0h, 0.0h), input.groundSurface.x,
+                        brdfAlpha, brdfData);
                 #else
-                    half lambert = groundBlend;
                     half3 canopyNormal = half3(0.0h, 1.0h, 0.0h);
+                    BRDFData brdfData = (BRDFData)0;
                 #endif
 
                 InputData inputData = (InputData)0;
@@ -255,38 +288,56 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // The blades above this point occlude its sky and the light reaching it.
                 float canopyAbove = GrassCanopyAreaAbove(input.canopyArea, input.shapeCoordinates.y);
                 Light mainLight = GrassMainLight(inputData.positionWS);
-                half3 lighting = GrassAmbientLight(normalWS) * albedo * GrassCanopySkyVisibility(canopyAbove) *
-                    input.canopyViewScale.x;
-                lighting += GrassDirectLight(mainLight, normalWS, inputData.viewDirectionWS,
-                    albedo, specularStrength, groundBlend, lambert) *
-                    GrassCanopyTransmission(canopyAbove, mainLight.direction, canopyNormal) * input.canopyViewScale.y;
+                // The bare ground's light here, and what this view sees of it under the canopy on average.
+                #if defined(_GRASS_GROUND_NORMAL)
+                    // TerrainLit's ambient and environment reflection from the scene's probe.
+                    half3 lighting = GlobalIllumination(brdfData, (BRDFData)0, 0.0, GrassAmbientLight(normalWS), 1.0h,
+                        inputData.positionWS, normalWS, inputData.viewDirectionWS, inputData.normalizedScreenSpaceUV);
+                    half3 bareLight = GlobalIllumination(brdfData, (BRDFData)0, 0.0, GrassAmbientLight(canopyNormal), 1.0h,
+                        inputData.positionWS, canopyNormal, inputData.viewDirectionWS, inputData.normalizedScreenSpaceUV);
+                #else
+                    half3 lighting = GrassAmbientLight(normalWS) * albedo;
+                    half3 bareLight = GrassAmbientLight(canopyNormal);
+                #endif
+                lighting *= GrassCanopySkyVisibility(canopyAbove);
+                lighting += GrassLight(mainLight, normalWS, inputData.viewDirectionWS, albedo, specularStrength,
+                    groundBlend, brdfData) * GrassCanopyTransmission(canopyAbove, mainLight.direction, canopyNormal);
+                half3 seenLight = bareLight * input.canopySeen.x;
+                half3 groundDirect = GrassGroundLight(mainLight, canopyNormal, inputData.viewDirectionWS, brdfData);
+                bareLight += groundDirect;
+                seenLight += groundDirect * input.canopySeen.y;
 
                 // Forward+ supplies a spatial light list without MeshRenderer light indices.
                 // The material keyword compiles these loops out in the default quality mode.
                 #if defined(_GRASS_ADDITIONAL_LIGHTS) && USE_CLUSTER_LIGHT_LOOP
-                    float viewDepth = GrassCanopyDepth(inputData.viewDirectionWS, canopyNormal);
                     UNITY_LOOP for (uint lightIndex = 0;
                         lightIndex < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); ++lightIndex)
                     {
                         CLUSTER_LIGHT_LOOP_SUBTRACTIVE_LIGHT_CHECK
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
-                        lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, specularStrength, groundBlend, lambert) *
-                            GrassCanopyTransmission(canopyAbove, additionalLight.direction, canopyNormal) *
-                            GrassCanopySunViewScale(input.canopyArea, input.canopyPainted, viewDepth,
-                                GrassCanopyDepth(additionalLight.direction, canopyNormal));
+                        lighting += GrassLight(additionalLight, normalWS, inputData.viewDirectionWS, albedo,
+                            specularStrength, groundBlend, brdfData) *
+                            GrassCanopyTransmission(canopyAbove, additionalLight.direction, canopyNormal);
+                        groundDirect = GrassGroundLight(additionalLight, canopyNormal, inputData.viewDirectionWS, brdfData);
+                        bareLight += groundDirect;
+                        seenLight += groundDirect * GrassCanopySeen(input.canopyArea, input.canopyView.x, input.canopyView.yz,
+                            GrassCanopyDepth(additionalLight.direction, canopyNormal)).y;
                     }
                     uint pixelLightCount = GetAdditionalLightsCount();
                     LIGHT_LOOP_BEGIN(pixelLightCount)
                         Light additionalLight = GetAdditionalLight(lightIndex, inputData.positionWS, half4(1, 1, 1, 1));
-                        lighting += GrassDirectLight(additionalLight, normalWS, inputData.viewDirectionWS,
-                            albedo, specularStrength, groundBlend, lambert) *
-                            GrassCanopyTransmission(canopyAbove, additionalLight.direction, canopyNormal) *
-                            GrassCanopySunViewScale(input.canopyArea, input.canopyPainted, viewDepth,
-                                GrassCanopyDepth(additionalLight.direction, canopyNormal));
+                        lighting += GrassLight(additionalLight, normalWS, inputData.viewDirectionWS, albedo,
+                            specularStrength, groundBlend, brdfData) *
+                            GrassCanopyTransmission(canopyAbove, additionalLight.direction, canopyNormal);
+                        groundDirect = GrassGroundLight(additionalLight, canopyNormal, inputData.viewDirectionWS, brdfData);
+                        bareLight += groundDirect;
+                        seenLight += groundDirect * GrassCanopySeen(input.canopyArea, input.canopyView.x, input.canopyView.yz,
+                            GrassCanopyDepth(additionalLight.direction, canopyNormal)).y;
                     LIGHT_LOOP_END
                 #endif
 
+                // Lift the grass by what the canopy takes from this view's mean, so it matches the bare terrain.
+                lighting *= bareLight / max(seenLight, 1e-4h);
                 return half4(MixFog(lighting, input.positionWSAndFog.w), alpha);
             }
             ENDHLSL
