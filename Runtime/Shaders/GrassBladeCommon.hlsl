@@ -78,9 +78,11 @@ TEXTURE2D(_GrassGroundColorRT);
 SAMPLER(sampler_GrassGroundColorRT);
 TEXTURE2D(_GrassHeightMapRT);
 SAMPLER(sampler_GrassHeightMapRT);
-// The authored surface density the compute thinned the population with, and whether it applies.
+// The authored surface density the compute thinned the population with, whether it applies, and whether
+// it shortens blades instead.
 TEXTURE2D(_GrassDensityRT);
 int _AuthoredAreas;
+int _DensityShortensBlades;
 TEXTURE2D(_GrassSplatControl);
 TEXTURE2D(_GrassSplatDiffuse0);
 TEXTURE2D(_GrassSplatDiffuse1);
@@ -223,6 +225,24 @@ float GrassWorldUnitsPerPixel(float3 positionWS, GrassViewParameters view)
     return isfinite(worldUnitsPerPixel) ? max(worldUnitsPerPixel, 0.0) : 0.0;
 }
 
+// The authored surface density at a root, as a fraction of full density. With the distance fade it is
+// the population the compute thinned the blades to, or with _DensityShortensBlades the fraction of their
+// height the blades keep; a surviving blade's own coverage stays near one, so it cannot tell a sparse edge
+// from the dense interior. Either way the canopy's area follows it.
+float GrassAuthoredDensity(float2 mapUV)
+{
+    float authored = 1.0;
+    if (_AuthoredAreas != 0)
+    {
+        authored = saturate(SAMPLE_TEXTURE2D_LOD(_GrassDensityRT, sampler_LinearClamp, mapUV, 0).r);
+        // Only the first surface's map is bound. A blade stands only where its own surface's density
+        // is positive, so zero here is another surface's map; that blade keeps the full canopy.
+        if (authored <= 0.0)
+            authored = 1.0;
+    }
+    return authored;
+}
+
 GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     GrassViewParameters view, float4 slope, float2 wind, float2 mapUV)
 {
@@ -290,6 +310,8 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
         (1.0 - GrassRandom(root.seed + 2u) * saturate(shape.dimensions.w));
     float bump = saturate(1.0 - abs(root.cameraDistance - shape.ranges.z) / max(shape.shaping.w, 0.001));
     root.height *= max(0.0, 1.0 + shape.shaping.z * bump) * opaqueDensityScale;
+    if (_DensityShortensBlades != 0)
+        root.height *= GrassAuthoredDensity(mapUV);
 
     // Decode the captured direction before strength interpolation. Clear pixels
     // contain zero RG and alpha; their neutral signed direction must remain zero.
@@ -405,23 +427,6 @@ float GrassCanopyAreaIndex(float density)
     float baseWidth = 0.5 * max(_GrassWidth, 0.0) * (1.0 - 0.5 * saturate(_GrassWidthRandomness));
     float height = max(_GrassHeight, 0.0) * (1.0 - 0.5 * saturate(_GrassHeightRandomness));
     return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
-}
-
-// The authored surface density at a root, as a fraction of full density. With the distance fade it is
-// the population the compute thinned the blades to; a surviving blade's own coverage stays near one,
-// so it cannot tell a sparse edge from the dense interior.
-float GrassAuthoredDensity(float2 mapUV)
-{
-    float authored = 1.0;
-    if (_AuthoredAreas != 0)
-    {
-        authored = saturate(SAMPLE_TEXTURE2D_LOD(_GrassDensityRT, sampler_LinearClamp, mapUV, 0).r);
-        // Only the first surface's map is bound. A blade stands only where its own surface's density
-        // is positive, so zero here is another surface's map; that blade keeps the full canopy.
-        if (authored <= 0.0)
-            authored = 1.0;
-    }
-    return authored;
 }
 
 // Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.

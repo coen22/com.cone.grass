@@ -21,6 +21,8 @@ CBUFFER_START(GrassGenerationParameters)
     int2 _GridSize;
     float3 _CameraPosition;
     int _AuthoredAreas;
+    // Nonzero: the authored density shortens blades (GrassAuthoredDensity) instead of thinning them.
+    int _DensityShortensBlades;
     float2 _CenterPos;
     float2 _LodDistances;
 
@@ -282,7 +284,8 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod)
     float fullDensityDistance = clamp(_FullDensityDistance, 0.0, _DrawDistance);
     float fadeRange = max(_DrawDistance - fullDensityDistance, 1e-4);
     float distanceDensity = pow(saturate((_DrawDistance - distanceToCamera) / fadeRange), max(_DensityFalloffExponent, 0.0));
-    float probability = saturate(authoredDensity * surfaceValidity * (1.0 - exclusion) * distanceDensity);
+    float population = _DensityShortensBlades != 0 ? 1.0 : authoredDensity;
+    float probability = saturate(population * surfaceValidity * (1.0 - exclusion) * distanceDensity);
     if (!isfinite(probability))
         return false;
     float coverage = GrassDensityCoverage(probability, GrassRandom(seed, 0xb5297a4du));

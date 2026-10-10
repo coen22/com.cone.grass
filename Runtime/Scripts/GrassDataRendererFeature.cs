@@ -110,6 +110,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int BladeSpacing = Shader.PropertyToID("_GrassSpacing");
         public static readonly int DensityTransition = Shader.PropertyToID("_DensityTransition");
         public static readonly int Authored = Shader.PropertyToID("_AuthoredAreas");
+        public static readonly int DensityShortens = Shader.PropertyToID("_DensityShortensBlades");
         public static readonly int GridStart = Shader.PropertyToID("_GridStartIndex");
         public static readonly int GridSize = Shader.PropertyToID("_GridSize");
         public static readonly int CameraPosition = Shader.PropertyToID("_CameraPosition");
@@ -431,6 +432,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.CaptureExtent = extent;
             state.CaptureRange = captureRange;
             state.Authored = authored;
+            state.DensityShortens = authored && owner.densityShortensBlades;
             state.OwnerRevision = owner.Revision;
             state.InventoryRevision = inventoryRevision;
             state.InteractionVersion = state.NextInteractionVersion;
@@ -1363,6 +1365,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                 pass.LodTransition = Mathf.Max(0f, FiniteOr(owner.lodTransitionWidth, 10f));
                 pass.BoundsRadius = radius;
                 pass.Authored = authored;
+                pass.DensityShortens = state.DensityShortens;
                 pass.ArgumentStride = argumentStride;
                 pass.ArgumentCountOffset = argumentCountOffset;
                 builder.UseTexture(height, AccessFlags.Read);
@@ -1398,6 +1401,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     cmd.SetComputeIntParams(shader, Id.LodOffsets, data.LodOffsets);
                     cmd.SetComputeIntParams(shader, Id.LodCapacities, data.LodCapacities);
                     cmd.SetComputeIntParam(shader, Id.Authored, data.Authored ? 1 : 0);
+                    cmd.SetComputeIntParam(shader, Id.DensityShortens, data.DensityShortens ? 1 : 0);
                     cmd.SetComputeIntParam(shader, Id.ArgsStride, data.ArgumentStride);
                     cmd.SetComputeIntParam(shader, Id.ArgsCountOffset, data.ArgumentCountOffset);
                     cmd.SetComputeBufferParam(shader, data.GenerateKernel, Id.Positions, data.Positions);
@@ -1656,7 +1660,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public Vector2 Center;
             public Vector2 CaptureRange;
             public float CaptureExtent, MotionSpacing;
-            public bool Authored, HasMeshSurfaceFallback, RequiresMeshHeight, SurfaceDirty, HadDensitySources;
+            public bool Authored, DensityShortens, HasMeshSurfaceFallback, RequiresMeshHeight, SurfaceDirty, HadDensitySources;
             public double LastUsedTime;
             public RTHandle Height, HeightDepth, Density, Mask, Color, Slope, Ground;
             public GraphicsBuffer Positions, Counts, Arguments;
@@ -1848,6 +1852,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
                     // The canopy over a root follows its population's density (GrassPopulationDensity).
                     properties.SetTexture(Id.Density, Density.rt);
                     properties.SetInteger(Id.Authored, Authored ? 1 : 0);
+                    properties.SetInteger(Id.DensityShortens, DensityShortens ? 1 : 0);
                     properties.SetTexture(Id.Wind, wind);
                     properties.SetVector(Id.HeightTexelSize, new Vector4(1f / Height.rt.width,
                         1f / Height.rt.height, Height.rt.width, Height.rt.height));
@@ -2075,7 +2080,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             public float Spacing, DrawDistance, CapturePadding, FullDensityDistance, DensityExponent,
                 DensityTransition, LodTransition, BoundsRadius;
             public Vector4 LodDistances;
-            public bool Authored;
+            public bool Authored, DensityShortens;
             public int ArgumentStride, ArgumentCountOffset;
         }
 
