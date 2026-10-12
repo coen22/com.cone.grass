@@ -77,12 +77,41 @@ These are source-level cost changes, not measured GPU savings. Density, geometry
 draw distance, LOD population, coverage, wind, shadows and motion reconstruction
 are unchanged; no performance claim is obtained by rendering less grass.
 
+
+## Steep-slope normal detail and default-variant cost
+
+Terrain normal mapping previously built its tangent frame from two unnormalized
+cross products. On level ground that happened to have unit length, but as the
+terrain normal approached world Z both tangent axes shrank toward zero. The
+final normalized shading normal therefore suppressed the normal map's X/Y
+detail on steep slopes and discarded it at the degenerate direction.
+
+The conversion now normalizes the terrain's +X heightfield tangent before
+constructing the perpendicular +Z-direction bitangent. Level-ground orientation
+is unchanged. Near-vertical slopes retain unit tangent axes; the exact
+heightfield degeneracy falls back to +X rather than normalizing zero.
+
+Terrain splat sampling is also split at compile time. The ordinary stylized
+lighting variant needs only the painted terrain albedo, so each positive layer
+samples only its diffuse texture. Normal-map sampling, smoothness/metallic
+reconstruction, and tangent-normal normalization exist only in the
+`_GRASS_GROUND_NORMAL` variant. This makes the cost boundary explicit instead
+of depending on backend dead-code elimination. A coherent one-layer root uses
+one layer texture sample in the default variant and two in the terrain-matched
+variant, plus the shared control-map lookup in either case.
+
+This does not remove the CPU binding of normal textures, change material
+keywords, or claim a measured frame-time gain. Mixed paint still samples every
+positive layer, and native profiling must cover both coherent and divergent
+regions.
+
 ## Regression checks
 
-`Tools~/ShaderChecks/test_terrain_splat.py` adds sixteen source/math tests. They
+`Tools~/ShaderChecks/test_terrain_splat.py` adds nineteen source/math tests. They
 read the actual C#/HLSL helper expressions, evaluate scalar binary32 arithmetic,
 and compare 1,024 varied footprints with an independent reference. Other checks
-cover square-map compatibility, rectangular maps, unequal tiling, independent
+cover steep-slope orthonormal tangent detail, compile-time albedo-only sampling,
+the old steep-slope suppression control, square-map compatibility, rectangular maps, unequal tiling, independent
 normal resolution, axis/world-scale invariance, fractional and zero-footprint
 mips, all sparse-layer masks, zero-only guards, binding names, shared logarithms,
 and the complete pre-change material-buffer layout.
