@@ -10,8 +10,8 @@ CBUFFER_START(UnityPerMaterial)
     float _GrassCurving;
     float _GrassWidthRandomness;
     float _GrassHeightRandomness;
-    float4 _ExpandDistantGrassRange;
     float _ExpandDistantGrassWidth;
+    float4 _ExpandDistantGrassRange;
     float4 _WindTexture_ST;
     float _WindStrength;
     float4 _WindScroll;
