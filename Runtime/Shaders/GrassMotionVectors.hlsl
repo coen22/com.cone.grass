@@ -62,9 +62,10 @@ struct GrassMotionVaryings
 GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : SV_InstanceID)
 {
     float4 positionData = _GrassPositions[(uint)_GrassInstanceOffset + instanceID];
-    GrassRootData current = BuildCurrentGrassRoot(positionData);
+    GrassViewParameters currentView = GrassCurrentView();
+    GrassRootData current = BuildGrassRootForView(positionData, currentView);
     GrassMotionVaryings output = (GrassMotionVaryings)0;
-    output.currentPositionWS = EvaluateGrassPosition(current, GrassCurrentView(), input.uv);
+    output.currentPositionWS = EvaluateGrassPosition(current, currentView, input.uv);
     // Rasterization includes the current camera jitter, exactly as the color pass.
     output.positionCS = TransformWorldToHClip(output.currentPositionWS);
     float currentFullWidth = current.width * 0.5;
@@ -114,8 +115,9 @@ float3 PreviousGrassSurface(GrassMotionVaryings input)
     float lowerHeight = row / rows;
     float upperHeight = (row + 1.0) / rows;
     float3 lowerCenter, lowerSpan, upperCenter, upperSpan;
-    EvaluateGrassRow(root, GrassPreviousView(), lowerHeight, lowerCenter, lowerSpan);
-    EvaluateGrassRow(root, GrassPreviousView(), upperHeight, upperCenter, upperSpan);
+    GrassViewParameters previousView = GrassPreviousView();
+    EvaluateGrassRow(root, previousView, lowerHeight, lowerCenter, lowerSpan);
+    EvaluateGrassRow(root, previousView, upperHeight, upperCenter, upperSpan);
 
     // Reconstruct the actual previous triangles, including their LL-to-UR
     // diagonal. Evaluating a continuous curve, or interpolating only the current
