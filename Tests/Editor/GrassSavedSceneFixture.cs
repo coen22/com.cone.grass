@@ -16,7 +16,9 @@ internal sealed class GrassSavedSceneFixture : IDisposable
     private readonly string templatePath;
     private readonly Hash128 templateHash;
     private readonly string copyPath;
-    private bool copied;
+    private readonly string targetCopyPath;
+    private string copyGuid, targetCopyGuid;
+    private bool copied, targetCopied;
     public Scene Source { get; private set; }
     public Scene Target { get; private set; }
 
@@ -49,19 +51,24 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False,
             $"Acquire template '{templatePath}': never take ownership of a scene already present in the user's hierarchy.");
         templateHash = AssetDatabase.GetAssetDependencyHash(templatePath);
-        copyPath = AssetDatabase.GenerateUniqueAssetPath("Assets/GrassSavedScene_" + Guid.NewGuid().ToString("N") + ".unity");
-        Assert.That(AssetDatabase.AssetPathToGUID(copyPath), Is.Empty, $"Acquire copy '{copyPath}': path must be unused.");
+        copyPath = NewCopyPath();
+        targetCopyPath = includeTarget ? NewCopyPath() : null;
         try
         {
-            copied = During($"Copy template '{templatePath}' to '{copyPath}'", () => AssetDatabase.CopyAsset(templatePath, copyPath));
-            Assert.That(copied, Is.True, $"Acquire copy '{copyPath}': only a successfully created unique copy is owned for cleanup.");
+            copyGuid = CopyTemplate(copyPath, ref copied);
             Source = OpenOwnedScene(copyPath);
             AssertEmptyNormalScene(Source, copyPath);
             if (includeTarget)
             {
-                Target = OpenOwnedScene(templatePath);
-                AssertEmptyNormalScene(Target, templatePath);
-                Assert.That(Source, Is.Not.EqualTo(Target), $"Acquire '{copyPath}': source and readonly target must be distinct.");
+                // Git/registry packages are read-only: even opening their scene
+                // template is rejected by Unity. Both loaded scenes must be
+                // independent writable copies; the package asset is only read.
+                targetCopyGuid = CopyTemplate(targetCopyPath, ref targetCopied);
+                Assert.That(targetCopyGuid, Is.Not.EqualTo(copyGuid),
+                    "Acquire target: source and target must own distinct asset identities.");
+                Target = OpenOwnedScene(targetCopyPath);
+                AssertEmptyNormalScene(Target, targetCopyPath);
+                Assert.That(Source, Is.Not.EqualTo(Target), $"Acquire '{copyPath}': source and target copies must be distinct.");
             }
             Assert.That(SceneManager.sceneCount, Is.EqualTo(priorScenes.Length + (includeTarget ? 2 : 1)),
                 $"Acquire '{copyPath}': only the requested owned scenes may be added.");
@@ -78,8 +85,48 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         }
     }
 
+    private static string NewCopyPath()
+    {
+        return AssetDatabase.GenerateUniqueAssetPath("Assets/GrassSavedScene_" + Guid.NewGuid().ToString("N") + ".unity");
+    }
+
+    private static string ExistingAssetGuid(string path)
+    {
+        // The default lookup also returns GUIDs of assets deleted during this
+        // Editor session. Ownership and removal checks require live assets.
+        return AssetDatabase.AssetPathToGUID(path, AssetPathToGUIDOptions.OnlyExistingAssets);
+    }
+
+    private string CopyTemplate(string path, ref bool owned)
+    {
+        Assert.That(path.StartsWith("Assets/", StringComparison.Ordinal), Is.True,
+            $"Acquire copy '{path}': only writable project assets may be created.");
+        Assert.That(ExistingAssetGuid(path), Is.Empty, $"Acquire copy '{path}': path must be unused.");
+        owned = During($"Copy template '{templatePath}' to '{path}'", () => AssetDatabase.CopyAsset(templatePath, path));
+        Assert.That(owned, Is.True, $"Acquire copy '{path}': only a successfully created unique copy is owned for cleanup.");
+        string guid = ExistingAssetGuid(path);
+        Assert.That(string.IsNullOrEmpty(guid), Is.False, $"Acquire copy '{path}': record its actual asset identity.");
+        Assert.That(guid, Is.Not.EqualTo(TemplateGuid), $"Acquire copy '{path}': the package template must never become an owned asset.");
+        return guid;
+    }
+
+    private static void AssertOwnedAsset(string path, string guid)
+    {
+        Assert.That(path.StartsWith("Assets/", StringComparison.Ordinal), Is.True,
+            $"Inspect owned asset '{path}': the package template is not writable fixture storage.");
+        Assert.That(string.IsNullOrEmpty(guid), Is.False, $"Inspect owned asset '{path}': acquisition must have recorded an identity.");
+        Assert.That(ExistingAssetGuid(path), Is.EqualTo(guid),
+            $"Inspect owned asset '{path}': never overwrite or delete an asset replaced at the same path.");
+    }
+
     private Scene OpenOwnedScene(string path)
     {
+        bool isSource = copied && path == copyPath;
+        bool isTarget = targetCopied && path == targetCopyPath;
+        Assert.That(isSource || isTarget, Is.True, $"Open '{path}': require a successfully acquired fixture copy.");
+        AssertOwnedAsset(path, isSource ? copyGuid : targetCopyGuid);
+        Assert.That(SceneManager.GetSceneByPath(path).IsValid(), Is.False,
+            $"Open '{path}': never take ownership of an already loaded or uncertain scene.");
         Scene opened = During($"Open owned scene '{path}' additively", () => EditorSceneManager.OpenScene(path, OpenSceneMode.Additive));
         // A failed/ambiguous return must never grant ownership of an old
         // scene. Leave any unproven partial acquisition for diagnosis.
@@ -96,7 +143,7 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         Assert.That(scene.path, Is.EqualTo(path), $"Inspect '{path}': scene must retain its owned asset path.");
         Assert.That(EditorSceneManager.IsPreviewScene(scene), Is.False,
             $"Inspect '{path}': the control requires a normal loaded scene.");
-        Assert.That(scene.rootCount, Is.Zero, $"Inspect '{path}': the readonly fixture contains no GameObjects or scripts.");
+        Assert.That(scene.rootCount, Is.Zero, $"Inspect '{path}': the copied fixture contains no GameObjects or scripts.");
     }
 
     public void RestorePriorActive()
@@ -115,6 +162,7 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         Assert.That(copied && Source.IsValid() && Source.isLoaded, Is.True,
             $"Save source '{copyPath}': require a successfully copied, valid loaded source.");
         Assert.That(Source.path, Is.EqualTo(copyPath), $"Save source '{copyPath}': only the fixture-owned copy may be saved.");
+        AssertOwnedAsset(copyPath, copyGuid);
         RestorePriorActive();
         Assert.That(During($"Save source '{copyPath}'", () => EditorSceneManager.SaveScene(Source, copyPath)), Is.True,
             $"Save source '{copyPath}': SaveScene must succeed.");
@@ -151,36 +199,42 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         return ReopenSource();
     }
 
+    private static void DeleteOwnedCopy(string path, string guid, ref bool owned)
+    {
+        if (path == null)
+            return;
+        bool remainingCopyScene = SceneManager.GetSceneByPath(path).IsValid();
+        Assert.That(remainingCopyScene, Is.False,
+            $"Delete owned copy '{path}': an uncertain or still loaded copy is retained for diagnosis, not deleted.");
+        if (!owned)
+            return;
+        AssertOwnedAsset(path, guid);
+        Assert.That(AssetDatabase.DeleteAsset(path), Is.True, $"Delete owned copy '{path}': DeleteAsset must succeed.");
+        owned = false;
+        Assert.That(ExistingAssetGuid(path), Is.Empty, $"Delete owned copy '{path}': verify asset removal.");
+    }
+
     public void Dispose()
     {
         var failures = new List<Exception>();
         Attempt(failures, "Restore prior active scene", RestorePriorActive);
-        Attempt(failures, $"Close readonly target '{templatePath}'", () =>
+        Attempt(failures, $"Close target copy '{targetCopyPath}'", () =>
         {
             if (Target.IsValid())
             {
-                Assert.That(Target.path, Is.EqualTo(templatePath), $"Close target '{templatePath}': verify owned path.");
-                Assert.That(EditorSceneManager.CloseScene(Target, true), Is.True, $"Close target '{templatePath}': CloseScene must succeed.");
+                Assert.That(Target.path, Is.EqualTo(targetCopyPath), $"Close target '{targetCopyPath}': verify owned path.");
+                Assert.That(EditorSceneManager.CloseScene(Target, true), Is.True, $"Close target '{targetCopyPath}': CloseScene must succeed.");
                 Target = default;
             }
         });
         Attempt(failures, $"Close source '{copyPath}'", CloseSource);
-        Attempt(failures, $"Delete owned copy '{copyPath}'", () =>
-        {
-            bool remainingCopyScene = SceneManager.GetSceneByPath(copyPath).IsValid();
-            if (copied && !remainingCopyScene)
-            {
-                Assert.That(AssetDatabase.DeleteAsset(copyPath), Is.True, $"Delete owned copy '{copyPath}': DeleteAsset must succeed.");
-                copied = false;
-            }
-            Assert.That(remainingCopyScene, Is.False,
-                $"Delete owned copy '{copyPath}': an uncertain or still loaded copy is retained for diagnosis, not deleted.");
-        });
+        Attempt(failures, $"Delete owned target copy '{targetCopyPath}'", () => DeleteOwnedCopy(targetCopyPath, targetCopyGuid, ref targetCopied));
+        Attempt(failures, $"Delete owned source copy '{copyPath}'", () => DeleteOwnedCopy(copyPath, copyGuid, ref copied));
         Attempt(failures, $"Verify readonly template '{templatePath}'", () =>
         {
-            Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False, $"Verify template '{templatePath}': no owned target may remain.");
+            Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False, $"Verify template '{templatePath}': the template must never be opened.");
             Assert.That(AssetDatabase.GetAssetDependencyHash(templatePath), Is.EqualTo(templateHash),
-                $"Verify template '{templatePath}': opening it must never save or rewrite its package asset.");
+                $"Verify template '{templatePath}': copying it must never save or rewrite its package asset.");
         });
         Attempt(failures, "Verify prior active scene and scene count", () =>
         {
