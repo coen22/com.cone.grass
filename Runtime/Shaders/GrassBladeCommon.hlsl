@@ -339,12 +339,30 @@ float3 GrassCenterAtHeight(GrassRootData root, float height)
     return center;
 }
 
-// The blade's unit direction at a fraction of its height: the slope of its centre line.
+// The blade's unit tangent, evaluated analytically in root-local coordinates.
+// For C(h) = pivot + H h normalize(s + h w) + h^2 c, use C'(h).
+// Differencing world positions loses small bends far from the origin and
+// biases the root/tip with one-sided samples. No geometric sampling is needed.
 half3 GrassTangentAtHeight(GrassRootData root, float height)
 {
-    float low = saturate(height - 0.01), high = saturate(height + 0.01);
-    float3 tangent = GrassCenterAtHeight(root, high) - GrassCenterAtHeight(root, low);
-    return dot(tangent, tangent) > 1e-12 ? half3(normalize(tangent)) : half3(GrassDirectionAtHeight(root, height));
+    height = saturate(height);
+    float3 wind = float3(root.wind.x, 0.0, root.wind.y);
+    float3 unnormalizedDirection = root.slopeDirection + height * wind;
+    float inverseLength = rsqrt(max(dot(unnormalizedDirection, unnormalizedDirection), FLT_MIN));
+    float3 direction = unnormalizedDirection * inverseLength;
+    float3 directionDerivative = (wind - direction * dot(direction, wind)) * inverseLength;
+
+    // Normalize out world-space blade size before forming the tangent. A tiny
+    // blade must not fall back to its radial direction merely due to its scale.
+    float shapeScale = max(root.height, max(abs(root.curvature.x), abs(root.curvature.y)));
+    if (shapeScale <= 0.0)
+        return half3(direction);
+    float3 curvature = float3(root.curvature.x, 0.0, root.curvature.y) / shapeScale;
+    float3 tangent = (root.height / shapeScale) * (direction + height * directionDerivative) +
+        (2.0 * height) * curvature;
+    float lengthSquared = dot(tangent, tangent);
+    // Only a locally stationary/degenerate curve needs the radial fallback.
+    return lengthSquared > 1e-12 ? half3(tangent * rsqrt(lengthSquared)) : half3(direction);
 }
 
 void EvaluateGrassRow(GrassRootData root, GrassViewParameters view, float height,
@@ -410,7 +428,9 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     float3 stableNormal = GrassDirectionAtHeight(root, blade.height) - view.cameraForward * 0.5;
     blade.stableNormalWS = SafeNormalize(stableNormal);
     blade.normalWS = SafeNormalize(stableNormal + _RandomNormal * normalJitter);
-    blade.rootTangentWS = GrassTangentAtHeight(root, 0.0);
+    // At h = 0, C'(h) follows the already normalized support direction.
+    // Reuse it rather than evaluating a second curve tangent for every vertex.
+    blade.rootTangentWS = half3(root.slopeDirection);
     blade.tangentWS = GrassTangentAtHeight(root, blade.height);
     // This coordinate remains linear across the tapered mesh, including its final
     // triangle, so the same analytic edge coverage works for every geometry LOD.
