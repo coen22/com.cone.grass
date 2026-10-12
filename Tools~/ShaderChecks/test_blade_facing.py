@@ -23,7 +23,8 @@ def clean(source: str) -> str:
 
 def body(source: str, name: str) -> str:
     source = clean(source)
-    match = re.search(r"\b\w+\s+" + re.escape(name) + r"\s*\([^;{}]*\)\s*\{", source)
+    match = re.search(r"\b\w+\s+" + re.escape(name) +
+                      r"\s*\([^;{}]*\)\s*(?::\s*\w+\s*)?\{", source)
     if match is None:
         raise ValueError("Missing function: " + name)
     start, depth = match.end(), 1
