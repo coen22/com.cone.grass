@@ -208,6 +208,63 @@ class TerrainSplatTests(unittest.TestCase):
             self.assertEqual(sparse, dense)
             self.assertEqual(sum(active), bin(mask).count("1"))
 
+    def test_default_variant_guarantees_albedo_only_layer_sampling(self):
+        layer = body(self.common, "GrassSplatLayer")
+        gate = layer.index("#if defined(_GRASS_GROUND_NORMAL)")
+        self.assertGreater(gate, layer.index("albedo += weight * diffuse.rgb * remap.rgb;"))
+        self.assertLess(gate, layer.index("normalLod = GrassSplatMipLevel"))
+        self.assertLess(gate, layer.index("SAMPLE_TEXTURE2D_LOD(normalMap"))
+        self.assertLess(gate, layer.index("smoothnessMetallic +="))
+        self.assertEqual(layer[:gate].count("SAMPLE_TEXTURE2D_LOD("), 1)
+
+        terrain = body(self.common, "GrassTerrainSplat")
+        normal_gate = terrain.index("#if defined(_GRASS_GROUND_NORMAL)")
+        self.assertLess(normal_gate, terrain.index("normalTS.z += 0.00001h;"))
+        self.assertLess(normal_gate, terrain.index("normalTS = normalize(normalTS);"))
+
+    def test_steep_slope_frame_keeps_tangent_space_detail(self):
+        def unit(vector):
+            length = math.sqrt(sum(value * value for value in vector))
+            return tuple(value / length for value in vector)
+
+        def cross(a, b):
+            return (a[1] * b[2] - a[2] * b[1],
+                    a[2] * b[0] - a[0] * b[2],
+                    a[0] * b[1] - a[1] * b[0])
+
+        def new_frame(normal):
+            tangent = (normal[1], -normal[0], 0.0)
+            length_squared = sum(value * value for value in tangent)
+            tangent = unit(tangent) if length_squared > 1e-8 else (1.0, 0.0, 0.0)
+            return tangent, cross(tangent, normal)
+
+        for normal in ((0.0, 1.0, 0.0), (0.6, 0.8, 0.0),
+                       (0.3, 0.1, math.sqrt(0.9)), (0.0, 1e-5, math.sqrt(1.0 - 1e-10)),
+                       (0.0, 0.0, 1.0)):
+            normal = unit(normal)
+            tangent, bitangent = new_frame(normal)
+            with self.subTest(normal=normal):
+                self.assertAlmostEqual(sum(v * v for v in tangent), 1.0, delta=1e-12)
+                self.assertAlmostEqual(sum(v * v for v in bitangent), 1.0, delta=1e-7)
+                self.assertAlmostEqual(sum(a * b for a, b in zip(tangent, normal)), 0.0, delta=1e-7)
+                self.assertAlmostEqual(sum(a * b for a, b in zip(bitangent, normal)), 0.0, delta=1e-7)
+
+    def test_old_frame_reproduces_steep_slope_normal_detail_loss(self):
+        normal = (0.0, 0.01, math.sqrt(1.0 - 0.01 * 0.01))
+        old_vertex_tangent = (-normal[1], normal[0], 0.0)
+        old_bitangent = (normal[1] * old_vertex_tangent[2] - normal[2] * old_vertex_tangent[1],
+                         normal[2] * old_vertex_tangent[0] - normal[0] * old_vertex_tangent[2],
+                         normal[0] * old_vertex_tangent[1] - normal[1] * old_vertex_tangent[0])
+        self.assertAlmostEqual(math.sqrt(sum(v * v for v in old_vertex_tangent)), 0.01, delta=1e-12)
+        self.assertAlmostEqual(math.sqrt(sum(v * v for v in old_bitangent)), 0.01, delta=1e-12)
+
+        conversion = body(self.common, "GrassTerrainNormalToWorld")
+        self.assertIn("half3 tangent = half3(normal.y, -normal.x, 0.0h);", conversion)
+        self.assertIn("tangent * rsqrt(tangentLengthSquared)", conversion)
+        self.assertIn("half3 bitangent = cross(tangent, normal);", conversion)
+        self.assertIn("tangent * normalTS.x + bitangent * normalTS.y + normal * normalTS.z", conversion)
+        self.assertNotIn("vertexTangent", conversion)
+
     def test_material_buffer_layout_is_unchanged(self):
         expected = """half4 _Color; half4 _AOColor; float _GrassWidth; float _GrassHeight;
         float _GrassCurving; float _GrassWidthRandomness; float _GrassHeightRandomness;

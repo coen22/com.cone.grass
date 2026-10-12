@@ -570,13 +570,20 @@ void GrassSplatLayer(TEXTURE2D_PARAM(diffuseMap, diffuseSampler), TEXTURE2D_PARA
         return;
     float2 layerUV = positionWS.xz * tile.xy + tile.zw;
     float diffuseLod = GrassSplatMipLevel(pixelLod, lodBias.x);
-    float normalLod = GrassSplatMipLevel(pixelLod, lodBias.y);
     half4 diffuse = SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, diffuseLod);
     albedo += weight * diffuse.rgb * remap.rgb;
-    normalTS += weight * UnpackNormalScale(SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, normalLod), remap.a);
-    // TerrainLit's sources: the constant times the diffuse alpha, the diffuse alpha alone, or the constant.
-    half smoothness = surface.y < 0.5 ? diffuse.a * surface.x : (surface.y < 1.5 ? diffuse.a : surface.x);
-    smoothnessMetallic += weight * half2(smoothness, surface.z);
+
+    // The default stylized lighting path only needs terrain albedo. Make the
+    // expensive normal/surface work a compile-time part of the ground-matched
+    // variant instead of relying on backend dead-code elimination.
+    #if defined(_GRASS_GROUND_NORMAL)
+        float normalLod = GrassSplatMipLevel(pixelLod, lodBias.y);
+        normalTS += weight * UnpackNormalScale(
+            SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, normalLod), remap.a);
+        // TerrainLit's sources: the constant times diffuse alpha, diffuse alpha alone, or the constant.
+        half smoothness = surface.y < 0.5 ? diffuse.a * surface.x : (surface.y < 1.5 ? diffuse.a : surface.x);
+        smoothnessMetallic += weight * half2(smoothness, surface.z);
+    #endif
 }
 
 bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 albedo, out half3 normalTS,
@@ -616,18 +623,27 @@ bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 al
         TEXTURE2D_ARGS(_GrassSplatNormal3, sampler_trilinear_repeat), _GrassSplatTile[3], _GrassSplatRemap[3],
         _GrassSplatSurface[3], _GrassSplatLodBias[3].xy, control.a, positionWS, pixelLod, albedo, normalTS,
         smoothnessMetallic);
-    normalTS.z += 0.00001h;
-    normalTS = normalize(normalTS);
+    #if defined(_GRASS_GROUND_NORMAL)
+        normalTS.z += 0.00001h;
+        normalTS = normalize(normalTS);
+    #endif
     return true;
 }
 
-// TerrainLit's tangent frame on a surface with normal n: tangent along +X and bitangent along +Z
-// on level ground.
+// TerrainLit's +X tangent follows the heightfield slope. The previous unnormalized
+// cross products shortened both tangent-space detail axes as the ground normal
+// approached world Z, eventually discarding the normal map on a near-vertical
+// slope. Normalize the terrain tangent first; fall back to +X only at the exact
+// degenerate direction where the heightfield tangent is otherwise undefined.
 half3 GrassTerrainNormalToWorld(half3 normalTS, half3 normal)
 {
-    half3 vertexTangent = cross(half3(0.0h, 0.0h, 1.0h), normal);
-    half3 bitangent = cross(normal, vertexTangent);
-    return SafeNormalize(-vertexTangent * normalTS.x + bitangent * normalTS.y + normal * normalTS.z);
+    half3 tangent = half3(normal.y, -normal.x, 0.0h);
+    half tangentLengthSquared = dot(tangent, tangent);
+    tangent = tangentLengthSquared > 1e-8h
+        ? tangent * rsqrt(tangentLengthSquared)
+        : half3(1.0h, 0.0h, 0.0h);
+    half3 bitangent = cross(tangent, normal);
+    return SafeNormalize(tangent * normalTS.x + bitangent * normalTS.y + normal * normalTS.z);
 }
 
 half GrassGroundBlend(float bladeHeight, half mapStrength)
