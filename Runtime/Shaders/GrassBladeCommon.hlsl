@@ -333,11 +333,19 @@ float3 GrassDirectionAtHeight(GrassRootData root, float height)
     return SafeNormalize(direction);
 }
 
-float3 GrassCenterAtHeight(GrassRootData root, float height)
+// Keep center evaluation in terms of the direction already computed for the
+// row. A second GrassDirectionAtHeight call repeated a normalization at every
+// generated vertex, including the previous-frame motion reconstruction.
+float3 GrassCenterFromDirection(GrassRootData root, float height, float3 bladeDirection)
 {
-    float3 center = root.pivot + GrassDirectionAtHeight(root, height) * height * root.height;
+    float3 center = root.pivot + bladeDirection * height * root.height;
     center.xz += height * height * root.curvature;
     return center;
+}
+
+float3 GrassCenterAtHeight(GrassRootData root, float height)
+{
+    return GrassCenterFromDirection(root, height, GrassDirectionAtHeight(root, height));
 }
 
 // The blade's unit tangent, evaluated analytically in root-local coordinates.
@@ -366,21 +374,36 @@ half3 GrassTangentAtHeight(GrassRootData root, float height)
     return lengthSquared > 1e-12 ? half3(tangent * rsqrt(lengthSquared)) : half3(direction);
 }
 
+// At an end-on viewing direction, cross(blade, ray) approaches zero.
+// The old camera-right fallback was not necessarily perpendicular to a
+// sloped blade when the pixel ray differed from the central camera ray. Keep
+// the width in the blade's normal plane and use an axis-based fallback only
+// when camera right itself is almost parallel to the blade.
+float3 GrassFacingRight(float3 bladeDirection, float3 viewDirection, float3 cameraRight)
+{
+    float3 rightTangent = cross(bladeDirection, viewDirection);
+    if (dot(rightTangent, rightTangent) < 0.00001)
+    {
+        rightTangent = cameraRight - bladeDirection * dot(cameraRight, bladeDirection);
+        if (dot(rightTangent, rightTangent) < 0.00001)
+            rightTangent = cross(bladeDirection,
+                abs(bladeDirection.y) < 0.9 ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0));
+    }
+    return SafeNormalize(rightTangent);
+}
+
 void EvaluateGrassRow(GrassRootData root, GrassViewParameters view, float height,
     out float3 center, out float3 halfSpan)
 {
     height = saturate(height);
     float3 bladeDirection = GrassDirectionAtHeight(root, height);
-    center = GrassCenterAtHeight(root, height);
+    center = GrassCenterFromDirection(root, height, bladeDirection);
     // Perspective rays vary across the image. Facing every blade along the
     // camera's central ray can backface-cull visible roots behind the camera in
     // world XZ when looking down. Orthographic rays remain parallel instead.
     float3 viewDirection = view.projection.z > 0.5
         ? view.cameraForward : SafeNormalize(center - view.cameraPosition);
-    float3 rightTangent = cross(bladeDirection, viewDirection);
-    if (dot(rightTangent, rightTangent) < 0.00001)
-        rightTangent = view.cameraRight;
-    rightTangent = SafeNormalize(rightTangent);
+    float3 rightTangent = GrassFacingRight(bladeDirection, viewDirection, view.cameraRight);
     // A continuously vanishing cap replaces only physically unresolved tips.
     // Resolved and A2C blades keep the same pointed silhouette (tipWidth0).
     halfSpan = rightTangent * 0.5 * lerp(root.width * 0.5, root.tipWidth, height);
@@ -410,8 +433,9 @@ GrassRootData BuildCurrentGrassRoot(float4 positionData)
 
 GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
 {
-    GrassRootData root = BuildCurrentGrassRoot(_GrassPositions[(uint)_GrassInstanceOffset + instanceID]);
     GrassViewParameters view = GrassCurrentView();
+    GrassRootData root = BuildGrassRootForView(
+        _GrassPositions[(uint)_GrassInstanceOffset + instanceID], view);
     GrassVertexData blade;
     blade.positionWS = EvaluateGrassPosition(root, view, input.uv);
     blade.pivotWS = root.pivot;
