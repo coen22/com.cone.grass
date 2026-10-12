@@ -10,8 +10,8 @@ CBUFFER_START(UnityPerMaterial)
     float _GrassCurving;
     float _GrassWidthRandomness;
     float _GrassHeightRandomness;
-    float _ExpandDistantGrassWidth;
     float4 _ExpandDistantGrassRange;
+    float _ExpandDistantGrassWidth;
     float4 _WindTexture_ST;
     float _WindStrength;
     float4 _WindScroll;
@@ -59,14 +59,15 @@ float _TextureUpdateThreshold;
 float4 _GrassHeightMapRT_TexelSize;
 // The painted terrain under the camera, bound by the renderer: xy origin and zw size in world XZ
 // (zw zero when none), its control map's texel size, and per layer the world-to-UV scale and
-// offset, TerrainLit's diffuse remap scale with the normal scale in w, and the diffuse width.
+// offset, TerrainLit's diffuse remap scale with the normal scale in w, and texture mip scales.
 float4 _GrassSplatTerrain;
 float4 _GrassSplatControl_TexelSize;
 float4 _GrassSplatTile[4];
 float4 _GrassSplatRemap[4];
 // Per layer: TerrainLit's smoothness constant, its source and metallic.
 float4 _GrassSplatSurface[4];
-float4 _GrassSplatWidths;
+// xy = log2 of the dominant texels/metre axis for diffuse and normal independently; zw unused.
+float4 _GrassSplatLodBias[4];
 
 TEXTURE2D(_WindTexture);
 SAMPLER(sampler_WindTexture);
@@ -544,18 +545,35 @@ half2 GrassCanopySeen(float drawnArea, float viewDepth, float2 silhouette, float
     return half2(sky, GrassCanopySeenTerm(above, reach, lightDepth, drawnArea));
 }
 
-// TerrainLit's albedo and tangent-space normal for the bound terrain's first four layers at a
-// root, filtered at the mip the terrain itself uses at that distance, so a blade takes the colour
-// and the detail of the ground it stands in. Returns false outside that terrain.
+// Shared camera footprint: texture-only log2 scales are precomputed by the CPU.
+// The smallest normal float keeps log2 finite at a zero/invalid-view footprint.
+float GrassSplatPixelLod(float worldUnitsPerPixel)
+{
+    return log2(max(worldUnitsPerPixel, FLT_MIN));
+}
+
+float GrassSplatMipLevel(float pixelLod, float textureLodBias)
+{
+    return max(0.0, pixelLod + textureLodBias);
+}
+
+// TerrainLit's layer inputs at the root, filtered using a conservative isotropic
+// footprint. Diffuse and normal textures each use both axes of their own size;
+// this is not the terrain fragment shader's anisotropic derivative footprint.
 void GrassSplatLayer(TEXTURE2D_PARAM(diffuseMap, diffuseSampler), TEXTURE2D_PARAM(normalMap, normalSampler),
-    float4 tile, float4 remap, float4 surface, float width, half weight, float3 positionWS, float worldUnitsPerPixel,
+    float4 tile, float4 remap, float4 surface, float2 lodBias, half weight, float3 positionWS, float pixelLod,
     inout half3 albedo, inout half3 normalTS, inout half2 smoothnessMetallic)
 {
+    // Do not sample unused layers. Keep every positive weight, including soft
+    // painted transitions; a near-zero cutoff would introduce a visible seam.
+    UNITY_BRANCH if (weight <= 0.0h)
+        return;
     float2 layerUV = positionWS.xz * tile.xy + tile.zw;
-    float lod = max(0.0, log2(max(worldUnitsPerPixel * width * tile.x, 0.000001)));
-    half4 diffuse = SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, lod);
+    float diffuseLod = GrassSplatMipLevel(pixelLod, lodBias.x);
+    float normalLod = GrassSplatMipLevel(pixelLod, lodBias.y);
+    half4 diffuse = SAMPLE_TEXTURE2D_LOD(diffuseMap, diffuseSampler, layerUV, diffuseLod);
     albedo += weight * diffuse.rgb * remap.rgb;
-    normalTS += weight * UnpackNormalScale(SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, lod), remap.a);
+    normalTS += weight * UnpackNormalScale(SAMPLE_TEXTURE2D_LOD(normalMap, normalSampler, layerUV, normalLod), remap.a);
     // TerrainLit's sources: the constant times the diffuse alpha, the diffuse alpha alone, or the constant.
     half smoothness = surface.y < 0.5 ? diffuse.a * surface.x : (surface.y < 1.5 ? diffuse.a : surface.x);
     smoothnessMetallic += weight * half2(smoothness, surface.z);
@@ -575,22 +593,28 @@ bool GrassTerrainSplat(float3 positionWS, float worldUnitsPerPixel, out half3 al
     // TerrainLit maps normalized terrain UVs to the control map's texel centres.
     float2 controlUV = (terrainUV * (_GrassSplatControl_TexelSize.zw - 1.0) + 0.5) * _GrassSplatControl_TexelSize.xy;
     half4 control = SAMPLE_TEXTURE2D_LOD(_GrassSplatControl, sampler_linear_clamp, controlUV, 0);
-    control /= max(dot(control, 1.0h), 0.0001h);
+    half weightSum = dot(control, 1.0h);
+    // An empty first control group has no matching layer data, not black albedo.
+    // Keep the existing ground capture rather than overriding it with zero.
+    UNITY_BRANCH if (weightSum <= 0.0h)
+        return false;
+    control /= max(weightSum, 0.0001h);
+    float pixelLod = GrassSplatPixelLod(worldUnitsPerPixel);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse0, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal0, sampler_trilinear_repeat), _GrassSplatTile[0], _GrassSplatRemap[0],
-        _GrassSplatSurface[0], _GrassSplatWidths.x, control.r, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        _GrassSplatSurface[0], _GrassSplatLodBias[0].xy, control.r, positionWS, pixelLod, albedo, normalTS,
         smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse1, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal1, sampler_trilinear_repeat), _GrassSplatTile[1], _GrassSplatRemap[1],
-        _GrassSplatSurface[1], _GrassSplatWidths.y, control.g, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        _GrassSplatSurface[1], _GrassSplatLodBias[1].xy, control.g, positionWS, pixelLod, albedo, normalTS,
         smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse2, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal2, sampler_trilinear_repeat), _GrassSplatTile[2], _GrassSplatRemap[2],
-        _GrassSplatSurface[2], _GrassSplatWidths.z, control.b, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        _GrassSplatSurface[2], _GrassSplatLodBias[2].xy, control.b, positionWS, pixelLod, albedo, normalTS,
         smoothnessMetallic);
     GrassSplatLayer(TEXTURE2D_ARGS(_GrassSplatDiffuse3, sampler_trilinear_repeat),
         TEXTURE2D_ARGS(_GrassSplatNormal3, sampler_trilinear_repeat), _GrassSplatTile[3], _GrassSplatRemap[3],
-        _GrassSplatSurface[3], _GrassSplatWidths.w, control.a, positionWS, worldUnitsPerPixel, albedo, normalTS,
+        _GrassSplatSurface[3], _GrassSplatLodBias[3].xy, control.a, positionWS, pixelLod, albedo, normalTS,
         smoothnessMetallic);
     normalTS.z += 0.00001h;
     normalTS = normalize(normalTS);
