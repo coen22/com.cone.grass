@@ -90,14 +90,21 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         return AssetDatabase.GenerateUniqueAssetPath("Assets/GrassSavedScene_" + Guid.NewGuid().ToString("N") + ".unity");
     }
 
+    private static string ExistingAssetGuid(string path)
+    {
+        // The default lookup also returns GUIDs of assets deleted during this
+        // Editor session. Ownership and removal checks require live assets.
+        return AssetDatabase.AssetPathToGUID(path, AssetPathToGUIDOptions.OnlyExistingAssets);
+    }
+
     private string CopyTemplate(string path, ref bool owned)
     {
         Assert.That(path.StartsWith("Assets/", StringComparison.Ordinal), Is.True,
             $"Acquire copy '{path}': only writable project assets may be created.");
-        Assert.That(AssetDatabase.AssetPathToGUID(path), Is.Empty, $"Acquire copy '{path}': path must be unused.");
+        Assert.That(ExistingAssetGuid(path), Is.Empty, $"Acquire copy '{path}': path must be unused.");
         owned = During($"Copy template '{templatePath}' to '{path}'", () => AssetDatabase.CopyAsset(templatePath, path));
         Assert.That(owned, Is.True, $"Acquire copy '{path}': only a successfully created unique copy is owned for cleanup.");
-        string guid = AssetDatabase.AssetPathToGUID(path);
+        string guid = ExistingAssetGuid(path);
         Assert.That(string.IsNullOrEmpty(guid), Is.False, $"Acquire copy '{path}': record its actual asset identity.");
         Assert.That(guid, Is.Not.EqualTo(TemplateGuid), $"Acquire copy '{path}': the package template must never become an owned asset.");
         return guid;
@@ -108,7 +115,7 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         Assert.That(path.StartsWith("Assets/", StringComparison.Ordinal), Is.True,
             $"Inspect owned asset '{path}': the package template is not writable fixture storage.");
         Assert.That(string.IsNullOrEmpty(guid), Is.False, $"Inspect owned asset '{path}': acquisition must have recorded an identity.");
-        Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid),
+        Assert.That(ExistingAssetGuid(path), Is.EqualTo(guid),
             $"Inspect owned asset '{path}': never overwrite or delete an asset replaced at the same path.");
     }
 
@@ -204,7 +211,7 @@ internal sealed class GrassSavedSceneFixture : IDisposable
         AssertOwnedAsset(path, guid);
         Assert.That(AssetDatabase.DeleteAsset(path), Is.True, $"Delete owned copy '{path}': DeleteAsset must succeed.");
         owned = false;
-        Assert.That(AssetDatabase.AssetPathToGUID(path), Is.Empty, $"Delete owned copy '{path}': verify asset removal.");
+        Assert.That(ExistingAssetGuid(path), Is.Empty, $"Delete owned copy '{path}': verify asset removal.");
     }
 
     public void Dispose()
