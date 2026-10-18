@@ -43,6 +43,8 @@ public class GrassInteractionPublisherTests
     public void PublishSetsTheContractAndWithdrawClearsTheFlag()
     {
         var field = new RenderTexture(4, 4, 0);
+        // An uncreated render texture reads back as no global texture.
+        field.Create();
         try
         {
             GrassInteractionPublisher.Publish(field, new Vector2(10f, -4f), 20f);
