@@ -92,7 +92,7 @@ public partial class GrassDataRendererFeature
             public bool EnsureResources(InfiniteGrassRenderer owner, Mesh[] meshes, int argumentStride)
             {
                 bool changed = false;
-                int resolution = Mathf.Clamp(owner.captureResolution, 128, SystemInfo.maxTextureSize);
+                int resolution = CaptureResolution(owner);
                 changed |= Allocate(ref Height, resolution, GraphicsFormat.R32G32_SFloat, "Grass World Height");
                 changed |= Allocate(ref HeightDepth, resolution, GraphicsFormat.D32_SFloat, "Grass Capture Depth", true);
                 changed |= Allocate(ref Density, resolution, GraphicsFormat.R8_UNorm, "Grass Density");
@@ -127,6 +127,13 @@ public partial class GrassDataRendererFeature
                     Arguments.SetData(argumentData);
                 return changed;
             }
+
+            /// <summary>The interaction capture alone, for an owner that draws no blades.</summary>
+            public void EnsureInteractionResource(InfiniteGrassRenderer owner) =>
+                Allocate(ref Slope, CaptureResolution(owner), GraphicsFormat.R8G8B8A8_UNorm, "Grass Interaction");
+
+            private static int CaptureResolution(InfiniteGrassRenderer owner) =>
+                Mathf.Clamp(owner.captureResolution, 128, SystemInfo.maxTextureSize);
 
             private bool UpdateArgumentData(Mesh[] meshes)
             {

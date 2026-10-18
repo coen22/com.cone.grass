@@ -331,6 +331,34 @@ public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
     }
 
     [Test]
+    public void UncoveredSupportLayersCarryContactsOnlyWhereNoGrassAreaReaches()
+    {
+        BoxCollider bare = NewFloor(new Vector3(-5f, 0f, 0f), new Vector2(10f, 10f));
+        bare.gameObject.layer = 8;
+        CapsuleCollider actor = NewCapsule(new Vector3(-5f, 1f, 0f));
+        Physics.SyncTransforms();
+        var resolver = new GrassInteractorSupport();
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out var status), Is.False);
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport), "off by default");
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out var sample, out status, 0f,
+            Physics.AllLayers, 1 << 8), Is.True, status.ToString());
+        Assert.That(sample.Support, Is.SameAs(bare));
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out status, 0f,
+            Physics.AllLayers, 1 << 9), Is.False);
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport), "a floor on another layer");
+
+        // A grass area within the ownership margin (2 m from the footprint centre, under radius 0.5 + margin 2) but
+        // not under the footprint keeps the bare floor unowned: grass ownership is never overridden.
+        BoxCollider grass = NewFloor(new Vector3(5f, 0f, 0f), new Vector2(10f, 10f));
+        NewArea(grass, new Vector3(5f, 0f, 0f), new Vector2(10f, 10f));
+        actor.transform.position = new Vector3(-2f, 1f, 0f);
+        Physics.SyncTransforms();
+        Assert.That(resolver.TryResolve(Shape(actor), null, 0.1f, 0.05f, out _, out status, 2f,
+            Physics.AllLayers, 1 << 8), Is.False);
+        Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
+    }
+
+    [Test]
     public void AcceptedSupportLayersNeverHideANearerExcludedPhysicalFloor()
     {
         BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));

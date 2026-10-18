@@ -291,5 +291,43 @@ public partial class GrassDataRendererFeature
         private static Texture ResolveGroundLayerSamplerTexture(GrassPlacementDrawData source) =>
             source.GroundLayerSamplerTexture ? source.GroundLayerSamplerTexture :
             source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture;
+
+        // An owner that draws no blades keeps only the interaction capture, over the window the blades would use, so
+        // the published field still carries contacts where nothing grows. It is a clear and the interactors' meshes, so
+        // it recaptures every frame instead of keeping the blade path's versions.
+        private void RecordInteractionField(RenderGraph graph, Camera camera, InfiniteGrassRenderer owner)
+        {
+            float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.textureUpdateThreshold, 10f));
+            float extent = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f)) + capturePadding;
+            Vector3 cameraPosition = camera.transform.position;
+            Vector2 center = new Vector2(Mathf.Floor(cameraPosition.x / capturePadding) * capturePadding,
+                Mathf.Floor(cameraPosition.z / capturePadding) * capturePadding);
+            if (!IsFinite(cameraPosition) || !IsFinite(new Vector3(center.x, extent * 2f, center.y)))
+                return;
+
+            PruneCameras();
+            if (!cameras.TryGetValue(camera, out CameraState state))
+            {
+                state = new CameraState(camera);
+                cameras.Add(camera, state);
+            }
+            state.LastUsedTime = Time.realtimeSinceStartupAsDouble;
+            state.ImportedTextures.Clear();
+            // The blade caches are not kept up here; drawing blades again recaptures them all.
+            state.CacheValid = false;
+            motion.Release(camera);
+            state.EnsureInteractionResource(owner);
+
+            Vector2 range = ResolveCaptureHeightRange(owner.captureHeightRange);
+            Bounds bounds = new Bounds();
+            bounds.SetMinMax(new Vector3(center.x - extent, range.x, center.y - extent),
+                new Vector3(center.x + extent, Mathf.Max(range.x + 1f, range.y), center.y + extent));
+            CollectInteractionDraws(state, bounds);
+            state.SlopeDraws.Clear();
+            BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, graph.ImportTexture(state.Slope),
+                default, MakeCaptureMatrix(center, extent, bounds.min.y, bounds.max.y), Color.clear, state.InteractionDraws);
+            GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
+            state.PruneTextureWrappers();
+        }
     }
 }

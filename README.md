@@ -133,6 +133,14 @@ Interaction remains a shared world-XZ projection. Vertically overlapping grass s
 
 Automatic ambiguity checks cover authored Placement Area owners and the declared explicit support. Unbound legacy renderers do not supply enough ownership metadata to detect every stacked surface. Support identity, transforms, scenes, geometry metadata and rendered material-slot counts invalidate retained history, including changes that preserve the same bounds. Authored area observations also invalidate affected fields after the actor has left that support. Call `ClearHistory()` after in-place mesh cooking that preserves the observed metadata. A moving support clears the old world positions while a fresh, bounded observation on that same support can continue the live attack response. It records only the new footprint after invalidation. Support loss, explicit resets, teleports and excessive observation gaps restart that response.
 
+### Shared interaction field
+
+Other effects read the interaction capture instead of simulating their own; com.cone.render-features' ground fog is one. After each camera's capture the feature publishes three globals: `_ConeInteractionField` (the capture: rg holds the push direction as `dir * 0.5 + 0.5` premultiplied by a, and a holds the contact strength), `_ConeInteractionFieldST` (world xz to uv scale and offset) and `_ConeInteractionFieldParams` (x = 1 while published). A camera that captures nothing withdraws the flag, so readers see no field rather than another camera's. A reader's feature must record after the grass feature: both run before transparents.
+
+Where nothing grows, two settings keep that field alive:
+- Turn off **Draw Blades** on the Infinite Grass Renderer. The feature then needs no blade material or compute support, and runs only the interaction capture over the same window, once per frame.
+- Set the interactor's **Uncovered Support Layers** to the floors' layers, such as a dungeon floor. Where no grass area reaches, a floor on those layers carries the contact. A grass area within reach keeps its own ownership, and the default (Nothing) keeps the previous rule.
+
 The most recently recorded support is revalidated before its interaction draw. Disabling, destroying or moving that support clears stale output even before the next actor sample, including in Manual mode. This draw-time check neither samples the actor nor advances recovery.
 
 The field, mesh, support and component cases are authored in the Editor test assembly. The three collider/support fixtures enter paused Play sessions to create isolated native physics worlds, then restore the previous editor state. Native execution, cleanup, rendered recovery and cost still require the [interaction acceptance checks](Documentation~/Validation.md#collider-interaction-acceptance).
