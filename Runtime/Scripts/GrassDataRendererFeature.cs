@@ -48,6 +48,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer)
         {
             grassPass?.ReleaseCameras();
+            GrassInteractionPublisher.Withdraw();
             return;
         }
         if (grassPass == null || !grassPass.TryGetForwardPass(owner, out _))
@@ -83,6 +84,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
         RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
         grassPass?.Dispose();
         grassPass = null;
+        GrassInteractionPublisher.Withdraw();
     }
 
     private void OnDisable() => Dispose(true);
@@ -251,6 +253,8 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
 
         public override void RecordRenderGraph(RenderGraph graph, ContextContainer frameData)
         {
+            // Each camera publishes its own capture below; one that returns before that must not read another camera's.
+            GrassInteractionPublisher.Withdraw();
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
             if (disposed)
                 return;
@@ -430,6 +434,7 @@ public class GrassDataRendererFeature : ScriptableRendererFeature
             state.Owner = owner;
             state.Center = center;
             state.CaptureExtent = extent;
+            GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
             state.CaptureRange = captureRange;
             state.Authored = authored;
             state.DensityShortens = authored && owner.densityShortensBlades;
