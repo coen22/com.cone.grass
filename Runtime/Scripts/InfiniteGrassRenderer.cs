@@ -20,6 +20,9 @@ public class InfiniteGrassRenderer : MonoBehaviour
     [Tooltip("Authored Areas requires explicit Grass Placement Area components. Legacy mode uses the feature's height layer.")]
     public GrassPlacementMode placementMode = GrassPlacementMode.AuthoredAreas;
     public bool renderInSceneView = true;
+    [Tooltip("Off draws no grass and keeps only the interaction capture, so effects that read the interaction field "
+        + "(com.cone.render-features' ground fog) still see contacts where nothing grows, such as a dungeon floor.")]
+    public bool drawBlades = true;
 
     [Header("Population")]
     [Min(0.01f)] public float spacing = 0.1f;

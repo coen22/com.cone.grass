@@ -113,6 +113,26 @@ public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
     }
 
     [Test]
+    public void AnUncoveredSupportLayerDrawsContactsOnAFloorWithoutGrass()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            // No explicit support and no grass area: the floor owns no grass, as a dungeon floor.
+            fixture.Interactor.Configure(fixture.Collider);
+            fixture.Interactor.SamplingMode = GrassColliderInteractor.UpdateMode.Manual;
+            fixture.Advance(0.0);
+            Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
+            Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
+
+            fixture.Interactor.UncoveredSupportLayers = 1 << fixture.Ground.gameObject.layer;
+            fixture.Advance(0.1);
+            Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+            Assert.That(fixture.Interactor.ActiveNodeCount, Is.GreaterThan(0));
+            Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.True);
+        }
+    }
+
+    [Test]
     public void StationaryContactRefreshesExistingNodesAndDepartureRecoversToFinalRemoval()
     {
         using (var fixture = new InteractorFixture())

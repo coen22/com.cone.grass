@@ -43,13 +43,16 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
     {
         grassPass?.PruneCameras();
         InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-        if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial || !computeShader ||
-            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer)
+        // Without blades only the interaction capture runs: it needs no blade material, compute or indirect draws.
+        bool blades = owner && owner.drawBlades;
+        if (!owner || !owner.IsReadyForRendering || blades && (!owner.grassMaterial || !computeShader ||
+            !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer))
         {
             grassPass?.ReleaseCameras();
+            GrassInteractionPublisher.Withdraw();
             return;
         }
-        if (grassPass == null || !grassPass.TryGetForwardPass(owner, out _))
+        if (grassPass == null || blades && !grassPass.TryGetForwardPass(owner, out _))
             return;
 
         Camera camera = renderingData.cameraData.camera;
@@ -62,8 +65,8 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             return;
         }
 
-        bool contacts = GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
-        bool motion = grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
+        bool contacts = blades && GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
+        bool motion = blades && grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
             renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,
             owner.motionVectors, owner.grassMaterial);
         ScriptableRenderPassInput inputs = contacts || motion ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None;
@@ -82,6 +85,7 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
         RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
         grassPass?.Dispose();
         grassPass = null;
+        GrassInteractionPublisher.Withdraw();
     }
 
     private void OnDisable() => Dispose(true);
@@ -250,17 +254,21 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
 
         public override void RecordRenderGraph(RenderGraph graph, ContextContainer frameData)
         {
+            // Each camera publishes its own capture below; one that returns before that must not read another camera's.
+            GrassInteractionPublisher.Withdraw();
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
             if (disposed)
                 return;
-            if (!owner || !owner.IsReadyForRendering || !owner.grassMaterial)
+            bool blades = owner && owner.drawBlades;
+            if (!owner || !owner.IsReadyForRendering || blades && !owner.grassMaterial)
             {
                 ReleaseCameras();
                 return;
             }
-            if (!TryGetForwardPass(owner, out int forwardPass))
+            int forwardPass = -1;
+            if (blades && !TryGetForwardPass(owner, out forwardPass))
                 return;
-            if (!kernelsValid)
+            if (blades && !kernelsValid)
             {
                 ReleaseCameras();
                 return;
@@ -275,6 +283,11 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                 !resources.activeColorTexture.IsValid() || !resources.activeDepthTexture.IsValid())
             {
                 ReleaseCamera(camera);
+                return;
+            }
+            if (!blades)
+            {
+                RecordInteractionField(graph, camera, owner);
                 return;
             }
 
@@ -429,6 +442,7 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             state.Owner = owner;
             state.Center = center;
             state.CaptureExtent = extent;
+            GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
             state.CaptureRange = captureRange;
             state.Authored = authored;
             state.DensityShortens = authored && owner.densityShortensBlades;
@@ -517,7 +531,6 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             BuildReadback(graph, state, counts, owner);
             state.PruneTextureWrappers();
         }
-
 
         public void PruneCameras()
         {

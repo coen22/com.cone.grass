@@ -174,7 +174,7 @@ public sealed class GrassInteractorSupport
     public bool TryResolve(in GrassInteractorShape shape, Collider explicitSupport,
         float maxGroundClearance, float allowedPenetration,
         out GrassInteractorSupportSample sample, out GrassInteractorSupportStatus status,
-        float ownershipMargin = 0f, int acceptedSupportLayers = Physics.AllLayers)
+        float ownershipMargin = 0f, int acceptedSupportLayers = Physics.AllLayers, int uncoveredSupportLayers = 0)
     {
         sample = default;
         try
@@ -202,7 +202,8 @@ public sealed class GrassInteractorSupport
             if (!Finite(envelope.min) || !Finite(envelope.max) ||
                 envelope.min.x >= envelope.max.x || envelope.min.z >= envelope.max.z)
                 return Reject(GrassInteractorSupportStatus.InvalidSettings, out status);
-            if (!CollectOwnership(shape, explicitSupport, footprint, envelope, ownershipMargin, acceptedSupportLayers, out status))
+            if (!CollectOwnership(shape, explicitSupport, footprint, envelope, ownershipMargin, acceptedSupportLayers,
+                    uncoveredSupportLayers, out bool uncovered, out status))
                 return false;
 
             // Lifting by the permitted penetration starts ordinary grounded casts outside
@@ -252,7 +253,8 @@ public sealed class GrassInteractorSupport
                     continue;
                 if (!UsableHit(hits[i]))
                     return Reject(GrassInteractorSupportStatus.Ungrounded, out status);
-                bool owned = collider == explicitSupport || HasContactOwner(collider);
+                bool owned = collider == explicitSupport || HasContactOwner(collider) ||
+                    uncovered && AcceptedLayer(collider, uncoveredSupportLayers);
                 foreignAtNearest |= !owned;
                 if (owned && (!hasExplicit || collider == explicitSupport) &&
                     (chosen < 0 || collider.GetEntityId().CompareTo(hits[chosen].collider.GetEntityId()) < 0))
@@ -297,9 +299,10 @@ public sealed class GrassInteractorSupport
     }
 
     private bool CollectOwnership(in GrassInteractorShape shape, Collider explicitSupport,
-        Bounds footprint, Bounds envelope, float margin, int acceptedSupportLayers,
-        out GrassInteractorSupportStatus status)
+        Bounds footprint, Bounds envelope, float margin, int acceptedSupportLayers, int uncoveredSupportLayers,
+        out bool uncovered, out GrassInteractorSupportStatus status)
     {
+        uncovered = false;
         bool actualCoverage = false, explicitHasCoverage = false;
         var areas = GrassPlacementArea.ActiveAreas;
         for (int i = 0; i < areas.Count; i++)
@@ -340,7 +343,13 @@ public sealed class GrassInteractorSupport
                 { Area = area, Support = support, Bounds = bounds, RequiresContact = contact };
         }
         if (!explicitSupport && !actualCoverage)
-            return Reject(GrassInteractorSupportStatus.MissingSupport, out status);
+        {
+            // Where no grass area reaches, a floor on an uncovered-support layer (a dungeon floor) still carries the
+            // contact, so effects reading the interaction field see it. A grass area in reach keeps its ownership.
+            uncovered = candidateCount == 0 && uncoveredSupportLayers != 0;
+            if (!uncovered)
+                return Reject(GrassInteractorSupportStatus.MissingSupport, out status);
+        }
         if (explicitSupport && !explicitHasCoverage)
         {
             // An explicit Legacy owner has no authored crop. Its full envelope cannot

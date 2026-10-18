@@ -4,7 +4,8 @@ using System.Collections.Generic;
 // Fixed source-audited method/signature list, not a namespace or class wildcard.
 // Baseline: PR65 790731d83536227a8c2c50f28a99991003cfbbbb (272 methods),
 // plus two synchronous serialized-binding regressions, three snapshot controls,
-// the revised snapshot-format signature, and seven guard controls.
+// the revised snapshot-format signature, seven guard controls, and the shared interaction field's
+// publisher, uncovered-support and blade-less capture cases (render-features #4).
 // Review future test bodies AND setup/teardown for intentional compilation or
 // domain reload waits before adding a signature. Case arguments remain checked
 // against each reflected signature; same-type values are allowed. This is not
@@ -37,6 +38,7 @@ internal static class GrassBatchRunReloadInventory
         "GrassColliderInteractorTests.ACurrentFootprintThatCannotFitClearsOutputAndDebouncesItsDiagnostic()",
         "GrassColliderInteractorTests.ActualColliderCreatesCameraIndependentOutputAndReusesItsOwnedResources()",
         "GrassColliderInteractorTests.AirborneRelocationClearsTakeoffHistoryAtTheDiscontinuousObservation(System.Single,System.Single,System.Boolean)",
+        "GrassColliderInteractorTests.AnUncoveredSupportLayerDrawsContactsOnAFloorWithoutGrass()",
         "GrassColliderInteractorTests.CameraCaptureVersionsIgnoreDistantUpdatesAndObserveRelevantExpiryAndRemoval()",
         "GrassColliderInteractorTests.ContinuouslyObservedNearbyJumpRetainsRecoveryAndNeverJoinsTheAirbornePath()",
         "GrassColliderInteractorTests.DisableReleasesOwnedResourcesAndReenableStartsASeparateHistory()",
@@ -160,6 +162,8 @@ internal static class GrassBatchRunReloadInventory
         "GrassInteractionMeshTests.SingleNodeBuildsFourWorldCellsWithPremultipliedDirectionAndTransparentHalo()",
         "GrassInteractionMeshTests.TranslatedFieldBoundsContainEveryEmittedVertex(System.Single,System.Single,System.Single,System.Int32,System.Int32)",
         "GrassInteractionMeshTests.UnrepresentableFloatCellsAreSkippedWithoutRetainingPreviousGeometry()",
+        "GrassInteractionPublisherTests.PublishSetsTheContractAndWithdrawClearsTheFlag()",
+        "GrassInteractionPublisherTests.ScaleOffsetMatchesTheCaptureMapping(System.Single,System.Single,System.Single)",
         "GrassInteractorSupportTests.AcceptedSupportLayersNeverHideANearerExcludedPhysicalFloor()",
         "GrassInteractorSupportTests.ActorHierarchyAndSharedBodyAreIgnoredButStaticNullBodiesAreNot(System.Boolean)",
         "GrassInteractorSupportTests.ActualColliderStandingOnExplicitFloorResolvesAndRaisedPoseDoesNot(System.Int32)",
@@ -183,6 +187,7 @@ internal static class GrassBatchRunReloadInventory
         "GrassInteractorSupportTests.SerializedEmptyExplicitSupportUsesAuthoredOwnershipButDestroyedAssignmentRejects()",
         "GrassInteractorSupportTests.SupportSignatureTracksPoseGeometryAndDisableWithoutRetainingDeadNativeObjects()",
         "GrassInteractorSupportTests.TerrainColliderMustMatchTheAuthoredTerrainDataAndRecoverAfterRebinding()",
+        "GrassInteractorSupportTests.UncoveredSupportLayersCarryContactsOnlyWhereNoGrassAreaReaches()",
         "GrassInteractorSupportTests.UnsupportedTiltShearAndActorRootFailWithoutSubstitutingAnAabb()",
         "GrassInteractorSupportTests.VerticallyOverlappingGrassOwnersAreAmbiguousWhileDuplicateAreasOnOneFloorAreValid()",
         "GrassInteractorSupportTests.VirtualPathProbesRejectARealHoleInsideOneMeshColliderBounds()",

@@ -35,6 +35,9 @@ public class GrassColliderInteractor : MonoBehaviour
     [Tooltip("Optional producer using premultiplied vertex RGBA and the GrassSlope pass. Empty uses the retained package material.")]
     [SerializeField] private Shader captureShader;
     [SerializeField] private LayerMask acceptedSupportLayers = ~0;
+    [Tooltip("Floors on these layers carry contacts where no grass area reaches, so effects that read the interaction field "
+        + "(ground fog) see footsteps where nothing grows. Grass areas keep their own ownership.")]
+    [SerializeField] private LayerMask uncoveredSupportLayers;
     [SerializeField] private UpdateMode updateMode = UpdateMode.LateUpdate;
     [SerializeField, Min(0f)] private float groundClearance = 0.15f;
     [SerializeField, Min(0f)] private float allowedPenetration = 0.1f;
@@ -63,7 +66,7 @@ public class GrassColliderInteractor : MonoBehaviour
     private Scene configuredScene, configuredActorScene;
     private UpdateMode configuredUpdateMode;
     private float configuredSpacing, configuredClearance, configuredPenetration, configuredPadding;
-    private int configuredLayers;
+    private int configuredLayers, configuredUncoveredLayers;
     private int configuredCapacity, registeredGeneration;
     private int lastGroundSignature;
     private uint historyGeneration, drawRevision;
@@ -77,6 +80,7 @@ public class GrassColliderInteractor : MonoBehaviour
     public uint DrawRevision => drawRevision;
     public Collider ActorCollider => actorCollider;
     public Collider ExplicitSupport => explicitSupport;
+    public LayerMask UncoveredSupportLayers { get => uncoveredSupportLayers; set => uncoveredSupportLayers = value; }
     public int ActiveNodeCount => field == null ? 0 : field.Count;
     /// <summary>Number of retained sparse contact nodes, including currently touched nodes.</summary>
     public int RetainedStampCount => ActiveNodeCount;
@@ -324,7 +328,8 @@ public class GrassColliderInteractor : MonoBehaviour
             configuredScene != gameObject.scene || configuredActorScene != actorCollider.gameObject.scene ||
             configuredUpdateMode != updateMode || configuredSpacing != spacing || configuredCapacity != capacity ||
             configuredClearance != clearance || configuredPenetration != penetration ||
-            configuredPadding != padding || configuredLayers != acceptedSupportLayers.value)
+            configuredPadding != padding || configuredLayers != acceptedSupportLayers.value ||
+            configuredUncoveredLayers != uncoveredSupportLayers.value)
         {
             ClearHistory();
             if (field != null && (configuredSpacing != spacing || configuredCapacity != capacity))
@@ -341,6 +346,7 @@ public class GrassColliderInteractor : MonoBehaviour
             configuredPenetration = penetration;
             configuredPadding = padding;
             configuredLayers = acceptedSupportLayers.value;
+            configuredUncoveredLayers = uncoveredSupportLayers.value;
         }
         if (!ReferenceEquals(configuredShader, captureShader))
         {
@@ -372,7 +378,8 @@ public class GrassColliderInteractor : MonoBehaviour
         uint generationBeforeQuery = historyGeneration;
         float ownershipMargin = padding + spacing * 1.415f;
         bool grounded = supportResolver.TryResolve(in shape, explicitSupport, clearance, penetration,
-            out GrassInteractorSupportSample support, out status, ownershipMargin, acceptedSupportLayers.value);
+            out GrassInteractorSupportSample support, out status, ownershipMargin, acceptedSupportLayers.value,
+            uncoveredSupportLayers.value);
         if (!this || !registered || !IsEligible())
             return;
         LastSupportStatus = status;
@@ -414,7 +421,8 @@ public class GrassColliderInteractor : MonoBehaviour
                         Mathf.Lerp(previousShape.Radius, shape.Radius, fraction),
                         Mathf.Lerp(previousShape.Height, shape.Height, fraction));
                     bool supported = supportResolver.TryResolve(in intermediate, explicitSupport, clearance, penetration,
-                        out _, out _, ownershipMargin, acceptedSupportLayers.value);
+                        out _, out _, ownershipMargin, acceptedSupportLayers.value,
+                        uncoveredSupportLayers.value);
                     if (!supported)
                     {
                         responseValid = false;
@@ -442,7 +450,8 @@ public class GrassColliderInteractor : MonoBehaviour
             continuous = false;
             uint currentGeneration = historyGeneration;
             bool stillGrounded = supportResolver.TryResolve(in shape, explicitSupport, clearance, penetration,
-                out support, out status, ownershipMargin, acceptedSupportLayers.value);
+                out support, out status, ownershipMargin, acceptedSupportLayers.value,
+                uncoveredSupportLayers.value);
             if (!this || !registered || !IsEligible())
                 return;
             if (!stillGrounded || currentGeneration != historyGeneration)
