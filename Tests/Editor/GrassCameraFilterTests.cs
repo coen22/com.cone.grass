@@ -49,6 +49,34 @@ public sealed class GrassCameraFilterTests
     }
 
     [Test]
+    public void ARefusedCameraWithdrawsTheFieldTheLastCameraPublished()
+    {
+        var field = new RenderTexture(4, 4, 0) { hideFlags = HideFlags.HideAndDontSave };
+        var refusedObject = new GameObject("Grass camera filter refused camera") { hideFlags = HideFlags.HideAndDontSave };
+        try
+        {
+            // Camera A draws the grass and publishes its interaction capture.
+            Assert.That(owner.AdmitCamera(camera), Is.True);
+            GrassInteractionPublisher.Publish(field, Vector2.zero, 10f);
+            Assert.That(Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId).x, Is.EqualTo(1f));
+
+            // Camera B culls the grass's layer: ground fog on it must not read A's contacts.
+            var refused = refusedObject.AddComponent<Camera>();
+            refused.enabled = false;
+            refused.cullingMask = 0;
+            Assert.That(owner.AdmitCamera(refused), Is.False);
+            Assert.That(Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId).x, Is.Zero, "B still sees A's interaction field.");
+        }
+        finally
+        {
+            GrassInteractionPublisher.Withdraw();
+            Object.DestroyImmediate(refusedObject);
+            field.Release();
+            Object.DestroyImmediate(field);
+        }
+    }
+
+    [Test]
     public void OnlyGameViewsAndTheEnabledSceneViewDrawTheGrass()
     {
         camera.cameraType = CameraType.Preview;

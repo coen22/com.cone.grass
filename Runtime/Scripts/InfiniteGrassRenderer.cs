@@ -99,6 +99,19 @@ public class InfiniteGrassRenderer : MonoBehaviour
         return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && renderInSceneView);
     }
 
+    /// <summary>
+    /// <see cref="DrawsFor"/> at the feature's admission points. A refused camera also withdraws the interaction field the
+    /// last admitted camera published, so effects reading it on the refused camera (ground fog) see no field rather than
+    /// that camera's contacts.
+    /// </summary>
+    public bool AdmitCamera(Camera camera)
+    {
+        if (DrawsFor(camera))
+            return true;
+        GrassInteractionPublisher.Withdraw();
+        return false;
+    }
+
     private Mesh[] meshes;
     private int cachedSubdivision = -1;
     private GUIStyle diagnosticStyle;

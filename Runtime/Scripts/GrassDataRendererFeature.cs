@@ -56,7 +56,7 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             return;
 
         Camera camera = renderingData.cameraData.camera;
-        if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.DrawsFor(camera))
+        if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera))
         {
             grassPass?.ReleaseCamera(camera);
             return;
@@ -274,7 +274,7 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
             UniversalResourceData resources = frameData.Get<UniversalResourceData>();
             Camera camera = cameraData.camera;
-            if (cameraData.renderType != CameraRenderType.Base || !owner.DrawsFor(camera) ||
+            if (cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera) ||
                 !resources.activeColorTexture.IsValid() || !resources.activeDepthTexture.IsValid())
             {
                 ReleaseCamera(camera);
