@@ -139,7 +139,7 @@ Other effects read the interaction capture instead of simulating their own; com.
 
 Where nothing grows, two settings keep that field alive:
 - Turn off **Draw Blades** on the Infinite Grass Renderer. The feature then needs no blade material or compute support, and runs only the interaction capture over the same window, once per frame.
-- Set the interactor's **Uncovered Support Layers** to the floors' layers, such as a dungeon floor. Where no grass area reaches, a floor on those layers carries the contact. A grass area within reach keeps its own ownership, and the default (Nothing) keeps the previous rule.
+- Set the interactor's **Uncovered Support Layers** to the floors' layers, such as a dungeon floor. Where no grass area reaches, a floor on those layers carries the contact. A grass area within reach keeps its own ownership, and the default (Nothing) keeps the previous rule. Both interactors have it: `GrassInteractor` inherits it from `GrassColliderInteractor`, shows it in its inspector and keeps it through its own configuration; from a script, set `UncoveredSupportLayers`.
 
 The most recently recorded support is revalidated before its interaction draw. Disabling, destroying or moving that support clears stale output even before the next actor sample, including in Manual mode. This draw-time check neither samples the actor nor advances recovery.
 
