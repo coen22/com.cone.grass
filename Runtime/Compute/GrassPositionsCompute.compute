@@ -234,7 +234,8 @@ uint GrassSelectLod(float distanceToCamera, float randomValue)
 [numthreads(8, 1, 1)]
 void ResetCounts(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x < 4u + (uint)clamp(_GrassHeadQueues, 0, 2))
+    // With any head queue both head counters reset, so an unused queue never keeps a stale count.
+    if (id.x < (_GrassHeadQueues > 0 ? 6u : 4u))
         _GrassCounts[id.x] = 0;
 }
 
@@ -391,7 +392,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
 void FinalizeArgs(uint3 id : SV_DispatchThreadID)
 {
     uint lod = id.x;
-    if (lod >= 3u + (uint)clamp(_GrassHeadQueues, 0, 2))
+    if (lod >= (_GrassHeadQueues > 0 ? 5u : 3u))
         return;
 
     // Arguments 3 and 4 draw the head queues, whose counts follow the overflow slot.

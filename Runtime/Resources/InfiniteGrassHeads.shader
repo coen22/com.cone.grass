@@ -147,7 +147,11 @@ Shader "Hidden/InfiniteGrass/Heads"
                         return min(min(rise - bottom, 0.03 - rise), 0.85 - abs(x));
                     }
                     if (shape == GRASS_HEAD_UMBEL)
-                        return min(0.06 - abs(rise - 0.08 * (1.0 - x * x)), 0.95 - abs(x));
+                    {
+                        // A shallow dome of separate florets, not a solid band.
+                        float floret = 0.32 - abs(frac(x * 4.5) - 0.5);
+                        return min(min(0.05 - abs(rise - 0.08 * (1.0 - x * x)), floret * 0.25), 0.92 - abs(x));
+                    }
                     if (shape == GRASS_HEAD_SPIKE)
                     {
                         float t = (rise - 0.75) / 0.75;
@@ -171,9 +175,10 @@ Shader "Hidden/InfiniteGrass/Heads"
                 }
                 if (shape == GRASS_HEAD_UMBEL)
                 {
-                    float2 cell = frac(q * 3.0) - 0.5;
-                    centre = length(cell) < 0.12;
-                    return min(0.42 - length(cell), 0.95 - r);
+                    // Florets on a grid cut to a disc, with gaps between them.
+                    float2 cell = frac(q * 3.5) - 0.5;
+                    centre = length(cell) < 0.1;
+                    return min(0.36 - length(cell), 0.9 - r);
                 }
                 if (shape == GRASS_HEAD_SPIKE)
                 {
