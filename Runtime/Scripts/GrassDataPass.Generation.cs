@@ -164,6 +164,7 @@ public partial class GrassDataRendererFeature
 
         private void BuildGeneration(RenderGraph graph, CameraState state, InfiniteGrassRenderer owner,
             TextureHandle height, TextureHandle density, TextureHandle mask,
+            TextureHandle variantWeights0, TextureHandle variantWeights1,
             BufferHandle positions, BufferHandle counts, BufferHandle arguments,
             Vector2 center, Vector3 cameraPosition, float spacing, float distanceLimit, float capturePadding,
             float radius, bool authored)
@@ -181,6 +182,11 @@ public partial class GrassDataRendererFeature
                 pass.Height = height;
                 pass.Density = density;
                 pass.Mask = mask;
+                pass.VariantWeights0 = variantWeights0;
+                pass.VariantWeights1 = variantWeights1;
+                pass.Variants = state.Variants;
+                pass.HeadOffsets = state.HeadOffsets;
+                pass.HeadCapacities = state.HeadCapacities;
                 pass.Dispatches = state.Dispatches;
                 pass.DispatchCount = state.DispatchCount;
                 pass.LodOffsets = state.LodOffsets;
@@ -206,6 +212,8 @@ public partial class GrassDataRendererFeature
                 builder.UseTexture(height, AccessFlags.Read);
                 builder.UseTexture(density, AccessFlags.Read);
                 builder.UseTexture(mask, AccessFlags.Read);
+                builder.UseTexture(variantWeights0, AccessFlags.Read);
+                builder.UseTexture(variantWeights1, AccessFlags.Read);
                 builder.UseBuffer(positions, AccessFlags.Write);
                 builder.UseBuffer(counts, AccessFlags.ReadWrite);
                 builder.UseBuffer(arguments, AccessFlags.ReadWrite);
@@ -239,11 +247,18 @@ public partial class GrassDataRendererFeature
                     cmd.SetComputeIntParam(shader, Id.DensityShortens, data.DensityShortens ? 1 : 0);
                     cmd.SetComputeIntParam(shader, Id.ArgsStride, data.ArgumentStride);
                     cmd.SetComputeIntParam(shader, Id.ArgsCountOffset, data.ArgumentCountOffset);
+                    // Kinds and heads. Zero head queues keep the earlier counter and argument layout.
+                    data.Variants.Apply(cmd, shader);
+                    cmd.SetComputeIntParam(shader, Id.HeadQueues, data.Variants.HeadQueues);
+                    cmd.SetComputeIntParams(shader, Id.HeadOffsets, data.HeadOffsets);
+                    cmd.SetComputeIntParams(shader, Id.HeadCapacities, data.HeadCapacities);
                     cmd.SetComputeBufferParam(shader, data.GenerateKernel, Id.Positions, data.Positions);
                     cmd.SetComputeBufferParam(shader, data.GenerateKernel, Id.Counts, data.Counts);
                     cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.Height, data.Height);
                     cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.Density, data.Density);
                     cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.Mask, data.Mask);
+                    cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.VariantWeights0, data.VariantWeights0);
+                    cmd.SetComputeTextureParam(shader, data.GenerateKernel, Id.VariantWeights1, data.VariantWeights1);
                     for (int i = 0; i < data.DispatchCount; i++)
                     {
                         DispatchData dispatch = data.Dispatches[i];
@@ -316,6 +331,23 @@ public partial class GrassDataRendererFeature
             return true;
         }
 
+        // The flower-head shader, loaded once; heads are skipped with a warning when it is missing or unsupported.
+        private Shader EnsureHeadShader()
+        {
+            if (headShader)
+                return headShader;
+            Shader shader = Resources.Load<Shader>("InfiniteGrassHeads");
+            if (!shader || !shader.isSupported)
+            {
+                if (!missingHeadWarning)
+                    Debug.LogWarning("Grass flower heads require the supported InfiniteGrassHeads resource shader.");
+                missingHeadWarning = true;
+                return null;
+            }
+            headShader = shader;
+            return headShader;
+        }
+
         private static int FindInstanceCountOffset()
         {
             int size = Marshal.SizeOf<GraphicsBuffer.IndirectDrawIndexedArgs>();
@@ -357,13 +389,15 @@ public partial class GrassDataRendererFeature
 
         private static float CalculateBladeRadius(Material material, InfiniteGrassRenderer owner, Camera camera, float scaledHeight)
         {
-            float height = Mathf.Max(0f, material.GetFloat("_GrassHeight")) * (1f + Mathf.Max(0f, owner.subdivisionHeightBoost));
-            float width = Mathf.Max(0f, material.GetFloat("_GrassWidth")) + Mathf.Max(0f, material.GetFloat("_ExpandDistantGrassWidth"));
+            // The tallest, widest and most curved kind, and a head on its tip, bound every root.
+            Vector4 kinds = owner.variants && owner.variants.KindCount > 0 ? owner.variants.MaximumScales() : new Vector4(1f, 1f, 1f, 0f);
+            float height = Mathf.Max(0f, material.GetFloat("_GrassHeight")) * kinds.x * (1f + Mathf.Max(0f, owner.subdivisionHeightBoost));
+            float width = Mathf.Max(0f, material.GetFloat("_GrassWidth")) * kinds.y + Mathf.Max(0f, material.GetFloat("_ExpandDistantGrassWidth"));
             float pixelWidth = owner.minimumPixelWidth * 2f *
                 (camera.orthographic ? 1f : Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f))) /
                 (Mathf.Max(1f, scaledHeight) * Mathf.Max(0.001f, Mathf.Abs(camera.projectionMatrix.m11)));
-            return height + Mathf.Max(width * 0.25f, pixelWidth * 0.5f) +
-                Mathf.Abs(material.GetFloat("_GrassCurving")) * 1.415f + Mathf.Max(0f, owner.cullingPadding);
+            return height + kinds.w + Mathf.Max(width * 0.25f, pixelWidth * 0.5f) +
+                Mathf.Abs(material.GetFloat("_GrassCurving")) * kinds.z * 1.415f + Mathf.Max(0f, owner.cullingPadding);
         }
 
         private static Bounds CalculateCameraBounds(Camera camera, float drawDistance, float padding)

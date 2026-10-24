@@ -1,6 +1,7 @@
 #ifndef CONE_GRASS_BLADE_COMMON_INCLUDED
 #define CONE_GRASS_BLADE_COMMON_INCLUDED
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+#include "GrassVariants.hlsl"
 
 CBUFFER_START(UnityPerMaterial)
     half4 _Color;
@@ -38,7 +39,7 @@ CBUFFER_START(UnityPerMaterial)
 CBUFFER_END
 
 // Renderer-owned resources and constants belong outside UnityPerMaterial.
-// xyz = stable world pivot; w = continuous coverage, never camera distance.
+// xyz = stable world pivot; w = continuous coverage + 2 * plant kind (GrassPackKind), never camera distance.
 StructuredBuffer<float4> _GrassPositions;
 int _GrassInstanceOffset;
 int _GrassMainLightShadowCascades;
@@ -120,6 +121,7 @@ struct GrassVertexData
     float worldUnitsPerPixel;
     float2 silhouette;
     uint seed;
+    uint kind;
 };
 
 // The current and previous frames evaluate the same deformation. Keeping these
@@ -159,6 +161,8 @@ struct GrassRootData
     // The drawn silhouette's base and tip widths over the physical triangle's base: what a view ray meets.
     float2 silhouette;
     uint seed;
+    // The plant kind (GrassVariantProfile); zero without a profile.
+    uint kind;
 };
 
 uint GrassHash(uint value)
@@ -252,7 +256,10 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     root.seed = GrassHash(asuint(root.pivot.x)) ^ GrassHash(asuint(root.pivot.z) + 0x9e3779b9u);
     root.cameraDistance = distance(view.cameraPosition, root.pivot);
     root.mapUV = mapUV;
-    float width = max(0.0, shape.dimensions.x) *
+    root.kind = GrassUnpackKind(positionData.w);
+    // The kind scales the material blade; unset arrays leave it as it is.
+    float3 kindScale = max(1.0 + _GrassKindShape[root.kind].xyz, 0.0);
+    float width = max(0.0, shape.dimensions.x) * kindScale.y *
         (1.0 - GrassRandom(root.seed + 1u) * saturate(shape.dimensions.z));
     float widthRange = max(shape.ranges.y - shape.ranges.x, 0.001);
     width += saturate((root.cameraDistance - shape.ranges.x) / widthRange) * max(0.0, shape.shaping.y);
@@ -277,7 +284,7 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     // A zero physical width must still produce no grass in either path.
     if (_GrassAlphaToCoverage <= 0.5)
         widthCoverage = originalFullWidth > 0.0 ? 1.0 : 0.0;
-    float densityCoverage = saturate(positionData.w);
+    float densityCoverage = GrassUnpackCoverage(positionData.w);
     root.worldUnitsPerPixel = worldUnitsPerPixel;
     root.coverage = densityCoverage * saturate(widthCoverage);
     root.width = expandedFullWidth * 2.0;
@@ -307,7 +314,7 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
         root.physicalPixelWidth *= opaqueDensityScale;
         root.coverage = densityCoverage > 0.0 && originalFullWidth > 0.0 ? 1.0 : 0.0;
     }
-    root.height = max(0.0, shape.dimensions.y) *
+    root.height = max(0.0, shape.dimensions.y) * kindScale.x *
         (1.0 - GrassRandom(root.seed + 2u) * saturate(shape.dimensions.w));
     float bump = saturate(1.0 - abs(root.cameraDistance - shape.ranges.z) / max(shape.shaping.w, 0.001));
     root.height *= max(0.0, 1.0 + shape.shaping.z * bump) * opaqueDensityScale;
@@ -322,7 +329,8 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
         1.0 - max(abs(slopeXZ.x), abs(slopeXZ.y)) * 0.5, slopeXZ.y));
     root.slopeDirection = SafeNormalize(lerp(float3(0, 1, 0), slopeDirection, saturate(slope.a)));
     root.wind = wind * shape.windMotion.z * (1.0 - saturate(slope.a));
-    root.curvature = (float2(GrassRandom(root.seed + 3u), GrassRandom(root.seed + 4u)) * 2.0 - 1.0) * shape.shaping.x * opaqueDensityScale;
+    root.curvature = (float2(GrassRandom(root.seed + 3u), GrassRandom(root.seed + 4u)) * 2.0 - 1.0) *
+        shape.shaping.x * kindScale.z * opaqueDensityScale;
     return root;
 }
 
@@ -442,6 +450,7 @@ GrassVertexData BuildGrassVertex(GrassAttributes input, uint instanceID)
     blade.worldUnitsPerPixel = root.worldUnitsPerPixel;
     blade.silhouette = root.silhouette;
     blade.seed = root.seed;
+    blade.kind = root.kind;
     blade.height = saturate(input.uv.y);
     blade.cameraDistance = root.cameraDistance;
     blade.mapUV = root.mapUV;
@@ -471,7 +480,21 @@ float GrassCanopyAreaIndex(float density)
     float spacing = max(_GrassSpacing, 0.001);
     float baseWidth = 0.5 * max(_GrassWidth, 0.0) * (1.0 - 0.5 * saturate(_GrassWidthRandomness));
     float height = max(_GrassHeight, 0.0) * (1.0 - 0.5 * saturate(_GrassHeightRandomness));
-    return saturate(density) * 0.5 * baseWidth * height / (spacing * spacing);
+    // A variant mix's mean blade area relative to the material blade.
+    float mix = max(1.0 + _GrassVariantCanopy, 0.0);
+    return saturate(density) * 0.5 * baseWidth * height * mix / (spacing * spacing);
+}
+
+// A kind's blade colour: its tint, moved toward its variation tint by the plant's own number and by its clump's,
+// so neighbours drift together. The neutral kind returns white.
+half3 GrassKindTint(uint kind, uint seed, float3 pivotWS)
+{
+    float4 tint = _GrassKindTint[kind];
+    float4 variation = _GrassKindVariation[kind];
+    half amount = 0.0h;
+    UNITY_BRANCH if (tint.w > 0.0 || variation.w > 0.0)
+        amount = saturate(tint.w * GrassRandom(seed + 7u) + variation.w * GrassVariantClump(pivotWS.xz));
+    return lerp(1.0 - tint.rgb, 1.0 - variation.rgb, amount);
 }
 
 // Blade area above a fraction of blade height: a triangle keeps (1 - h) squared of its area above h.

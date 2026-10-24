@@ -47,7 +47,9 @@ public partial class GrassDataRendererFeature
 
         private bool ValidateBufferCapacity(InfiniteGrassRenderer owner, Camera camera, long deviceLimit)
         {
-            if ((long)owner.Capacity * sizeof(float) * 4 <= deviceLimit)
+            long roots = (long)owner.Capacity + owner.HeadQueueCapacity(0) +
+                (owner.variants && owner.variants.headMesh ? owner.HeadQueueCapacity(1) : 0);
+            if (roots * sizeof(float) * 4 <= deviceLimit)
             {
                 warnedBufferLimit = false;
                 return true;

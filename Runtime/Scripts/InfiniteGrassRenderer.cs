@@ -34,6 +34,12 @@ public class InfiniteGrassRenderer : MonoBehaviour
         + "instead of thinning the population. A painted falloff then tapers an edge to stubble.")]
     public bool densityShortensBlades;
 
+    [Header("Plant Kinds")]
+    [Tooltip("Several kinds of blade, herb and flower, mixed by weight and gathered into drifts. Empty grows the material's one blade.")]
+    public GrassVariantProfile variants;
+    [Tooltip("Capacity of each flower-head queue, in millions. Heads beyond it are dropped and counted as overflow.")]
+    [Range(0.001f, 4f)] public float maxHeadCount = 0.25f;
+
     [Header("Geometry LOD")]
     [Range(0, 8)] public int grassMeshSubdivision = 5;
     [Min(0.01f)] public float nearLodDistance = 30f;
@@ -85,6 +91,19 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public uint Revision { get; private set; }
     public uint InteractionRevision { get; private set; }
     public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
+    /// <summary>Roots each head queue can hold: quad-cross heads, and the profile's mesh heads.</summary>
+    public int HeadCapacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxHeadCount, 0.25f), 0f, 4f) * 1000000f), 1, 4000000);
+
+    /// <summary>The capacity of head queue 0 (quad-cross) or 1 (mesh) this owner needs: zero when no kind grows that head.</summary>
+    public int HeadQueueCapacity(int queue)
+    {
+        if (!variants || variants.KindCount < 1)
+            return 0;
+        bool mesh = queue == 1;
+        if (mesh && !variants.headMesh)
+            return 0;
+        return variants.HasHeads(mesh ? GrassHeadShape.Mesh : GrassHeadShape.Daisy) ? HeadCapacity : 0;
+    }
     public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
     /// <summary>
@@ -113,6 +132,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
     }
 
     private Mesh[] meshes;
+    private Mesh headMesh;
     private int cachedSubdivision = -1;
     private GUIStyle diagnosticStyle;
 
@@ -211,7 +231,8 @@ public class InfiniteGrassRenderer : MonoBehaviour
         float height = Mathf.Max(grassMaterial.GetFloat("_GrassHeight"), 0f) *
             (1f - 0.5f * Mathf.Clamp01(grassMaterial.GetFloat("_GrassHeightRandomness")));
         float cell = Mathf.Max(spacing, 0.001f);
-        return 0.5f * width * height / (cell * cell);
+        float mix = variants && variants.KindCount > 0 ? variants.MeanBladeAreaScale() : 1f;
+        return 0.5f * width * height * mix / (cell * cell);
     }
 
     [ContextMenu("Refresh Grass Data")]
@@ -335,6 +356,61 @@ public class InfiniteGrassRenderer : MonoBehaviour
         return mesh;
     }
 
+    /// <summary>The quad-cross every procedural head draws: one flat face and two crossed upright quads, one unit across.</summary>
+    public Mesh GetHeadMesh()
+    {
+        if (!headMesh)
+            headMesh = CreateHeadMesh();
+        return headMesh;
+    }
+
+    /// <summary>
+    /// A flat face in XZ at the origin (uv2.x = 0) and two upright quads crossed on Y (uv2.x = 1), each spanning -0.5 to
+    /// 0.5. The head shader raises and scales the upright quads per head shape and cuts every outline procedurally.
+    /// </summary>
+    public static Mesh CreateHeadMesh()
+    {
+        var vertices = new Vector3[12];
+        var normals = new Vector3[12];
+        var uv = new Vector2[12];
+        var part = new Vector2[12];
+        var indices = new int[18];
+        for (int quad = 0; quad < 3; quad++)
+        {
+            for (int corner = 0; corner < 4; corner++)
+            {
+                int index = quad * 4 + corner;
+                float u = corner & 1, v = corner >> 1;
+                float a = u - 0.5f, b = v - 0.5f;
+                vertices[index] = quad == 0 ? new Vector3(a, 0f, b) : quad == 1 ? new Vector3(a, b, 0f) : new Vector3(0f, b, a);
+                normals[index] = quad == 0 ? Vector3.up : quad == 1 ? Vector3.forward : Vector3.right;
+                uv[index] = new Vector2(u, v);
+                part[index] = new Vector2(quad == 0 ? 0f : 1f, 0f);
+            }
+            int first = quad * 4;
+            int i = quad * 6;
+            indices[i] = first;
+            indices[i + 1] = first + 2;
+            indices[i + 2] = first + 1;
+            indices[i + 3] = first + 1;
+            indices[i + 4] = first + 2;
+            indices[i + 5] = first + 3;
+        }
+        var mesh = new Mesh
+        {
+            name = "Grass head quad-cross",
+            hideFlags = HideFlags.HideAndDontSave,
+            vertices = vertices,
+            normals = normals,
+            uv = uv,
+            triangles = indices
+        };
+        mesh.SetUVs(1, part);
+        mesh.RecalculateBounds();
+        mesh.UploadMeshData(false);
+        return mesh;
+    }
+
     private void ReleaseMeshes()
     {
         if (meshes != null)
@@ -343,6 +419,8 @@ public class InfiniteGrassRenderer : MonoBehaviour
                 CoreUtils.Destroy(mesh);
             meshes = null;
         }
+        CoreUtils.Destroy(headMesh);
+        headMesh = null;
         cachedSubdivision = -1;
     }
 
@@ -365,6 +443,7 @@ public class InfiniteGrassRenderer : MonoBehaviour
         captureHeightRange.x = Finite(captureHeightRange.x, -100f);
         captureHeightRange.y = Mathf.Max(captureHeightRange.x + 1f, Finite(captureHeightRange.y, 1000f));
         maxBufferCount = Mathf.Clamp(Finite(maxBufferCount, 2f), 0.01f, 16f);
+        maxHeadCount = Mathf.Clamp(Finite(maxHeadCount, 0.25f), 0.001f, 4f);
         lodCapacityWeights.x = Mathf.Clamp(Finite(lodCapacityWeights.x, 0.35f), 0.01f, 100f);
         lodCapacityWeights.y = Mathf.Clamp(Finite(lodCapacityWeights.y, 0.45f), 0.01f, 100f);
         lodCapacityWeights.z = Mathf.Clamp(Finite(lodCapacityWeights.z, 0.2f), 0.01f, 100f);

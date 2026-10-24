@@ -19,12 +19,12 @@ For CI, add an Ubuntu 24.04 job with the repository checkout, Python 3.12, and t
 
 ## What is compiled
 
-The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **53 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **106 compiler invocations**.
+The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **57 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **114 compiler invocations**.
 
 Coverage includes:
 
 - All seven generation and motion-history compute kernels.
-- Every grass capture, placement, contact-depth, contact-shadow, motion-copy, and motion-vector pass.
+- Every grass capture, placement (including the plant-kind weights), flower-head, contact-depth, contact-shadow, motion-copy, and motion-vector pass.
 - Six grass forward-lighting configurations, covering main-light shadows, cascades, screen shadows, soft shadows, additional lights, clustered lights, ground normals, and the three fog modes.
 - Four terrain-albedo configurations: baseline, mask maps, height blending, and both together.
 

@@ -117,6 +117,9 @@ void StoreRoots(uint3 id : SV_DispatchThreadID)
         return;
     uint rootIndex = (uint)_GrassHistoryOffsets[lod] + index;
     float4 root = _GrassHistoryPositions[rootIndex];
-    root.w = (float)_GrassHistoryRows[lod] + saturate(root.w) * 0.5;
+    // 16 * kind + rows + coverage / 2: the plant kind (GrassPackKind) survives beside the row count.
+    float kind = clamp(floor(root.w * 0.5), 0.0, 7.0);
+    float coverage = saturate(root.w - 2.0 * kind);
+    root.w = 16.0 * kind + (float)_GrassHistoryRows[lod] + coverage * 0.5;
     _GrassHistoryRoots[rootIndex] = root;
 }

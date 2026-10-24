@@ -51,6 +51,9 @@ public struct GrassPlacementDrawData
     public Vector4 GroundLayerUV;
     public Vector4 GroundLayerRemapMin;
     public Vector4 GroundLayerRemapMax;
+    /// <summary>Per-kind weight multipliers for kinds 0-3 and 4-7; all zero (a manual snapshot) keeps the profile's mix.</summary>
+    public Vector4 VariantWeights0;
+    public Vector4 VariantWeights1;
 
     /// <summary>
     /// Conservative XZ occupancy using this capture's bounds and mapping. Painted pixel data
@@ -171,6 +174,12 @@ public sealed class GrassPlacementArea : MonoBehaviour
     [SerializeField] private Color groundTint = Color.white;
     [SerializeField, Range(0f, 1f)] private float groundColorStrength;
 
+    [Header("Plant kinds")]
+    [Tooltip("Reweight the renderer's Variant Profile here. Off grows the profile's own mix.")]
+    [SerializeField] private bool overrideVariantWeights;
+    [Tooltip("Per kind, in the profile's order: a multiplier of its weight from 0 (none here) to 1. Overlapping areas take each kind's largest.")]
+    [SerializeField] private float[] variantWeights = DefaultVariantWeights();
+
     private static readonly List<GrassPlacementArea> activeAreas = new List<GrassPlacementArea>();
     private static int revision = 1;
     private static int registryGeneration = 1;
@@ -248,6 +257,43 @@ public sealed class GrassPlacementArea : MonoBehaviour
     public Rect TextureCoverageBounds => textureCoverageBounds;
     public Color GroundTint => groundTint;
     public float GroundColorStrength => groundColorStrength;
+    public bool OverridesVariantWeights => overrideVariantWeights;
+
+    /// <summary>The multiplier this area applies to a kind's weight; one without an override.</summary>
+    public float GetVariantWeight(int kind) => overrideVariantWeights && variantWeights != null &&
+        kind >= 0 && kind < variantWeights.Length ? Mathf.Clamp01(FiniteOr(variantWeights[kind], 1f)) : 1f;
+
+    /// <summary>Reweights the renderer's kinds inside this area, in the profile's order; missing entries keep one.</summary>
+    public void SetVariantWeights(params float[] weights)
+    {
+        var next = DefaultVariantWeights();
+        for (int k = 0; weights != null && k < Mathf.Min(weights.Length, next.Length); k++)
+            next[k] = Mathf.Clamp01(FiniteOr(weights[k], 1f));
+        bool changed = !overrideVariantWeights;
+        for (int k = 0; !changed && k < next.Length; k++)
+            changed = variantWeights == null || k >= variantWeights.Length || variantWeights[k] != next[k];
+        overrideVariantWeights = true;
+        variantWeights = next;
+        if (changed)
+            Invalidate(GrassPlacementChange.GroundColor);
+    }
+
+    /// <summary>Grows the profile's own mix here again.</summary>
+    public void ClearVariantWeights()
+    {
+        if (!overrideVariantWeights)
+            return;
+        overrideVariantWeights = false;
+        Invalidate(GrassPlacementChange.GroundColor);
+    }
+
+    private static float[] DefaultVariantWeights() => new[] { 1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f };
+
+    private void GetVariantWeights(out Vector4 first, out Vector4 second)
+    {
+        first = new Vector4(GetVariantWeight(0), GetVariantWeight(1), GetVariantWeight(2), GetVariantWeight(3));
+        second = new Vector4(GetVariantWeight(4), GetVariantWeight(5), GetVariantWeight(6), GetVariantWeight(7));
+    }
     public float Density => density;
     public float EdgeFalloff => edgeFalloff;
     public Vector2 Size => size;
@@ -363,8 +409,11 @@ public sealed class GrassPlacementArea : MonoBehaviour
             terrainRect = new Vector4(position.x, position.z, terrainSize.x, terrainSize.z);
         }
 
+        GetVariantWeights(out Vector4 variantWeights0, out Vector4 variantWeights1);
         data = new GrassPlacementDrawData
         {
+            VariantWeights0 = variantWeights0,
+            VariantWeights1 = variantWeights1,
             LocalToWorld = CropFrame(localToWorld, coverageUV),
             WorldToMask = worldToMask,
             GroundWorldToMask = GetGroundWorldToMask(worldToMask),
@@ -539,6 +588,15 @@ public sealed class GrassPlacementArea : MonoBehaviour
         groundColorStrength = Mathf.Clamp01(FiniteOr(groundColorStrength, 0f));
         groundTint = SanitizeColor(groundTint);
         textureCoverageBounds = SanitizeRect(textureCoverageBounds);
+        if (variantWeights == null || variantWeights.Length != GrassVariantSelection.MaximumKinds)
+        {
+            var weights = DefaultVariantWeights();
+            for (int k = 0; variantWeights != null && k < Mathf.Min(variantWeights.Length, weights.Length); k++)
+                weights[k] = variantWeights[k];
+            variantWeights = weights;
+        }
+        for (int k = 0; k < variantWeights.Length; k++)
+            variantWeights[k] = Mathf.Clamp01(FiniteOr(variantWeights[k], 1f));
         Interlocked.Exchange(ref groundSamplerRefreshRequested, 1);
         // OnValidate can run during loading. Defer object and transform access to the main loop.
         // State comparison there distinguishes a color edit from a geometry or density edit.
@@ -946,6 +1004,9 @@ public sealed class GrassPlacementArea : MonoBehaviour
                 hash = hash * 397 ^ GetTextureStateHash(groundLayer.diffuseTexture);
             }
             hash = hash * 397 ^ (useLayerSampler ? groundSamplerTopologyHash : 0);
+            // Kind weights are captured with the ground colour, from the same sources.
+            for (int kind = 0; kind < GrassVariantSelection.MaximumKinds; kind++)
+                hash = hash * 397 ^ GetVariantWeight(kind).GetHashCode();
             hash = hash * 397 ^ (sampler ? sampler.GetEntityId().GetHashCode() : 0);
             if (sampler)
             {

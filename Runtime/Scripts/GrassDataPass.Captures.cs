@@ -288,6 +288,53 @@ public partial class GrassDataRendererFeature
             }
         }
 
+        // Each area's per-kind weight multipliers over its footprint, at the largest of overlapping areas. A texel no
+        // area reaches stays zero, which the generation reads as the profile's own mix.
+        private void BuildVariantCapture(RenderGraph graph, CameraState state, Matrix4x4 captureVP)
+        {
+            int passIndex = placementMaterial ? placementMaterial.FindPass("PlacementVariants") : -1;
+            using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<VariantCapturePass>(
+                       "Grass Kind Weights", out VariantCapturePass pass))
+            {
+                pass.Sources = state.Sources;
+                pass.Quad = captureQuad;
+                pass.Material = placementMaterial;
+                pass.CaptureVP = captureVP;
+                pass.PassIndex = passIndex;
+                for (int i = 0; passIndex >= 0 && i < state.Sources.Count; i++)
+                {
+                    Texture densityTexture = state.Sources[i].Data.DensityTexture;
+                    if (densityTexture)
+                        builder.UseTexture(ImportTexture(graph, state, densityTexture), AccessFlags.Read);
+                }
+                builder.SetRenderAttachment(graph.ImportTexture(state.VariantWeights0), 0, AccessFlags.Write);
+                builder.SetRenderAttachment(graph.ImportTexture(state.VariantWeights1), 1, AccessFlags.Write);
+                builder.AllowGlobalStateModification(true);
+                builder.SetRenderFunc(static (VariantCapturePass data, RasterGraphContext context) =>
+                {
+                    context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
+                    context.cmd.ClearRenderTarget(false, true, Color.clear);
+                    if (data.PassIndex < 0 || !data.Material)
+                        return;
+                    for (int i = 0; i < data.Sources.Count; i++)
+                    {
+                        GrassPlacementDrawData source = data.Sources[i].Data;
+                        MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
+                        properties.SetMatrix(Id.PlacementMapping, source.WorldToMask);
+                        properties.SetVector(Id.PlacementTerrain, source.TerrainRect);
+                        properties.SetInteger(Id.PlacementHasTerrain, source.Terrain ? 1 : 0);
+                        properties.SetInteger(Id.PlacementShape, (int)source.Shape);
+                        properties.SetFloat(Id.PlacementDensity, source.Density);
+                        properties.SetFloat(Id.PlacementFalloff, source.EdgeFalloff);
+                        properties.SetTexture(Id.PlacementTexture, source.DensityTexture ? source.DensityTexture : Texture2D.whiteTexture);
+                        properties.SetVector(Id.PlacementVariantWeights0, source.VariantWeights0);
+                        properties.SetVector(Id.PlacementVariantWeights1, source.VariantWeights1);
+                        context.cmd.DrawMesh(data.Quad, source.LocalToWorld, data.Material, 0, data.PassIndex, properties);
+                    }
+                });
+            }
+        }
+
         private static Texture ResolveGroundLayerSamplerTexture(GrassPlacementDrawData source) =>
             source.GroundLayerSamplerTexture ? source.GroundLayerSamplerTexture :
             source.GroundLayerTexture ? source.GroundLayerTexture : Texture2D.whiteTexture;

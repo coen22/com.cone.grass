@@ -74,6 +74,9 @@ public sealed class GrassGpuGenerationTests
         shader.SetTexture(generateKernel, "_GrassMaskMapRT", exclusion);
         shader.SetTexture(generateKernel, "_TerrainHeightmap", white);
         shader.SetTexture(generateKernel, "_TerrainHoles", white);
+        // No profile: one kind, and white area weights keep any profile's own mix.
+        shader.SetTexture(generateKernel, "_GrassVariantWeightsRT0", white);
+        shader.SetTexture(generateKernel, "_GrassVariantWeightsRT1", white);
         shader.SetBuffer(resetKernel, "_GrassCounts", counts);
         shader.SetBuffer(generateKernel, "_GrassCounts", counts);
         shader.SetBuffer(generateKernel, "_GrassPositions", positions);
