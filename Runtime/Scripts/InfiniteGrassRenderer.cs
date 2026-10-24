@@ -87,6 +87,31 @@ public class InfiniteGrassRenderer : MonoBehaviour
     public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
     public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
+    /// <summary>
+    /// Whether a camera draws this grass: a game view, or the scene view when <see cref="renderInSceneView"/> is on, that
+    /// sees the layer this owner is on. A utility camera that culls everything, such as a depth or ground capture that
+    /// submits its own renders through the pipeline, then costs the grass no capture or generation pass.
+    /// </summary>
+    public bool DrawsFor(Camera camera)
+    {
+        if (camera == null || camera.stereoEnabled || (camera.cullingMask & (1 << gameObject.layer)) == 0)
+            return false;
+        return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && renderInSceneView);
+    }
+
+    /// <summary>
+    /// <see cref="DrawsFor"/> at the feature's admission points. A refused camera also withdraws the interaction field the
+    /// last admitted camera published, so effects reading it on the refused camera (ground fog) see no field rather than
+    /// that camera's contacts.
+    /// </summary>
+    public bool AdmitCamera(Camera camera)
+    {
+        if (DrawsFor(camera))
+            return true;
+        GrassInteractionPublisher.Withdraw();
+        return false;
+    }
+
     private Mesh[] meshes;
     private int cachedSubdivision = -1;
     private GUIStyle diagnosticStyle;

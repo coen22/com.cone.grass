@@ -137,6 +137,8 @@ Automatic ambiguity checks cover authored Placement Area owners and the declared
 
 Other effects read the interaction capture instead of simulating their own; com.cone.render-features' ground fog is one. After each camera's capture the feature publishes three globals: `_ConeInteractionField` (the capture: rg holds the push direction as `dir * 0.5 + 0.5` premultiplied by a, and a holds the contact strength), `_ConeInteractionFieldST` (world xz to uv scale and offset) and `_ConeInteractionFieldParams` (x = 1 while published). A camera that captures nothing withdraws the flag, so readers see no field rather than another camera's. A reader's feature must record after the grass feature: both run before transparents.
 
+A camera draws the grass, with its own captures, generation and buffers, only when it is a game view or the enabled scene view **and its culling mask includes the grass owner's layer** (`InfiniteGrassRenderer.DrawsFor`). A utility camera that culls everything, such as a depth or ground capture submitting its own renders through the pipeline, therefore costs nothing. An offscreen camera that should show grass keeps the owner's layer in its mask.
+
 Where nothing grows, two settings keep that field alive:
 - Turn off **Draw Blades** on the Infinite Grass Renderer. The feature then needs no blade material or compute support, and runs only the interaction capture over the same window, once per frame.
 - Set the interactor's **Uncovered Support Layers** to the floors' layers, such as a dungeon floor. Where no grass area reaches, a floor on those layers carries the contact. A grass area within reach keeps its own ownership, and the default (Nothing) keeps the previous rule.
