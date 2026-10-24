@@ -104,7 +104,9 @@ uint GrassSelectKind(float2 positionXZ, uint cellSeed, float4 areaWeights0, floa
     [unroll]
     for (uint k = 0u; k < GRASS_MAXIMUM_KINDS; ++k)
     {
-        float area = k < 4u ? areaWeights0[k] : areaWeights1[k - 4u];
+        // Select the vector first: FXC unrolls both sides of a ternary and rejects an out-of-range index.
+        float4 group = k < 4u ? areaWeights0 : areaWeights1;
+        float area = group[k & 3u];
         scales[k] = k < count ? saturate(area) : 0.0;
         total += max(_GrassKindSelect[k].x, 0.0) * scales[k];
     }
