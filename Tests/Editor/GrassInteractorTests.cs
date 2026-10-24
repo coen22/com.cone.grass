@@ -224,6 +224,34 @@ public sealed class GrassInteractorTests : GrassPhysicsFixtureTests
         return count;
     }
 
+    [Test]
+    public void AnUncoveredSupportLayerDrawsContactsOnAFloorWithoutGrass()
+    {
+        using (var fixture = new InteractorFixture())
+        {
+            // The facade configures the base producer before every sample; the uncovered layers it inherits must survive
+            // that, so Alice's wake reaches a floor no grass area owns (kinematica #1952).
+            GrassInteractor interactor = fixture.Interactor;
+            interactor.Configure(fixture.Body);
+            interactor.Sample(0.0);
+            Assert.That(interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.False);
+
+            interactor.UncoveredSupportLayers = 1 << fixture.Ground.gameObject.layer;
+            // The changed setting starts a new history; contact builds over the attack from the next observation.
+            interactor.Sample(0.1);
+            interactor.Sample(0.2);
+            Assert.That(interactor.UncoveredSupportLayers.value, Is.EqualTo(1 << fixture.Ground.gameObject.layer),
+                "The facade's configuration reset the uncovered layers.");
+            Assert.That(interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
+            Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0));
+            Assert.That(interactor.TryGetDraw(out _, out _, out _), Is.True);
+            using (var serialized = new SerializedObject(interactor))
+                Assert.That(serialized.FindProperty("uncoveredSupportLayers").intValue, Is.EqualTo(1 << fixture.Ground.gameObject.layer),
+                    "The setting is not saved with the component.");
+        }
+    }
+
     private sealed class InteractorFixture : IDisposable
     {
         public readonly Scene Scene;
