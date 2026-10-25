@@ -19,7 +19,9 @@ public sealed class GrassVariantGpuData
     public readonly Vector4[] Palette = new Vector4[PaletteSize];
     public readonly Vector4[] Select = new Vector4[Kinds];
     public readonly Vector4[] Drift = new Vector4[Kinds];
-    public Vector4 Parameters;
+    public readonly Vector4[] Habitat = new Vector4[Kinds];
+    public readonly Vector4[] Stem = new Vector4[Kinds];
+    public Vector4 Parameters, Parameters2;
     public int KindCount;
     public int Seed;
     public float Canopy;
@@ -39,7 +41,10 @@ public sealed class GrassVariantGpuData
     private static readonly int PaletteId = Shader.PropertyToID("_GrassKindPalette");
     private static readonly int SelectId = Shader.PropertyToID("_GrassKindSelect");
     private static readonly int DriftId = Shader.PropertyToID("_GrassKindDrift");
+    private static readonly int HabitatId = Shader.PropertyToID("_GrassKindHabitat");
+    private static readonly int StemId = Shader.PropertyToID("_GrassKindStem");
     private static readonly int ParametersId = Shader.PropertyToID("_GrassVariantParams");
+    private static readonly int Parameters2Id = Shader.PropertyToID("_GrassVariantParams2");
     private static readonly int KindsId = Shader.PropertyToID("_GrassVariantKinds");
     private static readonly int SeedId = Shader.PropertyToID("_GrassVariantSeed");
     private static readonly int CanopyId = Shader.PropertyToID("_GrassVariantCanopy");
@@ -71,7 +76,9 @@ public sealed class GrassVariantGpuData
         System.Array.Clear(Palette, 0, Palette.Length);
         System.Array.Clear(Select, 0, Select.Length);
         System.Array.Clear(Drift, 0, Drift.Length);
-        Parameters = Vector4.zero;
+        System.Array.Clear(Habitat, 0, Habitat.Length);
+        System.Array.Clear(Stem, 0, Stem.Length);
+        Parameters = Parameters2 = Vector4.zero;
         KindCount = 0;
         Seed = 0;
         Canopy = 0f;
@@ -81,9 +88,11 @@ public sealed class GrassVariantGpuData
             return;
 
         int count = profile.KindCount;
+        var mixes = new GrassVariantSelection.KindMix[Kinds];
+        profile.GetMix(mixes);
         float total = 0f;
         for (int k = 0; k < count; k++)
-            total += profile.kinds[k] != null ? Mathf.Max(0f, profile.kinds[k].weight) : 0f;
+            total += mixes[k].Weight;
         bool quadHeads = false, anyMesh = false;
         for (int k = 0; k < count; k++)
         {
@@ -111,16 +120,23 @@ public sealed class GrassVariantGpuData
             // Clover is a leaf: its distant tip keeps the blade colour.
             float far = queue > 0 && kind.head != GrassHeadShape.Clover ? profile.distantTipColour : 0f;
             Far[k] = new Vector4(mean.x, mean.y, mean.z, far);
-            Vector4 mix = GrassVariantSelection.PackMix(kind.weight, total, kind.clumping, kind.driftArea);
+            Vector4 mix = GrassVariantSelection.PackMix(mixes[k], total, out float driftArea, out float clusterArea);
             Select[k] = new Vector4(mix.x, mix.y, mix.z, 0f);
-            Vector2 thresholds = mix.z > 0f ? GrassVariantSelection.DriftThresholds(mix.w) : Vector2.zero;
-            Drift[k] = new Vector4(thresholds.x, thresholds.y, 0f, 0f);
+            if (mix.z > 0f)
+            {
+                Vector2 drift = GrassVariantSelection.DriftThresholds(driftArea);
+                Vector2 cluster = GrassVariantSelection.ClusterThresholds(clusterArea);
+                Drift[k] = new Vector4(drift.x, drift.y, cluster.x, cluster.y);
+            }
+            Habitat[k] = new Vector4(kind.moisture, kind.slope, 0f, 0f);
+            Stem[k] = new Vector4(kind.stemWidth, 0f, 0f, 0f);
         }
         KindCount = count;
         HeadQueues = anyMesh ? 2 : quadHeads ? 1 : 0;
         Seed = unchecked((int)GrassVariantSelection.ProfileSeed(profile.seed));
         float distance = profile.headDrawDistance;
-        Parameters = new Vector4(profile.clumpSize, 0f, distance, distance * (1f - profile.headFade));
+        Parameters = new Vector4(profile.clumpSize, profile.clusterSize, distance, distance * (1f - profile.headFade));
+        Parameters2 = new Vector4(profile.habitatSize, profile.UsesSlope() ? 1f : 0f, profile.budFraction, profile.seedFraction);
         Canopy = profile.MeanBladeAreaScale() - 1f;
     }
 
@@ -135,7 +151,9 @@ public sealed class GrassVariantGpuData
         properties.SetVectorArray(CentreId, Centre);
         properties.SetVectorArray(FarId, Far);
         properties.SetVectorArray(PaletteId, Palette);
+        properties.SetVectorArray(StemId, Stem);
         properties.SetVector(ParametersId, Parameters);
+        properties.SetVector(Parameters2Id, Parameters2);
         properties.SetInteger(KindsId, KindCount);
         properties.SetInteger(SeedId, Seed);
         properties.SetFloat(CanopyId, Canopy);
@@ -146,7 +164,9 @@ public sealed class GrassVariantGpuData
         cmd.SetComputeVectorArrayParam(shader, ShapeId, Shape);
         cmd.SetComputeVectorArrayParam(shader, SelectId, Select);
         cmd.SetComputeVectorArrayParam(shader, DriftId, Drift);
+        cmd.SetComputeVectorArrayParam(shader, HabitatId, Habitat);
         cmd.SetComputeVectorParam(shader, ParametersId, Parameters);
+        cmd.SetComputeVectorParam(shader, Parameters2Id, Parameters2);
         cmd.SetComputeIntParam(shader, KindsId, KindCount);
         cmd.SetComputeIntParam(shader, SeedId, Seed);
     }
@@ -157,7 +177,9 @@ public sealed class GrassVariantGpuData
         shader.SetVectorArray(ShapeId, Shape);
         shader.SetVectorArray(SelectId, Select);
         shader.SetVectorArray(DriftId, Drift);
+        shader.SetVectorArray(HabitatId, Habitat);
         shader.SetVector(ParametersId, Parameters);
+        shader.SetVector(Parameters2Id, Parameters2);
         shader.SetInt(KindsId, KindCount);
         shader.SetInt(SeedId, Seed);
     }

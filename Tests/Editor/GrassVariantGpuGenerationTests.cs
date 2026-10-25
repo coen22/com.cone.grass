@@ -11,7 +11,8 @@ using Object = UnityEngine.Object;
 public sealed class GrassVariantGpuGenerationTests
 {
     private const string ComputePath = "Packages/com.cone.grass/Runtime/Compute/GrassPositionsCompute.compute";
-    private const float Spacing = 0.25f;
+    // 96 m square, so every flower kind's 12 m drifts and habitat appear.
+    private const float Spacing = 1f;
     private const int Cells = 96;
     private const int LodCapacity = Cells * Cells;
     private const int HeadOffset = 3 * LodCapacity;
@@ -106,11 +107,10 @@ public sealed class GrassVariantGpuGenerationTests
         Vector4[] roots = new Vector4[positions.count];
         positions.GetData(roots);
 
-        var weights = new float[8];
-        var clumping = new float[8];
-        var areas = new float[8];
+        var mix = new GrassVariantSelection.KindMix[8];
         var shares = new float[8];
-        profile.GetMix(weights, clumping, areas);
+        profile.GetMix(mix);
+        GrassVariantSelection.Field field = profile.Field;
         int agree = 0, expectedHeads = 0;
         var kinds = new int[8];
         for (int i = 0; i < counted[0]; i++)
@@ -120,19 +120,19 @@ public sealed class GrassVariantGpuGenerationTests
             int kind = GrassVariantSelection.UnpackKind(root.w);
             Assert.That(GrassVariantSelection.UnpackCoverage(root.w), Is.EqualTo(1f).Within(1e-6f));
             kinds[kind]++;
-            int predicted = GrassVariantSelection.SelectKind(cellX, cellZ, Spacing, profile.clumpSize, profile.seed,
-                profile.KindCount, weights, clumping, areas, shares);
+            // Flat ground: the compute measures a zero slope, as the twin assumes.
+            int predicted = GrassVariantSelection.SelectKind(cellX, cellZ, Spacing, field, mix, profile.KindCount, shares);
             if (predicted == kind)
                 agree++;
-            if (profile.kinds[kind].HasHead)
+            if (profile.kinds[kind].HasHead && ((Vector3)root).magnitude < profile.headDrawDistance)
                 expectedHeads++;
         }
         // A root exactly on a noise-lattice line or a share boundary may round apart between CPU and GPU.
         Assert.That(agree, Is.GreaterThanOrEqualTo((int)(0.995f * counted[0])), "CPU and GPU kinds agree.");
         for (int k = 0; k < 8; k++)
-            Assert.That(kinds[k], Is.GreaterThan(0), "Kind " + k + " grows in a 24 m meadow.");
+            Assert.That(kinds[k], Is.GreaterThan(0), "Kind " + k + " grows in a 96 m meadow.");
 
-        Assert.That(counted[4], Is.EqualTo((uint)expectedHeads), "Each flower or clover root queues one head.");
+        Assert.That(counted[4], Is.EqualTo((uint)expectedHeads), "Each flower or clover root within the head distance queues one head.");
         Assert.That(counted[5], Is.Zero, "No mesh heads without a profile mesh.");
         for (int i = 0; i < counted[4]; i++)
         {

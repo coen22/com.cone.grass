@@ -23,6 +23,8 @@ public static class GrassVariantSelection
     public const uint PaletteStream = 0x1b873593u;
     public const uint DriftSalt = 0x27d4eb2fu;
     public const uint ColourSalt = 0x165667b1u;
+    public const uint ClusterSalt = 0x61c88647u;
+    public const uint MoistureSalt = 0x7feb352du;
 
     private const int DistributionSamples = 1 << 18;
     private static readonly Lazy<Distribution> noiseDistribution = new Lazy<Distribution>(() => new Distribution());
@@ -108,37 +110,86 @@ public static class GrassVariantSelection
     public static float MinimumDriftArea(float weight, float clumping) =>
         Mathf.Clamp(clumping * weight / Mathf.Max(1f - weight * (1f - clumping), 1e-6f), 0.01f, 0.99f);
 
-    /// <summary>
-    /// A kind's packed mix, as the generation compute reads it: x its normalized weight, y the share it keeps
-    /// everywhere, z the share its drifts add at their core (zero when unclumped), w its drift area.
-    /// </summary>
-    public static Vector4 PackMix(float weight, float total, float clumping, float requestedArea)
+    /// <summary>A kind's mixing settings: the profile weight, how much of it gathers into drifts, the drifts' share of the
+    /// ground, the clusters' share of a drift, and its habitat preferences (-1 to 1; 0 is indifferent).</summary>
+    public struct KindMix
     {
-        float normalized = total > 0f ? Mathf.Max(weight, 0f) / total : 0f;
-        float amount = Mathf.Clamp01(clumping);
-        if (amount <= 0f || normalized <= 0f)
-            return new Vector4(normalized, normalized, 0f, 0f);
-        // At least MinimumDriftArea, so the share inside a drift stays under one.
-        float area = Mathf.Max(Mathf.Clamp(requestedArea, 0.01f, 0.99f), MinimumDriftArea(normalized, amount));
-        return new Vector4(normalized, normalized * (1f - amount), amount * normalized / area, area);
+        public float Weight, Clumping, DriftArea, ClusterArea, Moisture, Slope;
+    }
+
+    /// <summary>The profile's spatial scales (metres) and its hashed seed (<see cref="ProfileSeed"/>).</summary>
+    public struct Field
+    {
+        public float DriftSize, ClusterSize, HabitatSize;
+        public uint Seed;
     }
 
     /// <summary>
-    /// The share of each kind at a root. Weights are normalized; a clumped kind keeps (1 - clumping) of its share
-    /// everywhere and puts the rest into drifts covering <paramref name="driftArea"/> of the ground, and the unclumped
-    /// kinds fill what the drifts leave, in proportion to their weights. <paramref name="areaWeights"/> (null for
-    /// none) are the Placement Areas' per-kind multipliers; the kinds they keep share the root in proportion.
+    /// A kind's packed mix, as the generation compute reads it: x its normalized weight, y the share it keeps everywhere,
+    /// z the share a drift cluster's core adds (zero when unclumped); w unused. Areas are raised so z stays under one.
     /// </summary>
-    public static void Shares(Vector2 positionXZ, float clumpSize, uint profileSeed, int kindCount,
-        float[] weights, float[] clumping, float[] driftArea, float[] shares, float[] areaWeights = null)
+    public static Vector4 PackMix(KindMix kind, float total, out float driftArea, out float clusterArea)
+    {
+        float normalized = total > 0f ? Mathf.Max(kind.Weight, 0f) / total : 0f;
+        float amount = Mathf.Clamp01(kind.Clumping);
+        driftArea = Mathf.Clamp(kind.DriftArea, 0.01f, 0.99f);
+        clusterArea = Mathf.Clamp(kind.ClusterArea, 0.01f, 1f);
+        if (amount <= 0f || normalized <= 0f)
+            return new Vector4(normalized, normalized, 0f, 0f);
+        // Inside a cluster in a drift the kind may hold at most every root: widen the clusters first, then the drifts.
+        float needed = MinimumDriftArea(normalized, amount);
+        if (driftArea * clusterArea < needed)
+            clusterArea = Mathf.Min(1f, needed / driftArea);
+        if (driftArea * clusterArea < needed)
+            driftArea = Mathf.Min(0.99f, needed / clusterArea);
+        return new Vector4(normalized, normalized * (1f - amount), amount * normalized / (driftArea * clusterArea), 0f);
+    }
+
+    /// <summary>The cluster noise's threshold; a cluster area of one keeps the whole drift.</summary>
+    public static Vector2 ClusterThresholds(float clusterArea) =>
+        clusterArea >= 0.99f ? new Vector2(-1f, 0f) : DriftThresholds(clusterArea);
+
+    /// <summary>How far a root is inside a kind's drifts and their clusters, from zero to one.</summary>
+    public static float InDrift(Vector2 positionXZ, in Field field, int kind, Vector2 drift, Vector2 cluster)
+    {
+        float low = InDrift(DriftNoise(positionXZ, field.DriftSize, field.Seed, kind), drift);
+        float high = InDrift(Noise(positionXZ / Mathf.Max(field.ClusterSize, 0.01f), field.Seed ^ unchecked(ClusterSalt * (uint)(kind + 1))), cluster);
+        return low * high;
+    }
+
+    /// <summary>The shared moisture field in [0, 1]: low ground-water patches on the habitat scale.</summary>
+    public static float Moisture(Vector2 positionXZ, in Field field)
+    {
+        float noise = Noise(positionXZ / Mathf.Max(field.HabitatSize, 0.01f), field.Seed ^ MoistureSalt);
+        float t = Mathf.Clamp01((noise - 0.3f) / 0.4f);
+        return t * t * (3f - 2f * t);
+    }
+
+    /// <summary>A kind's habitat factor from the moisture (0 dry to 1 wet) and the slope (0 flat to 1 steep) at a root.</summary>
+    public static float Habitat(in KindMix kind, float moisture, float slope) =>
+        Mathf.Max(0f, 1f + kind.Moisture * (2f * moisture - 1f)) * Mathf.Max(0f, 1f + kind.Slope * (2f * slope - 1f));
+
+    /// <summary>
+    /// The share of each kind at a root. Weights are normalized; a clumped kind keeps (1 - clumping) of its share
+    /// everywhere and puts the rest into clusters inside drifts, which cover DriftArea * ClusterArea of the ground, and the
+    /// unclumped kinds fill what the drifts leave, in proportion to their weights. Habitat and the Placement Areas'
+    /// multipliers (<paramref name="areaWeights"/>, null for none) rescale the kinds locally; the kinds kept share the root.
+    /// <paramref name="slope"/> is 0 on flat ground and 1 at about 35 degrees.
+    /// </summary>
+    public static void Shares(Vector2 positionXZ, float slope, in Field field, KindMix[] kinds, int kindCount,
+        float[] shares, float[] areaWeights = null)
     {
         kindCount = Mathf.Clamp(kindCount, 0, MaximumKinds);
         float profileTotal = 0f;
         for (int k = 0; k < kindCount; k++)
-            profileTotal += Mathf.Max(weights[k], 0f);
+            profileTotal += Mathf.Max(kinds[k].Weight, 0f);
+        float moisture = Moisture(positionXZ, field);
         float total = 0f;
         for (int k = 0; k < kindCount; k++)
-            total += profileTotal > 0f ? Mathf.Max(weights[k], 0f) / profileTotal * AreaWeight(areaWeights, k) : 0f;
+        {
+            shares[k] = AreaWeight(areaWeights, k) * Habitat(kinds[k], moisture, slope);
+            total += profileTotal > 0f ? Mathf.Max(kinds[k].Weight, 0f) / profileTotal * shares[k] : 0f;
+        }
         if (total <= 0f)
         {
             for (int k = 0; k < kindCount; k++)
@@ -148,11 +199,11 @@ public static class GrassVariantSelection
         float clumpedWeight = 0f, clumpedShare = 0f;
         for (int k = 0; k < kindCount; k++)
         {
-            Vector4 mix = PackMix(weights[k], profileTotal, clumping[k], driftArea[k]);
-            float scale = AreaWeight(areaWeights, k) / total;
+            Vector4 mix = PackMix(kinds[k], profileTotal, out float driftArea, out float clusterArea);
+            float scale = shares[k] / total;
             if (mix.z > 0f && scale > 0f)
             {
-                float inside = InDrift(DriftNoise(positionXZ, clumpSize, profileSeed, k), DriftThresholds(mix.w));
+                float inside = InDrift(positionXZ, field, k, DriftThresholds(driftArea), ClusterThresholds(clusterArea));
                 shares[k] = (mix.y + mix.z * inside) * scale;
                 clumpedWeight += mix.x * scale;
                 clumpedShare += shares[k];
@@ -190,12 +241,11 @@ public static class GrassVariantSelection
     }
 
     /// <summary>The kind the root of a generation cell grows; <paramref name="shares"/> is scratch of at least the kind count.</summary>
-    public static int SelectKind(int cellX, int cellZ, float spacing, float clumpSize, int profileSeed, int kindCount,
-        float[] weights, float[] clumping, float[] driftArea, float[] shares, float[] areaWeights = null)
+    public static int SelectKind(int cellX, int cellZ, float spacing, in Field field, KindMix[] kinds, int kindCount,
+        float[] shares, float slope = 0f, float[] areaWeights = null)
     {
-        uint seed = ProfileSeed(profileSeed);
-        Shares(RootXZ(cellX, cellZ, spacing), clumpSize, seed, kindCount, weights, clumping, driftArea, shares, areaWeights);
-        return SelectKind(shares, kindCount, Random(CellSeed(cellX, cellZ) ^ seed, KindStream));
+        Shares(RootXZ(cellX, cellZ, spacing), slope, field, kinds, kindCount, shares, areaWeights);
+        return SelectKind(shares, kindCount, Random(CellSeed(cellX, cellZ) ^ field.Seed, KindStream));
     }
 
     /// <summary>Packs a kind beside coverage in a root's w: coverage + 2 kind, so kind zero keeps today's layout.</summary>

@@ -141,12 +141,14 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // The plant kind's tint and its per-plant and per-clump variation (white without a profile).
                 // The root still blends to the unmodified ground colour: heads never take it.
                 output.grassAlbedo *= GrassKindTint(blade.kind, blade.seed, blade.pivotWS);
-                // Once a flower's head has shrunk away with distance, its tip carries the mean petal colour.
+                // As a flower's head shrinks away (under about three pixels, or near its draw distance), the top of its
+                // stem takes the mean petal colour, so a cluster reads as a soft patch rather than specks.
                 float4 farTip = _GrassKindFar[blade.kind];
                 UNITY_BRANCH if (farTip.w > 0.0)
                 {
-                    half farWeight = farTip.w * smoothstep(_GrassVariantParams.w, _GrassVariantParams.z, blade.cameraDistance) *
-                        smoothstep(0.55, 1.0, blade.height);
+                    half headShows = GrassHeadVisibility(_GrassKindHead[blade.kind].x, blade.cameraDistance,
+                        blade.worldUnitsPerPixel);
+                    half farWeight = farTip.w * (1.0h - headShows) * smoothstep(0.45, 0.9, blade.height);
                     output.grassAlbedo = lerp(output.grassAlbedo, farTip.rgb, farWeight);
                 }
                 // The canopy over this root: the population the compute thinned the blades to.

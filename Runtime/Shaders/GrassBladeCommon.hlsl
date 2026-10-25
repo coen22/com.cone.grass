@@ -331,6 +331,8 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
     root.wind = wind * shape.windMotion.z * (1.0 - saturate(slope.a));
     root.curvature = (float2(GrassRandom(root.seed + 3u), GrassRandom(root.seed + 4u)) * 2.0 - 1.0) *
         shape.shaping.x * kindScale.z * opaqueDensityScale;
+    // A stem keeps part of its width to the tip, where a head sits; zero keeps the pointed blade.
+    root.tipWidth = max(root.tipWidth, root.width * 0.5 * saturate(_GrassKindStem[root.kind].x));
     return root;
 }
 

@@ -1,25 +1,35 @@
+using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
+using Kind = GrassVariantSelection.KindMix;
 
 /// <summary>Deterministic kind placement and mixing weights (#88), on the CPU twin of the generation compute.</summary>
 public sealed class GrassVariantSelectionTests
 {
     private readonly float[] shares = new float[GrassVariantSelection.MaximumKinds];
-    private static readonly float[] Areas = { 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f };
+
+    private static GrassVariantSelection.Field Field(int seed, float drift = 4f, float cluster = 0.7f) =>
+        new GrassVariantSelection.Field
+        {
+            DriftSize = drift, ClusterSize = cluster, HabitatSize = 40f, Seed = GrassVariantSelection.ProfileSeed(seed)
+        };
+
+    private static Kind Mix(float weight, float clumping = 0f, float driftArea = 0.25f, float clusterArea = 1f,
+        float moisture = 0f, float slope = 0f) =>
+        new Kind { Weight = weight, Clumping = clumping, DriftArea = driftArea, ClusterArea = clusterArea, Moisture = moisture, Slope = slope };
 
     [Test]
     public void TheSameSeedPlacesTheSameKindsAndAnotherSeedMovesOnlyTheKinds()
     {
-        float[] weights = { 0.5f, 0.3f, 0.1f, 0.1f };
-        float[] clumping = { 0f, 0.5f, 1f, 1f };
+        Kind[] kinds = { Mix(0.5f), Mix(0.3f, 0.5f), Mix(0.1f, 1f, 0.25f, 0.3f), Mix(0.1f, 1f) };
         int changed = 0;
         for (int z = -40; z < 40; z++)
         for (int x = -40; x < 40; x++)
         {
-            int first = GrassVariantSelection.SelectKind(x, z, 0.1f, 4f, 7, 4, weights, clumping, Areas, shares);
-            int again = GrassVariantSelection.SelectKind(x, z, 0.1f, 4f, 7, 4, weights, clumping, Areas, shares);
+            int first = GrassVariantSelection.SelectKind(x, z, 0.1f, Field(7), kinds, 4, shares);
+            int again = GrassVariantSelection.SelectKind(x, z, 0.1f, Field(7), kinds, 4, shares);
             Assert.That(again, Is.EqualTo(first), "A seed must reproduce every root's kind.");
-            if (GrassVariantSelection.SelectKind(x, z, 0.1f, 4f, 8, 4, weights, clumping, Areas, shares) != first)
+            if (GrassVariantSelection.SelectKind(x, z, 0.1f, Field(8), kinds, 4, shares) != first)
                 changed++;
         }
         // Another seed re-deals the kinds; the roots themselves never depend on it.
@@ -30,27 +40,56 @@ public sealed class GrassVariantSelectionTests
     [Test]
     public void UnclumpedKindsGrowInProportionToTheirWeights()
     {
-        float[] weights = { 6f, 3f, 1f };
-        float[] clumping = { 0f, 0f, 0f };
-        int[] counts = Count(weights, clumping, 3, 0.1f, 200);
+        int[] counts = Count(new[] { Mix(6f), Mix(3f), Mix(1f) }, 0.1f, 200);
         AssertShares(counts, new[] { 0.6f, 0.3f, 0.1f }, 0.01f);
     }
 
     [Test]
     public void ClumpingGathersAKindIntoDriftsWithoutChangingItsShare()
     {
-        float[] weights = { 0.9f, 0.05f, 0.05f };
-        float[] even = { 0f, 0f, 0f };
-        float[] drifts = { 0f, 1f, 1f };
+        Kind[] even = { Mix(0.9f), Mix(0.05f), Mix(0.05f) };
+        Kind[] drifts = { Mix(0.9f), Mix(0.05f, 1f), Mix(0.05f, 1f) };
         // 400 m square at 0.5 m: 10,000 drift cells of 4 m, so the drifts' area is sampled closely.
-        int[] counts = Count(weights, drifts, 3, 0.5f, 800);
+        int[] counts = Count(drifts, 0.5f, 800);
         AssertShares(counts, new[] { 0.9f, 0.05f, 0.05f }, 0.004f);
 
         // A neighbour of a flower is far more often the same flower inside a drift than when sprinkled evenly.
-        float sprinkled = NeighbourAgreement(weights, even, 1);
-        float gathered = NeighbourAgreement(weights, drifts, 1);
+        float sprinkled = NeighbourAgreement(even, 1);
+        float gathered = NeighbourAgreement(drifts, 1);
         Assert.That(sprinkled, Is.EqualTo(0.05f).Within(0.02f));
         Assert.That(gathered, Is.GreaterThan(2.5f * sprinkled));
+    }
+
+    [Test]
+    public void ClustersInsideDriftsHoldAFewToAFewDozenPlantsWithBareGroundBetween()
+    {
+        // The meadow's daisy: all of it in clusters of 0.7 m covering 0.3 of drifts that cover 0.25 of a 12 m-scale field.
+        Kind[] kinds = { Mix(0.97f), Mix(0.03f, 1f, 0.25f, 0.3f) };
+        var field = Field(1, 12f, 0.7f);
+        const int Cells = 1000;
+        const float Spacing = 0.08f;
+        var flower = new bool[Cells, Cells];
+        int flowers = 0;
+        for (int z = 0; z < Cells; z++)
+        for (int x = 0; x < Cells; x++)
+            if (GrassVariantSelection.SelectKind(x, z, Spacing, field, kinds, 2, shares) == 1)
+            {
+                flower[x, z] = true;
+                flowers++;
+            }
+        // An 80 m square holds only a few dozen 12 m drifts, so the share is checked loosely here and closely above.
+        Assert.That(flowers / (float)(Cells * Cells), Is.InRange(0.015f, 0.045f), "Clusters keep roughly the kind's share.");
+
+        // Group flowers within 0.25 m of each other: the clusters of an 80 m square.
+        List<int> sizes = Clusters(flower, Cells, 3);
+        sizes.Sort();
+        int median = sizes[sizes.Count / 2];
+        Assert.That(median, Is.InRange(5, 40), "A typical cluster holds a few to a few dozen heads.");
+        int sprinkled = 0;
+        foreach (int size in sizes)
+            if (size <= 2)
+                sprinkled += size;
+        Assert.That(sprinkled, Is.LessThan(flowers / 10), "Hardly any flower stands alone between the clusters.");
     }
 
     [Test]
@@ -58,38 +97,66 @@ public sealed class GrassVariantSelectionTests
     {
         // Heavy clumped kinds: where both kinds' drifts overlap they would hold more than every root, so they share it,
         // which trims their shares slightly (documented); elsewhere each keeps its weight.
-        int[] counts = Count(new[] { 0.6f, 0.3f, 0.1f }, new[] { 0f, 0.6f, 1f }, 3, 0.5f, 600);
+        int[] counts = Count(new[] { Mix(0.6f), Mix(0.3f, 0.6f), Mix(0.1f, 1f) }, 0.5f, 600);
         AssertShares(counts, new[] { 0.6f, 0.3f, 0.1f }, 0.03f);
     }
 
     [Test]
     public void AnAreaWeightOfZeroRemovesAKindAndTheOthersFillItsShare()
     {
+        Kind[] kinds = { Mix(0.6f), Mix(0.3f, 0.6f), Mix(0.1f, 1f) };
         var areaWeights = new[] { 1f, 1f, 0f };
         var counts = new int[3];
         for (int z = 0; z < 300; z++)
         for (int x = 0; x < 300; x++)
-            counts[GrassVariantSelection.SelectKind(x, z, 0.5f, 4f, 3, 3, new[] { 0.6f, 0.3f, 0.1f },
-                new[] { 0f, 0.6f, 1f }, Areas, shares, areaWeights)]++;
+            counts[GrassVariantSelection.SelectKind(x, z, 0.5f, Field(3), kinds, 3, shares, 0f, areaWeights)]++;
         Assert.That(counts[2], Is.Zero);
         AssertShares(counts, new[] { 2f / 3f, 1f / 3f, 0f }, 0.025f);
     }
 
     [Test]
+    public void HabitatSortsKindsByMoistureAndSlope()
+    {
+        // A wet-loving and a dry-loving flower at equal weight: the wet one dominates where the moisture field is high.
+        Kind[] kinds = { Mix(0.8f), Mix(0.1f, 0f, 0.25f, 1f, 0.8f), Mix(0.1f, 0f, 0.25f, 1f, -0.8f) };
+        var field = Field(5);
+        int wetInWet = 0, dryInWet = 0, wetInDry = 0, dryInDry = 0;
+        for (int z = 0; z < 600; z++)
+        for (int x = 0; x < 600; x++)
+        {
+            float moisture = GrassVariantSelection.Moisture(GrassVariantSelection.RootXZ(x, z, 0.5f), field);
+            if (moisture > 0.25f && moisture < 0.75f)
+                continue;
+            int kind = GrassVariantSelection.SelectKind(x, z, 0.5f, field, kinds, 3, shares);
+            if (moisture >= 0.75f) { wetInWet += kind == 1 ? 1 : 0; dryInWet += kind == 2 ? 1 : 0; }
+            else { wetInDry += kind == 1 ? 1 : 0; dryInDry += kind == 2 ? 1 : 0; }
+        }
+        Assert.That(wetInWet, Is.GreaterThan(3 * dryInWet), "Wet ground grows the wet-loving kind.");
+        Assert.That(dryInDry, Is.GreaterThan(3 * wetInDry), "Dry ground grows the dry-loving kind.");
+
+        // A slope-loving kind's share rises with the slope; flat ground keeps less of it.
+        Kind[] slopes = { Mix(0.9f), Mix(0.1f, 0f, 0.25f, 1f, 0f, 1f) };
+        GrassVariantSelection.Shares(new Vector2(3f, 4f), 0f, field, slopes, 2, shares);
+        float flat = shares[1];
+        GrassVariantSelection.Shares(new Vector2(3f, 4f), 1f, field, slopes, 2, shares);
+        Assert.That(shares[1], Is.GreaterThan(1.5f * flat));
+        Assert.That(flat, Is.EqualTo(0f).Within(1e-6f), "Full slope preference leaves flat ground to the others.");
+    }
+
+    [Test]
     public void SharesSumToOneEverywhereAndNoWeightsGrowTheFirstKind()
     {
-        float[] weights = { 0.2f, 0.2f, 0.3f, 0.3f };
-        float[] clumping = { 0f, 1f, 1f, 1f };
+        Kind[] kinds = { Mix(0.2f, 0f, 0.25f, 1f, 0.5f), Mix(0.2f, 1f, 0.25f, 0.3f), Mix(0.3f, 1f, 0.2f, 0.5f, -0.6f, 0.4f), Mix(0.3f, 1f) };
         for (int i = 0; i < 400; i++)
         {
             var position = new Vector2(i * 0.37f - 70f, i * -0.53f + 11f);
-            GrassVariantSelection.Shares(position, 3f, 99u, 4, weights, clumping, Areas, shares);
+            GrassVariantSelection.Shares(position, (i % 7) / 6f, Field(99), kinds, 4, shares);
             float sum = shares[0] + shares[1] + shares[2] + shares[3];
             Assert.That(sum, Is.EqualTo(1f).Within(1e-4f));
             for (int k = 0; k < 4; k++)
                 Assert.That(shares[k], Is.GreaterThanOrEqualTo(0f));
         }
-        GrassVariantSelection.Shares(Vector2.zero, 3f, 99u, 3, new float[3], new float[3], Areas, shares);
+        GrassVariantSelection.Shares(Vector2.zero, 0f, Field(99), new[] { Mix(0f), Mix(0f), Mix(0f) }, 3, shares);
         Assert.That(GrassVariantSelection.SelectKind(shares, 3, 0.99f), Is.Zero);
     }
 
@@ -133,6 +200,7 @@ public sealed class GrassVariantSelectionTests
         foreach (Vector4 value in data.Shape) Assert.That(value, Is.EqualTo(Vector4.zero));
         foreach (Vector4 value in data.Tint) Assert.That(value, Is.EqualTo(Vector4.zero));
         foreach (Vector4 value in data.Far) Assert.That(value, Is.EqualTo(Vector4.zero));
+        foreach (Vector4 value in data.Stem) Assert.That(value, Is.EqualTo(Vector4.zero));
         Assert.That(data.Update(null, false), Is.False, "An unchanged binding does not repack.");
     }
 
@@ -146,6 +214,7 @@ public sealed class GrassVariantSelectionTests
             Assert.That(profile.KindCount, Is.EqualTo(8));
             Assert.That(profile.HasHeads(GrassHeadShape.Daisy), Is.True);
             Assert.That(profile.HasHeads(GrassHeadShape.Mesh), Is.False);
+            Assert.That(profile.UsesSlope(), Is.True);
             var data = new GrassVariantGpuData();
             data.Update(profile, false);
             Assert.That(data.KindCount, Is.EqualTo(8));
@@ -161,6 +230,10 @@ public sealed class GrassVariantSelectionTests
                 Assert.That(data.Shape[k].w, Is.EqualTo(kind.HasHead ? 1f : 0f));
                 // Clover is a leaf and keeps its blade colour at distance; flowers carry theirs.
                 Assert.That(data.Far[k].w > 0f, Is.EqualTo(kind.HasHead && kind.head != GrassHeadShape.Clover));
+                // Flowers grow only in clusters inside drifts: nothing is kept everywhere.
+                if (kind.HasHead && kind.head != GrassHeadShape.Clover)
+                    Assert.That(data.Select[k].y, Is.Zero, kind.name + " is not sprinkled between its clusters.");
+                Assert.That(data.Select[k].z, Is.LessThanOrEqualTo(1f), "A cluster never holds more than every root.");
             }
             Assert.That(data.Seed, Is.EqualTo(unchecked((int)GrassVariantSelection.ProfileSeed(profile.seed))));
             uint revision = profile.Revision;
@@ -199,13 +272,12 @@ public sealed class GrassVariantSelectionTests
         }
     }
 
-    private int[] Count(float[] weights, float[] clumping, int kinds, float spacing, int cells)
+    private int[] Count(Kind[] kinds, float spacing, int cells)
     {
-        var counts = new int[kinds];
+        var counts = new int[kinds.Length];
         for (int z = 0; z < cells; z++)
         for (int x = 0; x < cells; x++)
-            counts[GrassVariantSelection.SelectKind(x - cells / 2, z - cells / 2, spacing, 4f, 3, kinds,
-                weights, clumping, Areas, shares)]++;
+            counts[GrassVariantSelection.SelectKind(x - cells / 2, z - cells / 2, spacing, Field(3), kinds, kinds.Length, shares)]++;
         return counts;
     }
 
@@ -219,16 +291,16 @@ public sealed class GrassVariantSelectionTests
     }
 
     // Among roots of the kind, the fraction whose right-hand neighbour is the same kind.
-    private float NeighbourAgreement(float[] weights, float[] clumping, int kind)
+    private float NeighbourAgreement(Kind[] kinds, int kind)
     {
         const int Cells = 400;
         int same = 0, total = 0;
         for (int z = 0; z < Cells; z++)
         {
-            int previous = GrassVariantSelection.SelectKind(-Cells / 2, z, 0.25f, 4f, 3, 3, weights, clumping, Areas, shares);
+            int previous = GrassVariantSelection.SelectKind(-Cells / 2, z, 0.25f, Field(3), kinds, 3, shares);
             for (int x = 1; x < Cells; x++)
             {
-                int current = GrassVariantSelection.SelectKind(x - Cells / 2, z, 0.25f, 4f, 3, 3, weights, clumping, Areas, shares);
+                int current = GrassVariantSelection.SelectKind(x - Cells / 2, z, 0.25f, Field(3), kinds, 3, shares);
                 if (previous == kind)
                 {
                     total++;
@@ -239,5 +311,38 @@ public sealed class GrassVariantSelectionTests
             }
         }
         return total > 0 ? same / (float)total : 0f;
+    }
+
+    // Sizes of the groups of marked cells joined within a reach of cells (8-connected over that reach).
+    private static List<int> Clusters(bool[,] marked, int cells, int reach)
+    {
+        var seen = new bool[cells, cells];
+        var sizes = new List<int>();
+        var stack = new Stack<Vector2Int>();
+        for (int z = 0; z < cells; z++)
+        for (int x = 0; x < cells; x++)
+        {
+            if (!marked[x, z] || seen[x, z])
+                continue;
+            int size = 0;
+            seen[x, z] = true;
+            stack.Push(new Vector2Int(x, z));
+            while (stack.Count > 0)
+            {
+                Vector2Int cell = stack.Pop();
+                size++;
+                for (int dz = -reach; dz <= reach; dz++)
+                for (int dx = -reach; dx <= reach; dx++)
+                {
+                    int nx = cell.x + dx, nz = cell.y + dz;
+                    if (nx < 0 || nz < 0 || nx >= cells || nz >= cells || !marked[nx, nz] || seen[nx, nz])
+                        continue;
+                    seen[nx, nz] = true;
+                    stack.Push(new Vector2Int(nx, nz));
+                }
+            }
+            sizes.Add(size);
+        }
+        return sizes;
     }
 }

@@ -22,13 +22,19 @@ float4 _GrassKindCentre[GRASS_MAXIMUM_KINDS];
 // rgb: the mean petal colour a distant tip takes; w: how strongly.
 float4 _GrassKindFar[GRASS_MAXIMUM_KINDS];
 float4 _GrassKindPalette[GRASS_MAXIMUM_KINDS * GRASS_PALETTE_COLOURS];
-// GrassVariantSelection.PackMix: x normalized weight; y the share kept everywhere; z the share a drift's core adds
-// (zero when unclumped). Read by the generation compute only.
+// GrassVariantSelection.PackMix: x normalized weight; y the share kept everywhere; z the share a drift cluster's core
+// adds (zero when unclumped). Read by the generation compute only.
 float4 _GrassKindSelect[GRASS_MAXIMUM_KINDS];
-// xy: the drift noise's soft threshold (GrassVariantSelection.DriftThresholds). Compute only.
+// xy: the drift noise's soft threshold; zw: the cluster noise's (GrassVariantSelection.DriftThresholds). Compute only.
 float4 _GrassKindDrift[GRASS_MAXIMUM_KINDS];
-// x: clump size (m); y: unused; z: head draw distance; w: where heads start to shrink.
+// x: moisture preference; y: slope preference (-1 to 1). Compute only.
+float4 _GrassKindHabitat[GRASS_MAXIMUM_KINDS];
+// x: the blade's width kept at its tip (0 a pointed blade, 1 a straight stem).
+float4 _GrassKindStem[GRASS_MAXIMUM_KINDS];
+// x: drift size (m); y: cluster size (m); z: head draw distance; w: where heads start to shrink.
 float4 _GrassVariantParams;
+// x: habitat (moisture) size (m); y: 1 when a kind prefers flat ground or slopes; z: bud fraction; w: seed-head fraction.
+float4 _GrassVariantParams2;
 int _GrassVariantKinds;
 int _GrassVariantSeed;
 // The mix's mean blade area relative to the material blade, minus one (canopy occlusion).
@@ -38,6 +44,8 @@ float _GrassVariantCanopy;
 #define GRASS_PALETTE_STREAM 0x1b873593u
 #define GRASS_DRIFT_SALT 0x27d4eb2fu
 #define GRASS_COLOUR_SALT 0x165667b1u
+#define GRASS_CLUSTER_SALT 0x61c88647u
+#define GRASS_MOISTURE_SALT 0x7feb352du
 
 uint GrassVariantHash(uint value)
 {
@@ -75,14 +83,26 @@ float GrassVariantNoise(float2 position, uint seed)
     return lower + (upper - lower) * t.y;
 }
 
-// How far a root is inside a kind's drifts: zero outside, one in their core. Drifts cover a fixed fraction of the
-// ground (the threshold is a quantile of this noise), so clumping moves a kind without changing its share.
+// How far a root is inside a kind's drifts and their clusters: zero outside, one in a cluster's core. Each threshold
+// is a quantile of its own noise, so drifts and clusters cover fixed fractions of the ground and clumping moves a kind
+// without changing its share.
 float GrassVariantInDrift(float2 positionXZ, uint kind)
 {
-    float noise = GrassVariantNoise(positionXZ / max(_GrassVariantParams.x, 0.01),
+    float4 thresholds = _GrassKindDrift[kind];
+    float drift = GrassVariantNoise(positionXZ / max(_GrassVariantParams.x, 0.01),
         (uint)_GrassVariantSeed ^ (GRASS_DRIFT_SALT * (kind + 1u)));
-    float2 thresholds = _GrassKindDrift[kind].xy;
-    return saturate((noise - thresholds.x) / max(thresholds.y - thresholds.x, 1e-6));
+    float cluster = GrassVariantNoise(positionXZ / max(_GrassVariantParams.y, 0.01),
+        (uint)_GrassVariantSeed ^ (GRASS_CLUSTER_SALT * (kind + 1u)));
+    return saturate((drift - thresholds.x) / max(thresholds.y - thresholds.x, 1e-6)) *
+        saturate((cluster - thresholds.z) / max(thresholds.w - thresholds.z, 1e-6));
+}
+
+// The shared moisture field in [0, 1] (GrassVariantSelection.Moisture).
+float GrassVariantMoisture(float2 positionXZ)
+{
+    float noise = GrassVariantNoise(positionXZ / max(_GrassVariantParams2.x, 0.01), (uint)_GrassVariantSeed ^ GRASS_MOISTURE_SALT);
+    float t = saturate((noise - 0.3) / 0.4);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 // A smooth per-clump number in [0, 1): neighbouring plants share their colour drift and palette.
@@ -92,13 +112,14 @@ float GrassVariantClump(float2 positionXZ)
 }
 
 // Which kind a root grows (GrassVariantSelection.Shares and SelectKind). areaWeights scales each kind's weight for the
-// Placement Areas over the root; all ones keeps the profile's mix.
-uint GrassSelectKind(float2 positionXZ, uint cellSeed, float4 areaWeights0, float4 areaWeights1)
+// Placement Areas over the root, all ones keeping the profile's mix; slope is 0 on flat ground and 1 near 35 degrees.
+uint GrassSelectKind(float2 positionXZ, float slope, uint cellSeed, float4 areaWeights0, float4 areaWeights1)
 {
     uint count = (uint)clamp(_GrassVariantKinds, 0, GRASS_MAXIMUM_KINDS);
     if (count <= 1u)
         return 0u;
-    // The areas' multipliers rescale the kinds they keep, so those share the root in proportion.
+    float moisture = GrassVariantMoisture(positionXZ);
+    // Habitat and the areas' multipliers rescale the kinds they keep, so those share the root in proportion.
     float scales[GRASS_MAXIMUM_KINDS];
     float total = 0.0;
     [unroll]
@@ -107,7 +128,9 @@ uint GrassSelectKind(float2 positionXZ, uint cellSeed, float4 areaWeights0, floa
         // Select the vector first: FXC unrolls both sides of a ternary and rejects an out-of-range index.
         float4 group = k < 4u ? areaWeights0 : areaWeights1;
         float area = group[k & 3u];
-        scales[k] = k < count ? saturate(area) : 0.0;
+        float2 habitat = _GrassKindHabitat[k].xy;
+        float fit = max(0.0, 1.0 + habitat.x * (2.0 * moisture - 1.0)) * max(0.0, 1.0 + habitat.y * (2.0 * slope - 1.0));
+        scales[k] = k < count ? saturate(area) * fit : 0.0;
         total += max(_GrassKindSelect[k].x, 0.0) * scales[k];
     }
     if (total <= 0.0)
@@ -149,6 +172,14 @@ uint GrassSelectKind(float2 positionXZ, uint cellSeed, float4 areaWeights0, floa
         }
     }
     return selected;
+}
+
+// How much of a head shows: it shrinks away once it covers under about three pixels, so it never sparkles as a speck,
+// and over the last stretch of the head draw distance. The blade tip takes over its colour as it goes.
+float GrassHeadVisibility(float size, float cameraDistance, float worldUnitsPerPixel)
+{
+    float pixels = size / max(worldUnitsPerPixel, 1e-6);
+    return smoothstep(1.5, 3.5, pixels) * (1.0 - smoothstep(_GrassVariantParams.w, _GrassVariantParams.z, cameraDistance));
 }
 
 // A root's w: coverage + 2 kind. Coverage lies in (0, 1], so kind zero is exactly the earlier layout.

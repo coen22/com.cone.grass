@@ -56,7 +56,13 @@ Shader "Hidden/InfiniteGrass/Heads"
                 nointerpolation half4 petal : TEXCOORD3; // rgb colour; a: 1 on a side quad
                 nointerpolation half4 centre : TEXCOORD4; // rgb colour; a: GrassHeadShape
                 nointerpolation float petals : TEXCOORD5;
+                // 0 open, 1 a closed bud, 2 gone to seed.
+                nointerpolation float stage : TEXCOORD6;
             };
+
+            #define GRASS_STAGE_OPEN 0
+            #define GRASS_STAGE_BUD 1
+            #define GRASS_STAGE_SEED 2
 
             // Height of the side quads and of the face, in head diameters: scale and offset of the quad's -0.5..0.5,
             // then the face's offset above the tip.
@@ -79,17 +85,30 @@ Shader "Hidden/InfiniteGrass/Heads"
                 uint shape = (uint)head.z;
 
                 float3 tip = GrassCenterAtHeight(root, 1.0);
-                float3 up = GrassTangentAtHeight(root, 1.0);
+                // The face turns from the stem's tip toward the sun, with each head's own jitter; a leaf turns less.
+                float3 stemUp = GrassTangentAtHeight(root, 1.0);
+                float3 toSun = float3(_MainLightPosition.x, 0.0, _MainLightPosition.z);
+                float2 jitter = float2(GrassRandom(root.seed + 17u), GrassRandom(root.seed + 18u)) - 0.5;
+                float turn = shape == GRASS_HEAD_CLOVER ? 0.15 : 0.45;
+                float3 up = SafeNormalize(stemUp + toSun * turn + float3(jitter.x, 0.0, jitter.y) * 0.5);
+                up = SafeNormalize(float3(up.x, max(up.y, 0.35), up.z));
                 float yaw = GrassRandom(root.seed + 12u) * 6.2831853;
                 float3 around = float3(cos(yaw), 0.0, sin(yaw));
                 float3 right = SafeNormalize(around - up * dot(around, up));
                 float3 forward = cross(right, up);
 
-                // The head shrinks away toward its draw distance, where the blade tip takes its colour, and with the
-                // blade through a density transition. At least a pixel wide while it lasts, so it does not sparkle.
-                float fade = 1.0 - smoothstep(_GrassVariantParams.w, _GrassVariantParams.z, root.cameraDistance);
-                float size = max(head.x * (1.0 - saturate(head.y) * GrassRandom(root.seed + 11u)), root.worldUnitsPerPixel);
-                size *= fade * sqrt(GrassUnpackCoverage(positionData.w));
+                // A few heads are closed buds and a few have gone to seed; a clover leaf is always open.
+                float stageRandom = GrassRandom(root.seed + 16u);
+                float stage = shape == GRASS_HEAD_CLOVER || shape == GRASS_HEAD_MESH ? GRASS_STAGE_OPEN :
+                    stageRandom < _GrassVariantParams2.z ? GRASS_STAGE_BUD :
+                    stageRandom < _GrassVariantParams2.z + _GrassVariantParams2.w ? GRASS_STAGE_SEED : GRASS_STAGE_OPEN;
+                // Each head's size varies either way by the kind's randomness; buds and seed heads are smaller.
+                float size = head.x * (1.0 + saturate(head.y) * (2.0 * GrassRandom(root.seed + 11u) - 1.0)) *
+                    (stage == GRASS_STAGE_BUD ? 0.55 : stage == GRASS_STAGE_SEED ? 0.75 : 1.0);
+                // No pixel floor: under about three pixels, or near its draw distance, the head shrinks away and the
+                // stem's top carries its colour instead (GrassHeadVisibility); it also follows a density transition.
+                size *= GrassHeadVisibility(size, root.cameraDistance, root.worldUnitsPerPixel) *
+                    sqrt(GrassUnpackCoverage(positionData.w));
 
                 float3 local = input.positionOS;
                 float3 normal;
@@ -129,15 +148,29 @@ Shader "Hidden/InfiniteGrass/Heads"
                 output.petal = half4(petal, side ? 1.0h : 0.0h);
                 output.centre = half4(centre.rgb, shape);
                 output.petals = 11.0 + floor(GrassRandom(root.seed + 15u) * 6.0);
+                output.stage = stage;
                 return output;
             }
 
             // Signed distance-like value, positive inside the head's outline, in units of its quad.
-            float GrassHeadOutline(uint shape, bool side, float2 uv, float rise, float petals, out bool centre)
+            float GrassHeadOutline(uint shape, uint stage, bool side, float2 uv, float rise, float petals, out bool centre)
             {
                 centre = false;
                 if (shape == GRASS_HEAD_MESH)
                     return 1.0;
+                if (stage == GRASS_STAGE_BUD)
+                {
+                    // A closed bud: a small egg, seen from above or the side.
+                    float x = uv.x * 2.0 - 1.0;
+                    return side ? 1.0 - sqrt(x * x / 0.09 + (rise / 0.13) * (rise / 0.13)) : 0.35 - length(uv * 2.0 - 1.0);
+                }
+                if (stage == GRASS_STAGE_SEED && (shape == GRASS_HEAD_DAISY || shape == GRASS_HEAD_CUP))
+                {
+                    // Petals gone: the disc alone, a low dome.
+                    float x = uv.x * 2.0 - 1.0;
+                    centre = true;
+                    return side ? 1.0 - sqrt(x * x / 0.1 + (rise / 0.14) * (rise / 0.14)) : 0.32 - length(uv * 2.0 - 1.0);
+                }
                 if (side)
                 {
                     float x = uv.x * 2.0 - 1.0;
@@ -197,9 +230,10 @@ Shader "Hidden/InfiniteGrass/Heads"
             half4 GrassHeadFragment(GrassHeadVaryings input) : SV_Target
             {
                 uint shape = (uint)input.centre.a;
+                uint stage = (uint)input.stage;
                 bool side = input.petal.a > 0.5h;
                 bool centre;
-                float outline = GrassHeadOutline(shape, side, input.shapeCoordinates.xy, input.shapeCoordinates.z,
+                float outline = GrassHeadOutline(shape, stage, side, input.shapeCoordinates.xy, input.shapeCoordinates.z,
                     input.petals, centre);
                 half alpha = saturate(outline / max(fwidth(outline), 1e-4) + 0.5);
                 // With MSAA the edge fraction becomes sample coverage; without it the outline is solid.
@@ -208,7 +242,12 @@ Shader "Hidden/InfiniteGrass/Heads"
                     alpha = 1.0h;
 
                 half3 albedo = centre ? input.centre.rgb : input.petal.rgb;
-                if (!side && !centre && shape != GRASS_HEAD_MESH)
+                // A bud is mostly green with a hint of its petals; a seed head has browned.
+                if (stage == GRASS_STAGE_BUD)
+                    albedo = lerp(half3(0.12h, 0.25h, 0.06h), input.petal.rgb, 0.3h);
+                else if (stage == GRASS_STAGE_SEED)
+                    albedo = lerp(half3(0.25h, 0.17h, 0.07h), albedo, 0.25h);
+                if (!side && !centre && stage == GRASS_STAGE_OPEN && shape != GRASS_HEAD_MESH)
                     albedo *= lerp(0.75h, 1.0h, saturate(length(input.shapeCoordinates.xy * 2.0 - 1.0) * 1.4));
 
                 float3 positionWS = input.positionWSAndFog.xyz;

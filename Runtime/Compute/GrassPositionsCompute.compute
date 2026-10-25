@@ -322,7 +322,32 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out ui
             if (dot(areaWeights0, 1.0) + dot(areaWeights1, 1.0) <= 0.0)
                 areaWeights0 = areaWeights1 = 1.0;
         }
-        kind = GrassSelectKind(positionXZ, seed, areaWeights0, areaWeights1);
+        // The ground's slope, only when a kind prefers flat ground or slopes: two height samples half a metre away.
+        float slope = 0.0;
+        if (_GrassVariantParams2.y > 0.5)
+        {
+            float2 step = float2(0.5, 0.5);
+            float heightX = heightWS, heightZ = heightWS;
+            if (_UseTerrain != 0)
+            {
+                if (!GrassTerrainHeight(positionXZ + float2(step.x, 0.0), heightX))
+                    heightX = heightWS;
+                if (!GrassTerrainHeight(positionXZ + float2(0.0, step.y), heightZ))
+                    heightZ = heightWS;
+            }
+            else
+            {
+                float2 uvStep = step / (2.0 * captureExtent);
+                float validity;
+                if (!GrassCapturedSurfaceHeight(uv + float2(uvStep.x, 0.0), heightX, validity))
+                    heightX = heightWS;
+                if (!GrassCapturedSurfaceHeight(uv + float2(0.0, uvStep.y), heightZ, validity))
+                    heightZ = heightWS;
+            }
+            // 0 on flat ground, 1 at a gradient of 0.7 (about 35 degrees).
+            slope = saturate(length(float2(heightX - heightWS, heightZ - heightWS) / step) / 0.7);
+        }
+        kind = GrassSelectKind(positionXZ, slope, seed, areaWeights0, areaWeights1);
     }
     uint head = (uint)max(_GrassKindShape[kind].w, 0.0);
     if (head > 0u && head <= (uint)clamp(_GrassHeadQueues, 0, 2) && distanceToCamera < _GrassVariantParams.z)

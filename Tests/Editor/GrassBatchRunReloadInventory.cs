@@ -311,6 +311,8 @@ internal static class GrassBatchRunReloadInventory
         "GrassVariantSelectionTests.AnAreaWeightOfZeroRemovesAKindAndTheOthersFillItsShare()",
         "GrassVariantSelectionTests.AreaVariantWeightsDefaultToTheProfileMixAndClampAnOverride()",
         "GrassVariantSelectionTests.ClumpingGathersAKindIntoDriftsWithoutChangingItsShare()",
+        "GrassVariantSelectionTests.ClustersInsideDriftsHoldAFewToAFewDozenPlantsWithBareGroundBetween()",
+        "GrassVariantSelectionTests.HabitatSortsKindsByMoistureAndSlope()",
         "GrassVariantSelectionTests.DriftsCoverTheirAreaOfTheGroundForAnySeed(System.Single)",
         "GrassVariantSelectionTests.HeavyClumpedKindsKeepTheirSharesWhereTheirDriftsDoNotOverlap()",
         "GrassVariantSelectionTests.SharesSumToOneEverywhereAndNoWeightsGrowTheFirstKind()",
