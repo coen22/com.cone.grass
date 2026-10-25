@@ -17,7 +17,9 @@ public enum GrassHeadShape
     /// <summary>A three-lobed leaf held flat, as clover; a herb rather than a flower.</summary>
     Clover = 5,
     /// <summary>The profile's own small mesh, tinted from the palette.</summary>
-    Mesh = 6
+    Mesh = 6,
+    /// <summary>A small soft round flower, as clover blossom or a pompom.</summary>
+    Puff = 7
 }
 
 /// <summary>One kind of plant in a profile: its blade, its colour and its optional head.</summary>
@@ -51,6 +53,9 @@ public sealed class GrassVariantKind
     [Min(0f)] public float curvingScale = 1f;
     [Tooltip("0 tapers to a point like a grass blade; 1 keeps its width to the tip, a stem that holds a head.")]
     [Range(0f, 1f)] public float stemWidth;
+    [Tooltip("Replaces the material's Grass Height Randomness for this kind; below zero keeps the material's. "
+        + "A low value holds a flower's head at the height of the grass tips round it.")]
+    [Range(-1f, 1f)] public float heightRandomness = -1f;
 
     [Header("Blade colour")]
     [Tooltip("Multiplies the blade colour. The root still blends toward the matched ground colour.")]
@@ -68,6 +73,8 @@ public sealed class GrassVariantKind
     [Min(0.001f)] public float headSize = 0.04f;
     [Tooltip("Each head's size varies by up to this fraction either way.")]
     [Range(0f, 1f)] public float headSizeRandomness = 0.3f;
+    [Tooltip("Fraction of heads that face sideways rather than up toward the sun.")]
+    [Range(0f, 1f)] public float sideways = 0.25f;
     [Tooltip("Petal colours; each head picks one.")]
     public Color[] palette = { Color.white };
     [Tooltip("Zero picks each head's colour independently; one gives a whole drift the same colour.")]
@@ -86,6 +93,8 @@ public sealed class GrassVariantKind
         moisture = Mathf.Clamp(Finite(moisture, 0f), -1f, 1f);
         slope = Mathf.Clamp(Finite(slope, 0f), -1f, 1f);
         stemWidth = Mathf.Clamp01(Finite(stemWidth, 0f));
+        heightRandomness = Mathf.Clamp(Finite(heightRandomness, -1f), -1f, 1f);
+        sideways = Mathf.Clamp01(Finite(sideways, 0.25f));
         heightScale = Mathf.Clamp(Finite(heightScale, 1f), 0f, 16f);
         widthScale = Mathf.Clamp(Finite(widthScale, 1f), 0f, 16f);
         curvingScale = Mathf.Clamp(Finite(curvingScale, 1f), 0f, 16f);
@@ -246,55 +255,58 @@ public sealed class GrassVariantProfile : ScriptableObject
     }
 
     /// <summary>
-    /// A meadow to start from: short and tall blades, a broad herb, clover and four flowers. Flowers grow only in clusters
-    /// of a few to a few dozen plants inside drifts, sorted by habitat: buttercups on wet ground, knapweed and yarrow on
-    /// dry slopes, daisies on the flat.
+    /// A flowering lawn to start from: short, broad, bright blades over a darker undercoat, a broad herb and clover, and
+    /// sparse small flowers (about one per two to five square metres) whose heads sit at the grass tips round them, in
+    /// mixed pink, lilac, yellow and white, single or in a few loose groups.
     /// </summary>
     public void ResetToMeadow()
     {
         seed = 1;
         clumpSize = 12f;
-        clusterSize = 0.7f;
+        clusterSize = 1.5f;
         habitatSize = 40f;
-        budFraction = 0.12f;
-        seedFraction = 0.08f;
-        headDrawDistance = 60f;
-        headFade = 0.3f;
-        distantTipColour = 0.8f;
-        var stem = new Color(0.72f, 0.86f, 0.66f);
+        budFraction = 0.08f;
+        seedFraction = 0.03f;
+        headDrawDistance = 50f;
+        headFade = 0.4f;
+        // At range the flowers fade into the lawn, leaving faint dots.
+        distantTipColour = 0.35f;
+        // The lawn's tips stand at 0.62 of the material height times 0.5 to 1 (its randomness); flowers at 0.56 times
+        // 0.8 to 1 put their heads within about 10 % of the taller tips round them, never above the grass or under it.
+        const float FlowerHeight = 0.56f, FlowerRandomness = 0.2f;
+        var stem = new Color(0.62f, 0.8f, 0.55f);
         kinds = new List<GrassVariantKind>
         {
-            new GrassVariantKind { name = "Short grass", weight = 0.565f, heightScale = 0.8f, widthScale = 1f,
-                clumpVariation = 0.3f },
-            new GrassVariantKind { name = "Tall grass", weight = 0.26f, clumping = 0.5f, driftArea = 0.35f, moisture = 0.4f,
-                heightScale = 1.45f, widthScale = 0.8f, curvingScale = 1.4f, variationTint = new Color(1.2f, 1.1f, 0.65f),
-                clumpVariation = 0.5f },
-            new GrassVariantKind { name = "Broad herb", weight = 0.06f, clumping = 0.6f, driftArea = 0.3f, clusterArea = 0.5f,
-                heightScale = 0.5f, widthScale = 2.6f, curvingScale = 2f, tint = new Color(0.82f, 0.95f, 0.85f) },
-            new GrassVariantKind { name = "Clover", weight = 0.04f, clumping = 0.9f, driftArea = 0.25f, clusterArea = 0.5f,
-                moisture = 0.3f, slope = -0.3f, heightScale = 0.25f, widthScale = 0.5f, stemWidth = 0.6f,
-                tint = new Color(0.8f, 0.95f, 0.8f), head = GrassHeadShape.Clover, headSize = 0.045f,
+            new GrassVariantKind { name = "Lawn grass", weight = 0.62f, heightScale = 0.62f, widthScale = 1.5f,
+                curvingScale = 1.2f, tint = new Color(0.95f, 1.15f, 0.75f), variationTint = new Color(1.1f, 1.1f, 0.7f),
+                instanceVariation = 0.2f, clumpVariation = 0.25f },
+            new GrassVariantKind { name = "Undercoat", weight = 0.3f, heightScale = 0.35f, widthScale = 1.8f,
+                tint = new Color(0.55f, 0.68f, 0.45f), instanceVariation = 0.2f, clumpVariation = 0.2f },
+            new GrassVariantKind { name = "Broad herb", weight = 0.06f, clumping = 0.5f, driftArea = 0.3f, clusterArea = 0.5f,
+                heightScale = 0.3f, widthScale = 3f, curvingScale = 2f, tint = new Color(0.75f, 0.95f, 0.7f) },
+            new GrassVariantKind { name = "Clover", weight = 0.015f, clumping = 0.7f, driftArea = 0.3f, clusterArea = 0.5f,
+                moisture = 0.3f, heightScale = 0.25f, widthScale = 0.5f, stemWidth = 0.6f,
+                tint = new Color(0.8f, 0.95f, 0.8f), head = GrassHeadShape.Clover, headSize = 0.04f,
                 palette = new[] { new Color(0.28f, 0.5f, 0.2f), new Color(0.32f, 0.55f, 0.24f) },
                 centre = new Color(0.55f, 0.7f, 0.45f) },
-            new GrassVariantKind { name = "Daisy", weight = 0.03f, clumping = 1f, driftArea = 0.25f, clusterArea = 0.3f,
-                slope = -0.4f, heightScale = 1.05f, widthScale = 0.22f, stemWidth = 0.6f, tint = stem,
-                head = GrassHeadShape.Daisy, headSize = 0.045f,
-                palette = new[] { new Color(0.97f, 0.96f, 0.92f), new Color(0.98f, 0.9f, 0.92f) },
+            new GrassVariantKind { name = "Meadow puff", weight = 0.0013f, clumping = 0.4f, driftArea = 0.5f, clusterArea = 0.3f,
+                heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f, stemWidth = 0.5f, tint = stem,
+                head = GrassHeadShape.Puff, headSize = 0.04f, headSizeRandomness = 0.25f, paletteClumping = 0f,
+                palette = new[]
+                {
+                    new Color(0.95f, 0.55f, 0.75f), new Color(0.75f, 0.6f, 0.95f), new Color(1f, 0.85f, 0.25f),
+                    new Color(0.98f, 0.97f, 0.95f)
+                },
+                centre = new Color(0.9f, 0.8f, 0.85f) },
+            new GrassVariantKind { name = "Daisy", weight = 0.0005f, clumping = 0.3f, driftArea = 0.5f, clusterArea = 0.3f,
+                slope = -0.3f, heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
+                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Daisy, headSize = 0.035f, headSizeRandomness = 0.25f,
+                palette = new[] { new Color(0.97f, 0.96f, 0.92f), new Color(0.98f, 0.88f, 0.92f) },
                 centre = new Color(0.98f, 0.78f, 0.12f) },
-            new GrassVariantKind { name = "Buttercup", weight = 0.025f, clumping = 1f, driftArea = 0.25f, clusterArea = 0.3f,
-                moisture = 0.8f, heightScale = 1.3f, widthScale = 0.2f, stemWidth = 0.6f, tint = stem,
-                head = GrassHeadShape.Cup, headSize = 0.035f, palette = new[] { new Color(1f, 0.82f, 0.08f) },
-                centre = new Color(0.95f, 0.65f, 0.05f) },
-            new GrassVariantKind { name = "Yarrow", weight = 0.012f, clumping = 1f, driftArea = 0.2f, clusterArea = 0.3f,
-                moisture = -0.5f, slope = 0.3f, heightScale = 1.5f, widthScale = 0.2f, stemWidth = 0.6f, tint = stem,
-                head = GrassHeadShape.Umbel, headSize = 0.08f,
-                palette = new[] { new Color(0.96f, 0.95f, 0.9f), new Color(0.95f, 0.8f, 0.85f) },
-                centre = new Color(0.9f, 0.88f, 0.8f) },
-            new GrassVariantKind { name = "Knapweed", weight = 0.01f, clumping = 1f, driftArea = 0.2f, clusterArea = 0.3f,
-                moisture = -0.7f, slope = 0.5f, heightScale = 1.45f, widthScale = 0.2f, stemWidth = 0.6f, tint = stem,
-                head = GrassHeadShape.Spike, headSize = 0.035f,
-                palette = new[] { new Color(0.62f, 0.32f, 0.78f), new Color(0.75f, 0.38f, 0.7f) },
-                centre = new Color(0.5f, 0.25f, 0.6f) }
+            new GrassVariantKind { name = "Buttercup", weight = 0.0005f, clumping = 0.3f, driftArea = 0.5f, clusterArea = 0.3f,
+                moisture = 0.4f, heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
+                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Cup, headSize = 0.03f, headSizeRandomness = 0.25f,
+                palette = new[] { new Color(1f, 0.82f, 0.08f) }, centre = new Color(0.95f, 0.65f, 0.05f) }
         };
         Sanitize();
         MarkDirty();

@@ -129,7 +129,8 @@ public sealed class GrassVariantGpuData
                 Drift[k] = new Vector4(drift.x, drift.y, cluster.x, cluster.y);
             }
             Habitat[k] = new Vector4(kind.moisture, kind.slope, 0f, 0f);
-            Stem[k] = new Vector4(kind.stemWidth, 0f, 0f, 0f);
+            // y: the kind's own height randomness plus one, zero for the material's; z: its sideways heads.
+            Stem[k] = new Vector4(kind.stemWidth, kind.heightRandomness >= 0f ? kind.heightRandomness + 1f : 0f, kind.sideways, 0f);
         }
         KindCount = count;
         HeadQueues = anyMesh ? 2 : quadHeads ? 1 : 0;

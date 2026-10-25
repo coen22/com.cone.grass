@@ -94,7 +94,7 @@ Ground color is captured in a shared XZ projection. Vertically overlapping surfa
 ## Plant kinds and flowers
 
 Assign a **Grass Variant Profile** to the renderer's **Plant Kinds > Variants** to grow several kinds per area: blades of
-different height and width, broad herbs, clover and flowers with quad-cross heads (daisy, cup, umbel, spike) or a small
+different height and width, broad herbs, clover and flowers with quad-cross heads (daisy, cup, umbel, spike, puff) or a small
 mesh of your own, with a palette of colours. Each kind has a weight, optional clumping into drifts that keeps its share,
 and colour variation per plant and per clump; the seed re-deals the kinds without moving a root. Blades keep the
 terrain colour match at their roots; heads never take it. Heads shrink away toward their draw distance, after which a

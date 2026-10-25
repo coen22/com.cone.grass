@@ -314,8 +314,10 @@ GrassRootData BuildGrassRoot(float4 positionData, GrassShapeParameters shape,
         root.physicalPixelWidth *= opaqueDensityScale;
         root.coverage = densityCoverage > 0.0 && originalFullWidth > 0.0 ? 1.0 : 0.0;
     }
+    // A kind can hold its height closer than the material's randomness, so a flower's head stays at the grass tips.
+    float heightRandomness = _GrassKindStem[root.kind].y > 0.0 ? _GrassKindStem[root.kind].y - 1.0 : shape.dimensions.w;
     root.height = max(0.0, shape.dimensions.y) * kindScale.x *
-        (1.0 - GrassRandom(root.seed + 2u) * saturate(shape.dimensions.w));
+        (1.0 - GrassRandom(root.seed + 2u) * saturate(heightRandomness));
     float bump = saturate(1.0 - abs(root.cameraDistance - shape.ranges.z) / max(shape.shaping.w, 0.001));
     root.height *= max(0.0, 1.0 + shape.shaping.z * bump) * opaqueDensityScale;
     if (_DensityShortensBlades != 0)

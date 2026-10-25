@@ -2,8 +2,10 @@
 
 A **Grass Variant Profile** (`Assets > Create > Cone > Grass > Variant Profile`) lets one Infinite Grass Renderer grow
 several kinds of plant: short and tall blades, broad herbs, clover and flowers with heads. Assign it to the renderer's
-**Plant Kinds > Variants**. A new profile starts as a meadow (short grass, tall grass, a broad herb, clover, daisy,
-buttercup, yarrow and knapweed); **Reset** on the asset restores it. Without a profile the renderer grows its one
+**Plant Kinds > Variants**. A new profile starts as a flowering lawn: short, broad, bright blades over a darker
+undercoat, a broad herb, clover, and sparse small flowers (a soft round puff in pink, lilac, yellow and white, daisies
+and buttercups), about one per two to five square metres, whose heads sit at the grass tips round them. **Reset** on the
+asset restores it. Without a profile the renderer grows its one
 material blade exactly as before: every per-kind value is stored relative to that blade, and the root layout is
 unchanged for kind zero.
 
@@ -26,16 +28,17 @@ a drift in clusters on a smaller scale. A drift is where the kind's drift noise 
 values, a cluster where its cluster noise lies in the top **Cluster Area** of its values; each threshold is a quantile
 of that noise's measured distribution, so drifts and clusters cover those fractions of the ground and the kind's share
 stays its weight however strong the clumping. Unclumped kinds fill what the clusters leave, in proportion to their
-weights. A cluster never holds more than every root: the cluster area, then the drift area, is raised until
+weights. A kind with low clumping is mostly sprinkled singly, with a few loose groups. A cluster never holds more than every root: the cluster area, then the drift area, is raised until
 `clumping * weight / (driftArea * clusterArea)` is at most one. Where the clusters of two heavy clumped kinds overlap they
 would hold more than every root; they then share it, which trims their shares slightly (in the tests, weights 0.3 and
-0.1 both clumped come out about 0.02 low). In the meadow preset the flowers clump fully, so none stands alone between
-the clusters; a typical daisy cluster holds 6 to 20 heads.
+0.1 both clumped come out about 0.02 low). With full clumping, weight 0.03 and clusters of 0.7 m in 12 m drifts (the
+cluster test), a typical cluster holds 6 to 20 heads and hardly any flower stands alone.
 
 Habitat sorts the kinds: a shared moisture field (smooth noise on the profile's **Habitat Size**, 40 m) and the ground's
 slope (measured from two height samples half a metre from the root, only when a kind has a slope preference; 0 flat, 1 at
 about 35 degrees) scale each kind's weight by `(1 + moisture * (2 m - 1)) * (1 + slope * (2 s - 1))` before the kinds
-share the root. Habitat makes the shares local: buttercups crowd the wet hollows, knapweed and yarrow the dry slopes.
+share the root. Habitat makes the shares local: a wet-loving kind crowds the wet hollows, a dry-loving one the dry
+slopes.
 
 `GrassVariantSelection` is the CPU twin of the compute's choice, in the same float32 order, for tests and tools.
 
@@ -54,8 +57,11 @@ with the ground colour: an area edit, a move or a capture recentre.
 ## Blades, stems and colour
 
 **Height Scale**, **Width Scale** and **Curving Scale** scale the material's blade for that kind; the material's
-randomness still applies. **Stem Width** keeps part of the blade's width to its tip: 0 is a pointed grass blade, the
-meadow's flowers use 0.6, a visible stem the head sits on and that bends with the blade in wind and interaction.
+randomness still applies unless **Height Randomness** replaces it for the kind (below zero keeps the material's). A
+flower's head sits at the top of its stem, so its height is the stem's: the lawn preset's flowers stand at 0.56 of the
+material height with randomness 0.2, within about 10 % of the lawn's taller tips (0.62 times 0.5 to 1), never above the
+grass and never hidden under it. **Stem Width** keeps part of the blade's width to its tip: 0 is a pointed grass blade,
+0.5 a stem the head sits on, hidden in the grass, that bends with the blade in wind and interaction.
 **Tint** multiplies the blade colour. **Instance Variation** moves each plant's colour toward **Variation Tint** by its own
 random number, **Clump Variation** by its clump's smooth noise, so neighbouring plants drift together. The root still
 blends to the matched ground colour (**Ground Color Strength**, terrain splat roots and **Ground Colour Along Whole Blade**
@@ -68,20 +74,22 @@ bounds every root by the tallest, widest and most curved kind and its largest he
 
 **Head** selects a quad-cross head drawn on the kind's stem tip: **Daisy** (a ring of narrow petals round a disc),
 **Cup** (five broad petals, a buttercup or poppy), **Umbel** (a flat cluster of florets, yarrow), **Spike** (an upright
-spike, knapweed or lavender) or **Clover** (a three-lobed leaf: a herb, not a flower). **Mesh** uses the profile's
+spike, knapweed or lavender), **Puff** (a small soft round flower, clover blossom or a pompom) or **Clover** (a
+three-lobed leaf: a herb, not a flower). **Mesh** uses the profile's
 **Head Mesh** (about one unit across, pivot at the stem, +Y up), tinted from the palette.
 
 The quad-cross is one flat face and two crossed upright quads (12 vertices, 6 triangles). The head shader cuts each
 outline procedurally, so no texture is needed, and with MSAA the outline edge becomes sample coverage. A head rebuilds
 the bent blade it sits on, wind and interaction included, so it stays on its stem. Its face turns from the stem's tip
-toward the sun (a leaf less), with each head's own jitter. Each head's size varies by **Head Size Randomness** either way
-(±30 % in the meadow). **Bud Fraction** of the heads are closed buds (small, mostly green) and **Seed Fraction** have gone
+toward the sun (a leaf less), with each head's own jitter, and **Sideways** of them nod over to face sideways. Each head's
+size varies by **Head Size Randomness** either way (±25 % in the lawn). **Bud Fraction** of the heads are closed buds (small, mostly green) and **Seed Fraction** have gone
 to seed (petals gone, a browned disc or florets). Each head picks a **Palette** colour; **Palette Clumping** gives a drift
 one colour. **Centre** colours the disc or florets.
 
 At range a head would alias into a white speck. It has no pixel floor: it shrinks away once it covers under about three
-pixels, and over the last **Head Fade** of **Head Draw Distance** (60 m). As it goes, the top of its stem takes the mean
-petal colour (**Distant Tip Colour**), so a cluster reads as a soft coloured patch at 10 to 100 m rather than speckles.
+pixels, and over the last **Head Fade** of **Head Draw Distance** (50 m in the lawn). As it goes, the top of its stem
+takes the mean petal colour by **Distant Tip Colour** (0.35 in the lawn), so far flowers fade into the lawn colour as
+faint dots rather than speckles.
 
 Heads use their own queues after the three LOD ranges of the position buffer: one for quad-cross heads and one for mesh
 heads, each **Max Head Count** (renderer, millions, default 0.25: 4 MiB of positions) when a kind uses it and absent

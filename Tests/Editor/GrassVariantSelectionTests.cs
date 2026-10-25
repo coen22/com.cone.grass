@@ -211,29 +211,41 @@ public sealed class GrassVariantSelectionTests
         try
         {
             profile.ResetToMeadow();
-            Assert.That(profile.KindCount, Is.EqualTo(8));
-            Assert.That(profile.HasHeads(GrassHeadShape.Daisy), Is.True);
+            int count = profile.KindCount;
+            Assert.That(count, Is.EqualTo(7));
+            Assert.That(profile.HasHeads(GrassHeadShape.Puff), Is.True);
             Assert.That(profile.HasHeads(GrassHeadShape.Mesh), Is.False);
             Assert.That(profile.UsesSlope(), Is.True);
             var data = new GrassVariantGpuData();
             data.Update(profile, false);
-            Assert.That(data.KindCount, Is.EqualTo(8));
+            Assert.That(data.KindCount, Is.EqualTo(count));
             Assert.That(data.HeadQueues, Is.EqualTo(1));
-            float total = 0f;
-            for (int k = 0; k < 8; k++)
+            float total = 0f, flowers = 0f;
+            for (int k = 0; k < count; k++)
+            {
                 total += data.Select[k].x;
+                if (profile.kinds[k].HasHead && profile.kinds[k].head != GrassHeadShape.Clover)
+                    flowers += data.Select[k].x;
+            }
             Assert.That(total, Is.EqualTo(1f).Within(1e-5f));
-            for (int k = 0; k < 8; k++)
+            // About one flower per two to five square metres at the 0.08 m spacing the Alice grass uses (156 roots per m²).
+            Assert.That(1f / (flowers / (0.08f * 0.08f)), Is.InRange(2f, 5f));
+            GrassVariantKind lawn = profile.kinds[0];
+            for (int k = 0; k < count; k++)
             {
                 GrassVariantKind kind = profile.kinds[k];
                 Assert.That(data.Shape[k].x, Is.EqualTo(kind.heightScale - 1f).Within(1e-6f));
                 Assert.That(data.Shape[k].w, Is.EqualTo(kind.HasHead ? 1f : 0f));
                 // Clover is a leaf and keeps its blade colour at distance; flowers carry theirs.
                 Assert.That(data.Far[k].w > 0f, Is.EqualTo(kind.HasHead && kind.head != GrassHeadShape.Clover));
-                // Flowers grow only in clusters inside drifts: nothing is kept everywhere.
-                if (kind.HasHead && kind.head != GrassHeadShape.Clover)
-                    Assert.That(data.Select[k].y, Is.Zero, kind.name + " is not sprinkled between its clusters.");
                 Assert.That(data.Select[k].z, Is.LessThanOrEqualTo(1f), "A cluster never holds more than every root.");
+                if (!kind.HasHead || kind.head == GrassHeadShape.Clover)
+                    continue;
+                // A flower's head sits within the lawn's taller tips: never above the tallest blade, never under the mean.
+                float lowest = kind.heightScale * (1f - kind.heightRandomness), highest = kind.heightScale;
+                Assert.That(data.Stem[k].y, Is.EqualTo(kind.heightRandomness + 1f).Within(1e-6f));
+                Assert.That(highest, Is.LessThanOrEqualTo(lawn.heightScale), kind.name + " stands above the grass.");
+                Assert.That(lowest, Is.GreaterThanOrEqualTo(lawn.heightScale * 0.7f), kind.name + " hides under the grass.");
             }
             Assert.That(data.Seed, Is.EqualTo(unchecked((int)GrassVariantSelection.ProfileSeed(profile.seed))));
             uint revision = profile.Revision;

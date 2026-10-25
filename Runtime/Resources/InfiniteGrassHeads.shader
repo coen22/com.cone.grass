@@ -36,6 +36,7 @@ Shader "Hidden/InfiniteGrass/Heads"
             #define GRASS_HEAD_SPIKE 4
             #define GRASS_HEAD_CLOVER 5
             #define GRASS_HEAD_MESH 6
+            #define GRASS_HEAD_PUFF 7
 
             struct GrassHeadAttributes
             {
@@ -72,6 +73,7 @@ Shader "Hidden/InfiniteGrass/Heads"
                 if (shape == GRASS_HEAD_UMBEL) return float3(0.3, 0.05, 0.05);
                 if (shape == GRASS_HEAD_SPIKE) return float3(1.7, 0.75, 1.55);
                 if (shape == GRASS_HEAD_CLOVER) return float3(0.1, 0.0, 0.0);
+                if (shape == GRASS_HEAD_PUFF) return float3(0.8, 0.05, 0.1);
                 return float3(0.4, 0.05, 0.02);
             }
 
@@ -92,6 +94,12 @@ Shader "Hidden/InfiniteGrass/Heads"
                 float turn = shape == GRASS_HEAD_CLOVER ? 0.15 : 0.45;
                 float3 up = SafeNormalize(stemUp + toSun * turn + float3(jitter.x, 0.0, jitter.y) * 0.5);
                 up = SafeNormalize(float3(up.x, max(up.y, 0.35), up.z));
+                // Some heads face sideways, nodding over on their stems.
+                if (GrassRandom(root.seed + 19u) < _GrassKindStem[kind].z)
+                {
+                    float nod = GrassRandom(root.seed + 20u) * 6.2831853;
+                    up = SafeNormalize(float3(cos(nod), 0.35, sin(nod)));
+                }
                 float yaw = GrassRandom(root.seed + 12u) * 6.2831853;
                 float3 around = float3(cos(yaw), 0.0, sin(yaw));
                 float3 right = SafeNormalize(around - up * dot(around, up));
@@ -193,6 +201,12 @@ Shader "Hidden/InfiniteGrass/Heads"
                     }
                     if (shape == GRASS_HEAD_CLOVER)
                         return -1.0;
+                    if (shape == GRASS_HEAD_PUFF)
+                    {
+                        // A soft ball of florets: a slightly ragged round outline.
+                        float wobble = 0.04 * sin(x * 23.0 + rise * 17.0);
+                        return 1.0 - sqrt(x * x / 0.18 + ((rise - 0.1) / 0.3) * ((rise - 0.1) / 0.3)) + wobble;
+                    }
                     // Daisy: petals edge-on, with the disc as a low dome.
                     float dome = 1.0 - (x * x / 0.08 + (rise / 0.12) * (rise / 0.12));
                     centre = dome > 0.0 && rise > 0.0;
@@ -218,6 +232,8 @@ Shader "Hidden/InfiniteGrass/Heads"
                     centre = r < 0.15;
                     return 0.45 - r;
                 }
+                if (shape == GRASS_HEAD_PUFF)
+                    return 0.42 + 0.04 * cos(a * 11.0) - r;
                 if (shape == GRASS_HEAD_CLOVER)
                 {
                     centre = r < 0.07;
@@ -247,7 +263,10 @@ Shader "Hidden/InfiniteGrass/Heads"
                     albedo = lerp(half3(0.12h, 0.25h, 0.06h), input.petal.rgb, 0.3h);
                 else if (stage == GRASS_STAGE_SEED)
                     albedo = lerp(half3(0.25h, 0.17h, 0.07h), albedo, 0.25h);
-                if (!side && !centre && stage == GRASS_STAGE_OPEN && shape != GRASS_HEAD_MESH)
+                // A puff is soft: brighter in its middle, darker toward its rim.
+                if (shape == GRASS_HEAD_PUFF)
+                    albedo *= 0.72h + 0.35h * saturate(outline * 4.0);
+                else if (!side && !centre && stage == GRASS_STAGE_OPEN && shape != GRASS_HEAD_MESH)
                     albedo *= lerp(0.75h, 1.0h, saturate(length(input.shapeCoordinates.xy * 2.0 - 1.0) * 1.4));
 
                 float3 positionWS = input.positionWSAndFog.xyz;

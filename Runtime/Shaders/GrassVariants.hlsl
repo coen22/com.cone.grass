@@ -29,7 +29,8 @@ float4 _GrassKindSelect[GRASS_MAXIMUM_KINDS];
 float4 _GrassKindDrift[GRASS_MAXIMUM_KINDS];
 // x: moisture preference; y: slope preference (-1 to 1). Compute only.
 float4 _GrassKindHabitat[GRASS_MAXIMUM_KINDS];
-// x: the blade's width kept at its tip (0 a pointed blade, 1 a straight stem).
+// x: the blade's width kept at its tip (0 a pointed blade, 1 a straight stem); y: the kind's own height randomness plus
+// one (zero keeps the material's); z: the fraction of its heads that face sideways.
 float4 _GrassKindStem[GRASS_MAXIMUM_KINDS];
 // x: drift size (m); y: cluster size (m); z: head draw distance; w: where heads start to shrink.
 float4 _GrassVariantParams;

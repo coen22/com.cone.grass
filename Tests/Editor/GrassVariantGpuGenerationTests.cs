@@ -129,8 +129,11 @@ public sealed class GrassVariantGpuGenerationTests
         }
         // A root exactly on a noise-lattice line or a share boundary may round apart between CPU and GPU.
         Assert.That(agree, Is.GreaterThanOrEqualTo((int)(0.995f * counted[0])), "CPU and GPU kinds agree.");
-        for (int k = 0; k < 8; k++)
-            Assert.That(kinds[k], Is.GreaterThan(0), "Kind " + k + " grows in a 96 m meadow.");
+        // Every kind with a weight of at least 1 % grows in a 96 m meadow; the sparse flowers are checked through the heads.
+        for (int k = 0; k < profile.KindCount; k++)
+            if (profile.kinds[k].weight >= 0.01f)
+                Assert.That(kinds[k], Is.GreaterThan(0), "Kind " + k + " grows in a 96 m meadow.");
+        Assert.That(expectedHeads, Is.GreaterThan(0), "Flowers and clover grow heads in a 96 m meadow.");
 
         Assert.That(counted[4], Is.EqualTo((uint)expectedHeads), "Each flower or clover root within the head distance queues one head.");
         Assert.That(counted[5], Is.Zero, "No mesh heads without a profile mesh.");
@@ -149,7 +152,7 @@ public sealed class GrassVariantGpuGenerationTests
     [Test]
     public void AnAreaWeightOfZeroRemovesThatKindFromTheGpuPopulation()
     {
-        // Kind 4 (daisy) weighted out by the area capture; the others remain.
+        // Kind 4 (the meadow's puff flower) weighted out by the area capture; the others remain.
         Texture2D weights0 = CreateTexture(new Color(1f, 1f, 1f, 1f));
         Texture2D weights1 = CreateTexture(new Color(0f, 1f, 1f, 1f));
         try
