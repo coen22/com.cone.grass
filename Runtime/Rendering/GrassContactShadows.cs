@@ -58,6 +58,8 @@ public sealed class GrassContactShadows : IDisposable
     /// vertexTextureHandles; binding them in a property block is not a dependency.
     /// The supplied buffers, meshes and property blocks must remain valid until
     /// this graph has executed. Only the separate depth textures are sampled.
+    /// Heads, when given, draw their GrassHeadContactDepth pass from indirect
+    /// arguments 3 and 4 into the same depth, so flowers cast and take contacts.
     /// </summary>
     public void Record(
         RenderGraph renderGraph,
@@ -70,7 +72,8 @@ public sealed class GrassContactShadows : IDisposable
         Material bladeMaterial,
         MaterialPropertyBlock[] drawProperties,
         Settings settings,
-        TextureHandle[] vertexTextureHandles = null)
+        TextureHandle[] vertexTextureHandles = null,
+        GrassHeadDraws heads = default)
     {
         // In particular, do not allocate textures or load/create a material while disabled.
         if (_disposed || !TryGetParameters(settings, out Vector4 parameters,
@@ -126,6 +129,10 @@ public sealed class GrassContactShadows : IDisposable
         // property. Keep all deformed casters reachable by an in-range ray.
         for (int lod = 0; lod < 3; lod++)
             drawProperties[lod].SetFloat(CasterDistance, casterDistance);
+        int headPassIndex = heads.FindPass("GrassHeadContactDepth");
+        for (int queue = 0; headPassIndex >= 0 && queue < GrassHeadDraws.Queues; queue++)
+            if (heads.Draws(queue))
+                heads.Properties[queue].SetFloat(CasterDistance, casterDistance);
 
         TextureDesc grassDescriptor = sceneDepthDescriptor;
         grassDescriptor.name = "Grass Contact Depth And Coverage";
@@ -161,6 +168,8 @@ public sealed class GrassContactShadows : IDisposable
             pass.BladeMaterial = bladeMaterial;
             pass.DrawProperties = drawProperties;
             pass.DepthPassIndex = depthPassIndex;
+            pass.Heads = heads;
+            pass.HeadPassIndex = headPassIndex;
             pass.GrassDepth = grassDepth;
             pass.Projection = cameraData.GetProjectionMatrix();
             pass.View = cameraData.GetViewMatrix();
@@ -189,6 +198,15 @@ public sealed class GrassContactShadows : IDisposable
                         data.LodMeshes[lod], 0, data.BladeMaterial, data.DepthPassIndex,
                         data.Arguments, lod * GraphicsBuffer.IndirectDrawIndexedArgs.size,
                         data.DrawProperties[lod]);
+                }
+                for (int queue = 0; data.HeadPassIndex >= 0 && queue < GrassHeadDraws.Queues; queue++)
+                {
+                    if (!data.Heads.Draws(queue))
+                        continue;
+                    data.Heads.Properties[queue].SetMatrix(ViewProjection, viewProjection);
+                    context.cmd.DrawMeshInstancedIndirect(data.Heads.Meshes[queue], 0, data.Heads.Material,
+                        data.HeadPassIndex, data.Arguments, GrassHeadDraws.ArgumentOffset(queue),
+                        data.Heads.Properties[queue]);
                 }
             });
         }
@@ -400,6 +418,8 @@ public sealed class GrassContactShadows : IDisposable
         public Material BladeMaterial;
         public MaterialPropertyBlock[] DrawProperties;
         public int DepthPassIndex;
+        public GrassHeadDraws Heads;
+        public int HeadPassIndex;
         public TextureHandle GrassDepth;
         public Matrix4x4 Projection;
         public Matrix4x4 View;

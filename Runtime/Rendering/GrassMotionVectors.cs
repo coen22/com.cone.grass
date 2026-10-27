@@ -52,6 +52,7 @@ public sealed class GrassMotionVectors : IDisposable
         public static readonly int PreviousCameraRight = Shader.PropertyToID("_GrassPreviousCameraRight");
         public static readonly int PreviousProjection = Shader.PropertyToID("_GrassPreviousProjection");
         public static readonly int PreviousMap = Shader.PropertyToID("_GrassPreviousMap");
+        public static readonly int PreviousMainLight = Shader.PropertyToID("_GrassPreviousMainLight");
         public static readonly int PreviousSlope = Shader.PropertyToID("_GrassPreviousSlope");
         public static readonly int PreviousWind = Shader.PropertyToID("_GrassPreviousWind");
         public static readonly int Source = Shader.PropertyToID("_GrassHistorySource");
@@ -131,11 +132,16 @@ public sealed class GrassMotionVectors : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Draws the blades' motion and, when heads are given, the heads' GrassHeadMotionVectors pass from indirect
+    /// arguments 3 and 4. A head shares its blade's root, so the blade history finds its previous root too.
+    /// </summary>
     public void Record(RenderGraph graph, ContextContainer frameData,
         BufferHandle positionsHandle, BufferHandle countsHandle, BufferHandle argumentsHandle,
         GraphicsBuffer positions, GraphicsBuffer counts, GraphicsBuffer arguments,
         Mesh[] lodMeshes, Material bladeMaterial, MaterialPropertyBlock[] drawProperties,
-        TextureHandle[] vertexTextureHandles, int[] lodOffsets, int[] lodCapacities, float spacing)
+        TextureHandle[] vertexTextureHandles, int[] lodOffsets, int[] lodCapacities, float spacing,
+        GrassHeadDraws heads = default)
     {
         UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
         UniversalResourceData resources = frameData.Get<UniversalResourceData>();
@@ -200,7 +206,8 @@ public sealed class GrassMotionVectors : IDisposable
             previousSnapshot.Material == bladeMaterial && previousSnapshot.Spacing == spacing &&
             previousSnapshot.TargetWidth == cameraData.scaledWidth && previousSnapshot.TargetHeight == cameraData.scaledHeight &&
             previousSnapshot.CameraRect == camera.rect && (newFrame || history.PreviousValid);
-        FrameState current = FrameState.Capture(cameraData, bladeMaterial, drawProperties[0]);
+        FrameState current = FrameState.Capture(cameraData, frameData.Get<UniversalLightData>(), bladeMaterial,
+            drawProperties[0]);
         FrameState previous = valid ? previousSnapshot.Frame : current;
         BufferHandle keysHandle = graph.ImportBuffer(history.Keys);
         BufferHandle rootsHandle = graph.ImportBuffer(previousSnapshot.Roots);
@@ -211,9 +218,12 @@ public sealed class GrassMotionVectors : IDisposable
         if (newFrame && valid)
             RecordHashBuild(graph, history, previousSnapshot, rootsHandle, keysHandle, dispatchHandle);
 
-        for (int lod = 0; lod < 3; lod++)
+        int headPass = heads.FindPass("GrassHeadMotionVectors");
+        for (int lod = 0; lod < 3 + GrassHeadDraws.Queues; lod++)
         {
-            MaterialPropertyBlock properties = drawProperties[lod];
+            if (lod >= 3 && (headPass < 0 || !heads.Draws(lod - 3)))
+                continue;
+            MaterialPropertyBlock properties = lod < 3 ? drawProperties[lod] : heads.Properties[lod - 3];
             properties.SetInteger(Id.ExplicitTime, 1);
             properties.SetFloat(Id.Time, current.WindMotion.w);
             properties.SetInteger(Id.Valid, valid ? 1 : 0);
@@ -232,6 +242,8 @@ public sealed class GrassMotionVectors : IDisposable
             pass.Properties = drawProperties;
             pass.Arguments = arguments;
             pass.ShaderPass = shaderPass;
+            pass.Heads = heads;
+            pass.HeadPass = headPass;
             builder.UseBuffer(positionsHandle, AccessFlags.Read);
             builder.UseBuffer(argumentsHandle, AccessFlags.Read);
             builder.UseBuffer(keysHandle, AccessFlags.Read);
@@ -248,6 +260,10 @@ public sealed class GrassMotionVectors : IDisposable
                 for (int lod = 0; lod < 3; lod++)
                     context.cmd.DrawMeshInstancedIndirect(data.Meshes[lod], 0, data.Material, data.ShaderPass,
                         data.Arguments, lod * GraphicsBuffer.IndirectDrawIndexedArgs.size, data.Properties[lod]);
+                for (int queue = 0; data.HeadPass >= 0 && queue < GrassHeadDraws.Queues; queue++)
+                    if (data.Heads.Draws(queue))
+                        context.cmd.DrawMeshInstancedIndirect(data.Heads.Meshes[queue], 0, data.Heads.Material,
+                            data.HeadPass, data.Arguments, GrassHeadDraws.ArgumentOffset(queue), data.Heads.Properties[queue]);
             });
         }
 
@@ -520,9 +536,10 @@ public sealed class GrassMotionVectors : IDisposable
     private struct FrameState
     {
         public Vector4 Dimensions, Shaping, Ranges, WindST, WindMotion;
-        public Vector4 CameraPosition, CameraForward, CameraRight, Projection, Map;
+        public Vector4 CameraPosition, CameraForward, CameraRight, Projection, Map, MainLight;
 
-        public static FrameState Capture(UniversalCameraData cameraData, Material material, MaterialPropertyBlock properties)
+        public static FrameState Capture(UniversalCameraData cameraData, UniversalLightData lightData, Material material,
+            MaterialPropertyBlock properties)
         {
             Camera camera = cameraData.camera;
             Matrix4x4 view = cameraData.GetViewMatrix();
@@ -548,8 +565,21 @@ public sealed class GrassMotionVectors : IDisposable
                 CameraForward = -view.GetRow(2),
                 CameraRight = view.GetRow(0),
                 Projection = new Vector4(pixelHeight, Mathf.Abs(cameraData.GetProjectionMatrix().m11), camera.orthographic ? 1f : 0f, 0f),
-                Map = new Vector4(center.x, center.y, 1f / (2f * extent), 0f)
+                Map = new Vector4(center.x, center.y, 1f / (2f * extent), 0f),
+                MainLight = MainLightPosition(lightData)
             };
+        }
+
+        // As URP's _MainLightPosition: toward a directional main light, or (0, 0, 1, 0) without one.
+        private static Vector4 MainLightPosition(UniversalLightData lightData)
+        {
+            if (lightData == null || lightData.mainLightIndex < 0 || lightData.mainLightIndex >= lightData.visibleLights.Length)
+                return new Vector4(0f, 0f, 1f, 0f);
+            VisibleLight light = lightData.visibleLights[lightData.mainLightIndex];
+            if (light.lightType != LightType.Directional)
+                return light.localToWorldMatrix.GetColumn(3);
+            Vector4 direction = -light.localToWorldMatrix.GetColumn(2);
+            return new Vector4(direction.x, direction.y, direction.z, 0f);
         }
 
         public void Bind(MaterialPropertyBlock properties)
@@ -564,6 +594,7 @@ public sealed class GrassMotionVectors : IDisposable
             properties.SetVector(Id.PreviousCameraRight, CameraRight);
             properties.SetVector(Id.PreviousProjection, Projection);
             properties.SetVector(Id.PreviousMap, Map);
+            properties.SetVector(Id.PreviousMainLight, MainLight);
         }
     }
 
@@ -706,6 +737,8 @@ public sealed class GrassMotionVectors : IDisposable
         public MaterialPropertyBlock[] Properties;
         public GraphicsBuffer Arguments;
         public int ShaderPass;
+        public GrassHeadDraws Heads;
+        public int HeadPass;
     }
 
     private sealed class SnapshotPass

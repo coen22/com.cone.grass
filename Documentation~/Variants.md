@@ -96,11 +96,15 @@ Heads use their own queues after the three LOD ranges of the position buffer: on
 heads, each **Max Head Count** (renderer, millions, default 0.25: 4 MiB of positions) when a kind uses it and absent
 otherwise. A full queue drops heads and counts them as overflow.
 
-### Known gaps
+### Contact shadows and motion vectors (#90)
 
-- Heads have no contact-depth pass: contact shadows do not include them.
-- Heads have no motion-vector pass: with motion vectors on they carry no per-object motion, so keep TAA off, as for the
-  baseline.
+The head shader has a **GrassHeadContactDepth** and a **GrassHeadMotionVectors** pass beside its forward pass. All three
+rebuild the same head from the same vertex code (`GrassHeadCommon.hlsl`) on the same bent blade tip. The contact renderer
+draws the head queues (indirect arguments 3 and 4) into the grass contact depth after the blades, with the outline's edge
+fraction as coverage, so a flower over a stone or path casts a contact shadow like a blade does. The motion renderer
+draws them into URP's motion target after the blades: the previous head is rebuilt on the previous blade root found in
+the blade motion history (a head shares its blade's root), with the previous shape, view, wind, interaction and main
+light direction, so a swaying head carries its own motion under TAA or object motion blur.
 
 ## Data layout
 
@@ -115,5 +119,7 @@ arguments are written, with none the compute leaves the extra entries untouched.
 EditMode: `GrassVariantSelectionTests` (deterministic placement from the seed, weights, drift area, clumping keeping its
 share, cluster sizes and bare ground between them, habitat, area weights, packing and the neutral table) and
 `GrassVariantGpuGenerationTests` (the shipped kernel against the CPU twin, head queues and area weights; needs a
-compute-capable device). Cost of the heads, the extra selection work and the weight capture belongs to the #28
+compute-capable device). `GrassHeadPassTests` renders the head shader's passes natively: heads in the contact depth
+with the forward silhouette, no motion for a still head and motion with the wind for a swaying one under a static
+camera, and the GPU-synced cost of both passes for 10 000 heads at 1080p. Cost of the heads, the extra selection work and the weight capture belongs to the #28
 measurement at 1080p with the variants on and off.
