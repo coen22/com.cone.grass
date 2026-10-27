@@ -3,8 +3,9 @@
 A **Grass Variant Profile** (`Assets > Create > Cone > Grass > Variant Profile`) lets one Infinite Grass Renderer grow
 several kinds of plant: short and tall blades, broad herbs, clover and flowers with heads. Assign it to the renderer's
 **Plant Kinds > Variants**. A new profile starts as a flowering lawn: short, broad, bright blades over a darker
-undercoat, a broad herb, clover, and sparse small flowers (a soft round puff in pink, lilac, yellow and white, daisies
-and buttercups), about one per two to five square metres, whose heads sit at the grass tips round them. **Reset** on the
+undercoat, a broad herb, clover, and sparse single flowers (a soft round puff in saturated pink, lilac, yellow and
+white, daisies and buttercups), about one per one to one and a half square metres, unclumped, with heads of about 6 cm
+that sit at the lawn's tallest tips. **Reset** on the
 asset restores it. Without a profile the renderer grows its one
 material blade exactly as before: every per-kind value is stored relative to that blade, and the root layout is
 unchanged for kind zero.
@@ -58,9 +59,9 @@ with the ground colour: an area edit, a move or a capture recentre.
 
 **Height Scale**, **Width Scale** and **Curving Scale** scale the material's blade for that kind; the material's
 randomness still applies unless **Height Randomness** replaces it for the kind (below zero keeps the material's). A
-flower's head sits at the top of its stem, so its height is the stem's: the lawn preset's flowers stand at 0.56 of the
-material height with randomness 0.2, within about 10 % of the lawn's taller tips (0.62 times 0.5 to 1), never above the
-grass and never hidden under it. **Stem Width** keeps part of the blade's width to its tip: 0 is a pointed grass blade,
+flower's head sits at the top of its stem, so its height is the stem's: the lawn preset's flowers stand at the lawn's
+own 0.62 of the material height with randomness 0.1 (0.9 to 1 of it), level with the lawn's tallest tips (0.62 times 0.5
+to 1), so a standing eye sees each head over the grass round it; never above the tallest blade. **Stem Width** keeps part of the blade's width to its tip: 0 is a pointed grass blade,
 0.5 a stem the head sits on, hidden in the grass, that bends with the blade in wind and interaction.
 **Tint** multiplies the blade colour. **Instance Variation** moves each plant's colour toward **Variation Tint** by its own
 random number, **Clump Variation** by its clump's smooth noise, so neighbouring plants drift together. The root still
@@ -82,7 +83,7 @@ The quad-cross is one flat face and two crossed upright quads (12 vertices, 6 tr
 outline procedurally, so no texture is needed, and with MSAA the outline edge becomes sample coverage. A head rebuilds
 the bent blade it sits on, wind and interaction included, so it stays on its stem. Its face turns from the stem's tip
 toward the sun (a leaf less), with each head's own jitter, and **Sideways** of them nod over to face sideways. Each head's
-size varies by **Head Size Randomness** either way (±25 % in the lawn). **Bud Fraction** of the heads are closed buds (small, mostly green) and **Seed Fraction** have gone
+size varies by **Head Size Randomness** either way (±10 % in the lawn). **Bud Fraction** of the heads are closed buds (small, mostly green) and **Seed Fraction** have gone
 to seed (petals gone, a browned disc or florets). Each head picks a **Palette** colour; **Palette Clumping** gives a drift
 one colour. **Centre** colours the disc or florets.
 

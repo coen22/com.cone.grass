@@ -256,8 +256,8 @@ public sealed class GrassVariantProfile : ScriptableObject
 
     /// <summary>
     /// A flowering lawn to start from: short, broad, bright blades over a darker undercoat, a broad herb and clover, and
-    /// sparse small flowers (about one per two to five square metres) whose heads sit at the grass tips round them, in
-    /// mixed pink, lilac, yellow and white, single or in a few loose groups.
+    /// sparse single flowers (about one per one to one and a half square metres, unclumped) with heads of about 6 cm that
+    /// sit at the lawn's tallest tips, in saturated pink, lilac, yellow and white.
     /// </summary>
     public void ResetToMeadow()
     {
@@ -265,19 +265,20 @@ public sealed class GrassVariantProfile : ScriptableObject
         clumpSize = 12f;
         clusterSize = 1.5f;
         habitatSize = 40f;
-        budFraction = 0.08f;
-        seedFraction = 0.03f;
+        budFraction = 0.05f;
+        seedFraction = 0.02f;
         headDrawDistance = 50f;
         headFade = 0.4f;
         // At range the flowers fade into the lawn, leaving faint dots.
         distantTipColour = 0.35f;
-        // The lawn's tips stand at 0.62 of the material height times 0.5 to 1 (its randomness); flowers at 0.56 times
-        // 0.8 to 1 put their heads within about 10 % of the taller tips round them, never above the grass or under it.
-        const float FlowerHeight = 0.56f, FlowerRandomness = 0.2f;
+        // The lawn's tips stand at 0.62 of the material height times 0.5 to 1 (its randomness); flowers at 0.62 times
+        // 0.9 to 1 hold their heads level with the lawn's tallest tips, so a standing eye sees them over the grass round
+        // them, never above the tallest blade.
+        const float LawnHeight = 0.62f, FlowerRandomness = 0.1f, HeadRandomness = 0.1f;
         var stem = new Color(0.62f, 0.8f, 0.55f);
         kinds = new List<GrassVariantKind>
         {
-            new GrassVariantKind { name = "Lawn grass", weight = 0.62f, heightScale = 0.62f, widthScale = 1.5f,
+            new GrassVariantKind { name = "Lawn grass", weight = 0.62f, heightScale = LawnHeight, widthScale = 1.5f,
                 curvingScale = 1.2f, tint = new Color(0.95f, 1.15f, 0.75f), variationTint = new Color(1.1f, 1.1f, 0.7f),
                 instanceVariation = 0.2f, clumpVariation = 0.25f },
             new GrassVariantKind { name = "Undercoat", weight = 0.3f, heightScale = 0.35f, widthScale = 1.8f,
@@ -289,24 +290,26 @@ public sealed class GrassVariantProfile : ScriptableObject
                 tint = new Color(0.8f, 0.95f, 0.8f), head = GrassHeadShape.Clover, headSize = 0.04f,
                 palette = new[] { new Color(0.28f, 0.5f, 0.2f), new Color(0.32f, 0.55f, 0.24f) },
                 centre = new Color(0.55f, 0.7f, 0.45f) },
-            new GrassVariantKind { name = "Meadow puff", weight = 0.0013f, clumping = 0.4f, driftArea = 0.5f, clusterArea = 0.3f,
-                heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f, stemWidth = 0.5f, tint = stem,
-                head = GrassHeadShape.Puff, headSize = 0.04f, headSizeRandomness = 0.25f, paletteClumping = 0f,
+            // Flowers are unclumped singles: weight 0.0054 of the mix is about 0.84 heads per square metre at the
+            // 0.08 m spacing the Alice grass uses.
+            new GrassVariantKind { name = "Meadow puff", weight = 0.003f, clumping = 0f,
+                heightScale = LawnHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f, stemWidth = 0.5f, tint = stem,
+                head = GrassHeadShape.Puff, headSize = 0.06f, headSizeRandomness = HeadRandomness, paletteClumping = 0f,
                 palette = new[]
                 {
-                    new Color(0.95f, 0.55f, 0.75f), new Color(0.75f, 0.6f, 0.95f), new Color(1f, 0.85f, 0.25f),
-                    new Color(0.98f, 0.97f, 0.95f)
+                    new Color(1f, 0.38f, 0.68f), new Color(0.68f, 0.45f, 1f), new Color(1f, 0.84f, 0.08f),
+                    new Color(1f, 1f, 1f)
                 },
-                centre = new Color(0.9f, 0.8f, 0.85f) },
-            new GrassVariantKind { name = "Daisy", weight = 0.0005f, clumping = 0.3f, driftArea = 0.5f, clusterArea = 0.3f,
-                slope = -0.3f, heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
-                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Daisy, headSize = 0.035f, headSizeRandomness = 0.25f,
-                palette = new[] { new Color(0.97f, 0.96f, 0.92f), new Color(0.98f, 0.88f, 0.92f) },
-                centre = new Color(0.98f, 0.78f, 0.12f) },
-            new GrassVariantKind { name = "Buttercup", weight = 0.0005f, clumping = 0.3f, driftArea = 0.5f, clusterArea = 0.3f,
-                moisture = 0.4f, heightScale = FlowerHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
-                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Cup, headSize = 0.03f, headSizeRandomness = 0.25f,
-                palette = new[] { new Color(1f, 0.82f, 0.08f) }, centre = new Color(0.95f, 0.65f, 0.05f) }
+                centre = new Color(0.95f, 0.85f, 0.9f) },
+            new GrassVariantKind { name = "Daisy", weight = 0.0012f, clumping = 0f, slope = -0.3f,
+                heightScale = LawnHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
+                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Daisy, headSize = 0.062f, headSizeRandomness = HeadRandomness,
+                palette = new[] { new Color(1f, 1f, 1f), new Color(1f, 0.85f, 0.92f) },
+                centre = new Color(1f, 0.78f, 0.05f) },
+            new GrassVariantKind { name = "Buttercup", weight = 0.0012f, clumping = 0f, moisture = 0.4f,
+                heightScale = LawnHeight, heightRandomness = FlowerRandomness, widthScale = 0.18f,
+                stemWidth = 0.5f, tint = stem, head = GrassHeadShape.Cup, headSize = 0.056f, headSizeRandomness = HeadRandomness,
+                palette = new[] { new Color(1f, 0.82f, 0f) }, centre = new Color(0.95f, 0.6f, 0f) }
         };
         Sanitize();
         MarkDirty();

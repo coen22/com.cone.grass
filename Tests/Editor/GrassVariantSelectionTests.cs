@@ -228,8 +228,9 @@ public sealed class GrassVariantSelectionTests
                     flowers += data.Select[k].x;
             }
             Assert.That(total, Is.EqualTo(1f).Within(1e-5f));
-            // About one flower per two to five square metres at the 0.08 m spacing the Alice grass uses (156 roots per m²).
-            Assert.That(1f / (flowers / (0.08f * 0.08f)), Is.InRange(2f, 5f));
+            // About one flower per one to one and a half square metres at the 0.08 m spacing the Alice grass uses
+            // (156 roots per m²).
+            Assert.That(1f / (flowers / (0.08f * 0.08f)), Is.InRange(1f, 1.5f));
             GrassVariantKind lawn = profile.kinds[0];
             for (int k = 0; k < count; k++)
             {
@@ -241,7 +242,10 @@ public sealed class GrassVariantSelectionTests
                 Assert.That(data.Select[k].z, Is.LessThanOrEqualTo(1f), "A cluster never holds more than every root.");
                 if (!kind.HasHead || kind.head == GrassHeadShape.Clover)
                     continue;
-                // A flower's head sits within the lawn's taller tips: never above the tallest blade, never under the mean.
+                // Flowers grow as singles, not groups, with heads of about 6 cm that read from a standing eye.
+                Assert.That(kind.clumping, Is.LessThanOrEqualTo(0.05f), kind.name + " grows in groups.");
+                Assert.That(kind.headSize, Is.InRange(0.055f, 0.065f), kind.name + " has a head that does not read.");
+                // A flower's head sits at the lawn's tallest tips: never above the tallest blade, never under 0.7 of it.
                 float lowest = kind.heightScale * (1f - kind.heightRandomness), highest = kind.heightScale;
                 Assert.That(data.Stem[k].y, Is.EqualTo(kind.heightRandomness + 1f).Within(1e-6f));
                 Assert.That(highest, Is.LessThanOrEqualTo(lawn.heightScale), kind.name + " stands above the grass.");
