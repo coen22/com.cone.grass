@@ -32,6 +32,9 @@ Shader "Hidden/InfiniteGrass/Placement"
         int _PlacementGroundColorUsesTerrainBounds;
         int _PlacementHasGroundLayer;
         int _PlacementGroundLayerIsSampler;
+        // Per-kind weight multipliers of the area (GrassVariantProfile kinds 0-3 and 4-7).
+        float4 _PlacementVariantWeights0;
+        float4 _PlacementVariantWeights1;
         TEXTURE2D(_PlacementDensityTexture);
         TEXTURE2D(_PlacementGroundColorTexture);
         TEXTURE2D(_PlacementGroundLayerTexture);
@@ -154,6 +157,33 @@ Shader "Hidden/InfiniteGrass/Placement"
                 // Premultiplied storage keeps filtered area boundaries free of black halos.
                 // Blade shading unpremultiplies RGB before applying this alpha as blend strength.
                 return float4(albedo * alpha, alpha);
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            // Overlapping areas keep each kind's largest weight, as density keeps the largest coverage.
+            Name "PlacementVariants"
+            Blend One One
+            BlendOp Max
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex Vertex
+            #pragma fragment FragmentVariants
+            struct VariantOutput
+            {
+                float4 kinds0 : SV_Target0;
+                float4 kinds1 : SV_Target1;
+            };
+            VariantOutput FragmentVariants(Varyings input)
+            {
+                // The whole footprint the area grows on keeps its weights, including a soft edge.
+                clip(Coverage(input) > 0 ? 1 : -1);
+                VariantOutput output;
+                output.kinds0 = saturate(_PlacementVariantWeights0);
+                output.kinds1 = saturate(_PlacementVariantWeights1);
+                return output;
             }
             ENDHLSL
         }

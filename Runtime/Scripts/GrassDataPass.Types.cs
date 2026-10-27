@@ -131,12 +131,23 @@ public partial class GrassDataRendererFeature
             public bool DrawSources;
         }
 
+        private sealed class VariantCapturePass
+        {
+            public List<PlacementSource> Sources;
+            public Mesh Quad;
+            public Material Material;
+            public Matrix4x4 CaptureVP;
+            public int PassIndex;
+        }
+
         private sealed class GenerationPass
         {
             public ComputeShader Shader;
             public int ResetKernel, GenerateKernel, FinalizeKernel;
             public GraphicsBuffer Positions, Counts, Arguments;
-            public TextureHandle Height, Density, Mask;
+            public TextureHandle Height, Density, Mask, VariantWeights0, VariantWeights1;
+            public GrassVariantGpuData Variants;
+            public int[] HeadOffsets, HeadCapacities;
             public List<DispatchData> Dispatches;
             public int DispatchCount;
             public int[] LodOffsets, LodCapacities;
@@ -157,6 +168,11 @@ public partial class GrassDataRendererFeature
             public Material Material;
             public MaterialPropertyBlock[] Properties;
             public int ShaderPass, ArgumentStride;
+            // Flower heads: drawn after the blades when a profile grows any.
+            public Mesh[] HeadMeshes;
+            public Material HeadMaterial;
+            public MaterialPropertyBlock[] HeadProperties;
+            public int[] HeadCapacities;
         }
 
         private sealed class ReadbackPass

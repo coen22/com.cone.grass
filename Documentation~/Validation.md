@@ -26,7 +26,7 @@ This document separates implemented source changes from results that require a U
 | GPU timings, allocations in Unity, RenderGraph viewer, rendered comparisons | Not run |
 | Installed MicroVerse Core/Splines/Masks generation cycle | Not run |
 
-GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. The separate offline shader check downloads the official Microsoft DXC release and uses unmodified Unity Graphics headers at an exact source commit whose URP manifest declares 17.6.0. Its 106 compiler invocations cover DXIL and SPIR-V without a Unity license. This does not establish Unity ShaderLab import, C# API binding, runtime resource binding, original shader-model compatibility, or rendered correctness. See the [compiler scope and provenance](../Tools~/ShaderChecks/README.md).
+GitHub Actions supplies .NET 8 for the pinned Roslyn syntax checker. The separate offline shader check downloads the official Microsoft DXC release and uses unmodified Unity Graphics headers at an exact source commit whose URP manifest declares 17.6.0. Its 114 compiler invocations cover DXIL and SPIR-V without a Unity license. This does not establish Unity ShaderLab import, C# API binding, runtime resource binding, original shader-model compatibility, or rendered correctness. See the [compiler scope and provenance](../Tools~/ShaderChecks/README.md).
 
 The first [GitHub workflow run](https://github.com/coen22/com.cone.grass/actions/runs/37128243485) passed source checks for commit `8280ce1ab2950b86a63e97d295cf4744feaf8b33`. Its Unity job was **skipped**, because the repository had no configured Unity licensing credentials. This records a checkpoint; it does not certify subsequent commits or any Unity acceptance case below.
 

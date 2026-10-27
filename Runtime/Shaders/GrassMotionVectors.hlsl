@@ -87,9 +87,12 @@ GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : S
         float4 slope = SAMPLE_TEXTURE2D_LOD(_GrassPreviousSlope, sampler_GrassPreviousSlope, mapUV, 0);
         float2 windUV = previous.xz * shape.windST.xy + shape.windST.zw + shape.windMotion.xy * shape.windMotion.w;
         float2 wind = SAMPLE_TEXTURE2D_LOD(_GrassPreviousWind, sampler_GrassPreviousWind, windUV, 0).rg * 2.0 - 1.0;
-        float rows = floor(previous.w);
+        // The history stores 16 * kind + rows + coverage / 2.
+        float kindAndRows = floor(previous.w);
+        float previousKind = floor(kindAndRows / 16.0);
+        float rows = kindAndRows - 16.0 * previousKind;
         float previousCoverage = frac(previous.w) * 2.0;
-        GrassRootData root = BuildGrassRoot(float4(previous.xyz, previousCoverage),
+        GrassRootData root = BuildGrassRoot(float4(previous.xyz, GrassPackKind(previousCoverage, (uint)previousKind)),
             shape, GrassPreviousView(), slope, wind, mapUV);
         output.previousPivotAndRows = float4(root.pivot, rows);
         output.previousDirectionAndWidth = float4(root.slopeDirection, root.width);

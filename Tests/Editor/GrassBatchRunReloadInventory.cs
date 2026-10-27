@@ -303,5 +303,23 @@ internal static class GrassBatchRunReloadInventory
         "GrassShaderImportTests.DefaultPassesCompileOnTheActiveGraphicsApi()",
         "GrassShaderImportTests.PackageShaderImportsHaveNoReportedErrors()",
         "GrassShaderImportTests.RepresentativeBladeLightingVariantsCompile(System.String)",
+        // Plant kinds (#88): synchronous CPU selection, packing and one area component; the GPU cases dispatch
+        // the shipped kernel synchronously with no compilation or reload wait.
+        "GrassVariantGpuGenerationTests.AnAreaWeightOfZeroRemovesThatKindFromTheGpuPopulation()",
+        "GrassVariantGpuGenerationTests.HeadsBeyondTheirDrawDistanceAreNotQueued()",
+        "GrassVariantGpuGenerationTests.TheComputeGrowsTheKindsTheCpuTwinPredictsAndHeadsOnlyOnFlowers()",
+        "GrassVariantSelectionTests.AnAreaWeightOfZeroRemovesAKindAndTheOthersFillItsShare()",
+        "GrassVariantSelectionTests.AreaVariantWeightsDefaultToTheProfileMixAndClampAnOverride()",
+        "GrassVariantSelectionTests.ClumpingGathersAKindIntoDriftsWithoutChangingItsShare()",
+        "GrassVariantSelectionTests.ClustersInsideDriftsHoldAFewToAFewDozenPlantsWithBareGroundBetween()",
+        "GrassVariantSelectionTests.HabitatSortsKindsByMoistureAndSlope()",
+        "GrassVariantSelectionTests.DriftsCoverTheirAreaOfTheGroundForAnySeed(System.Single)",
+        "GrassVariantSelectionTests.HeavyClumpedKindsKeepTheirSharesWhereTheirDriftsDoNotOverlap()",
+        "GrassVariantSelectionTests.SharesSumToOneEverywhereAndNoWeightsGrowTheFirstKind()",
+        "GrassVariantSelectionTests.TheKindTravelsBesideCoverageAndKindZeroKeepsTheEarlierLayout(System.Single,System.Int32)",
+        "GrassVariantSelectionTests.TheMeadowPresetPacksItsKindsAndHeads()",
+        "GrassVariantSelectionTests.TheSameSeedPlacesTheSameKindsAndAnotherSeedMovesOnlyTheKinds()",
+        "GrassVariantSelectionTests.UnclumpedKindsGrowInProportionToTheirWeights()",
+        "GrassVariantSelectionTests.WithoutAProfileTheGpuTableIsNeutral()",
     };
 }

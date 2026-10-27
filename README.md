@@ -91,6 +91,17 @@ The MicroVerse Texture Stamp remains visible as distant blades thin out. Keep it
 
 Ground color is captured in a shared XZ projection. Vertically overlapping surfaces cannot retain different ground colors at the same XZ coordinates. Use this workflow for terrain tiles and surfaces whose ground-color footprints do not overlap vertically.
 
+## Plant kinds and flowers
+
+Assign a **Grass Variant Profile** to the renderer's **Plant Kinds > Variants** to grow several kinds per area: blades of
+different height and width, broad herbs, clover and flowers with quad-cross heads (daisy, cup, umbel, spike, puff) or a small
+mesh of your own, with a palette of colours. Each kind has a weight, optional clumping into drifts that keeps its share,
+and colour variation per plant and per clump; the seed re-deals the kinds without moving a root. Blades keep the
+terrain colour match at their roots; heads never take it. Heads shrink away toward their draw distance, after which a
+flower's blade tip carries its petal colour. Placement Areas can reweight the kinds locally (a lawn without flowers, a
+flower bank). Without a profile nothing changes. See [plant kinds](Documentation~/Variants.md) for every setting, the
+data layout and its limits.
+
 ## Projected blade stability
 
 Minimum Blade Width is measured in projected pixels, independent of world scale. With MSAA, widening keeps proportional A2C coverage. With AA disabled, a nonzero blade retains the widened opaque silhouette; it is intentionally denser than a subpixel blade rather than clipping the width compensation into holes. Compute population decisions keep their stable world seed. An opaque transition blade fades by scaling its already expanded width, height and curvature by the square root of coverage; this scales the blade silhouette instead of puncturing it into fragment cells, while perspective and row-facing geometry can change the resulting projected area. The final fade can become subpixel and zero density stays absent. Zero physical width remains invisible. The opaque color, contact and motion paths share that clipping policy, while A2C contact depth retains analytic fractional edge coverage.
@@ -248,7 +259,7 @@ These are structural reductions, **not measured frame-rate claims**. The richer 
 - Object identity uses Unity 6.6 `EntityId`; full identities are retained as cache/group keys instead of truncating them to integer hashes.
 - This is a `2.0.0-preview.2` API preview.
 - New components use **Authored Areas**. Set **Legacy Surface Layer** explicitly for previous layer-based scenes.
-- `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot.
+- `_GrassPositions.w` stores **coverage**, not camera distance. Custom blade shaders must compute distance from the world pivot. With a variant profile it stores `coverage + 2 * kind`; use `GrassUnpackCoverage` and `GrassUnpackKind` from `GrassVariants.hlsl`.
 - `ArgsBuffer` and the synchronous debug `Buffer` fields are removed. The renderer feature owns per-camera resources. Use `VisibleGrassCount` and `OverflowGrassCount` for asynchronous diagnostics.
 - `GetGrassMeshCache()` remains a near-mesh compatibility accessor; `GetLodMeshes()` returns the three shared meshes.
 - Custom capture shaders should use `_GrassCaptureVP` and put their capture `LightMode` tag and name on the actual pass. Expose sampled textures as material texture properties so the renderer can declare their RenderGraph dependencies, including renderer-wide and per-material property-block overrides. Textures supplied solely through custom globals require explicit dependency integration.
@@ -271,7 +282,7 @@ dotnet run --project Tools~/SourceChecks -- .
 
 The last command needs .NET 8 and restores a pinned Roslyn package. It parses six C# 9 configurations: Editor, Release player and Checked player branches for 6.6 and 6.7, including the optional sample. Editor and Checked configurations include Unity's diagnostic defines; Release excludes them. It does not bind Unity APIs or compile shaders.
 
-The separate shader check runs the official Microsoft DXC compiler against pinned, unmodified Unity Graphics headers. It compiles 53 entry-point/keyword configurations to each of DXIL and SPIR-V and writes binaries, diagnostics and source provenance to `artifacts/shaders`. All 106 compiler invocations passed locally. This catches HLSL compilation errors; Unity import, variant stripping, runtime bindings, target shader-model support and rendered correctness still need Editor/player validation. See the [shader compiler guide](Tools~/ShaderChecks/README.md).
+The separate shader check runs the official Microsoft DXC compiler against pinned, unmodified Unity Graphics headers. It compiles 57 entry-point/keyword configurations to each of DXIL and SPIR-V and writes binaries, diagnostics and source provenance to `artifacts/shaders`. All 114 compiler invocations passed locally. This catches HLSL compilation errors; Unity import, variant stripping, runtime bindings, target shader-model support and rendered correctness still need Editor/player validation. See the [shader compiler guide](Tools~/ShaderChecks/README.md).
 
 Create a disposable project with the package tests, optional bridge sample and native URP setup:
 
@@ -299,6 +310,7 @@ The GitHub workflow runs source and shader checks independently of licensing, th
 | [#34](https://github.com/coen22/com.cone.grass/issues/34) | Aliasing and temporal stability |
 | [#46](https://github.com/coen22/com.cone.grass/issues/46) | Collider interaction, bounded recovery and lifecycle |
 | [#50](https://github.com/coen22/com.cone.grass/issues/50) | Native Editor test import, discovery and execution |
+| [#88](https://github.com/coen22/com.cone.grass/issues/88) | Plant kinds: blades, herbs and flowers with heads |
 
 Issues stay open until their Unity acceptance checks pass. See [validation](Documentation~/Validation.md) and the [MicroVerse guide](Integrations~/MicroVerse/README.md).
 

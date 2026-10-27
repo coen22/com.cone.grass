@@ -173,6 +173,13 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
         public static readonly int PlacementHeightTexelSize = Shader.PropertyToID("_PlacementTerrainHeightmap_TexelSize");
         public static readonly int PlacementHoles = Shader.PropertyToID("_PlacementTerrainHoles");
         public static readonly int PlacementHasHoles = Shader.PropertyToID("_PlacementTerrainHasHoles");
+        public static readonly int PlacementVariantWeights0 = Shader.PropertyToID("_PlacementVariantWeights0");
+        public static readonly int PlacementVariantWeights1 = Shader.PropertyToID("_PlacementVariantWeights1");
+        public static readonly int VariantWeights0 = Shader.PropertyToID("_GrassVariantWeightsRT0");
+        public static readonly int VariantWeights1 = Shader.PropertyToID("_GrassVariantWeightsRT1");
+        public static readonly int HeadQueues = Shader.PropertyToID("_GrassHeadQueues");
+        public static readonly int HeadOffsets = Shader.PropertyToID("_GrassHeadOffsets");
+        public static readonly int HeadCapacities = Shader.PropertyToID("_GrassHeadCapacities");
         public static readonly int PlacementOriginY = Shader.PropertyToID("_PlacementTerrainOriginY");
         public static readonly int PlacementHeightRange = Shader.PropertyToID("_PlacementTerrainHeight");
     }
@@ -212,7 +219,8 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
         private readonly bool kernelsValid;
         private Material placementMaterial;
         private Mesh captureQuad;
-        private bool missingPlacementWarning;
+        private Shader headShader;
+        private bool missingPlacementWarning, missingHeadWarning;
         private bool missingHeightWarning;
         private bool missingForwardWarning;
         private bool warnedBufferLimit;
@@ -309,11 +317,16 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
             bool materialChanged = state.UpdateMaterial(owner,
                 graph.GetRenderTargetInfo(resources.activeColorTexture).msaaSamples > 1);
+            // Plant kinds: their packed table, the area weight captures that reweight them, and the head material.
+            bool variantsChanged = state.Variants.Update(owner.variants, owner.variants && owner.variants.headMesh);
+            bool mixesKinds = authored && state.Variants.KindCount > 1;
+            state.EnsureVariantWeights(mixesKinds, owner);
+            bool drawsHeads = state.UpdateHeadMaterial(EnsureHeadShader(), state.Variants.HeadQueues > 0);
 
             float spacing = Mathf.Max(0.001f, FiniteOr(owner.spacing, 0.1f));
             float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f));
             float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.textureUpdateThreshold, 10f));
-            if (ownerChanged || materialChanged || state.MotionSpacing != spacing)
+            if (ownerChanged || materialChanged || variantsChanged || state.MotionSpacing != spacing)
                 motion.ResetHistory(camera);
             state.MotionSpacing = spacing;
             Vector3 cameraPosition = camera.transform.position;
@@ -419,6 +432,12 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             }
             BuildPlacementCapture(graph, state, density, ground, captureVP, authored, groundDirty,
                 captureMappingChanged || state.HadDensitySources != (state.ActiveGroups.Count > 0));
+            // Kind weights follow the ground colour's sources and revisions.
+            if (mixesKinds && EnsurePlacementMaterial() && (groundDirty || !state.VariantWeightsCaptured))
+            {
+                BuildVariantCapture(graph, state, captureVP);
+                state.VariantWeightsCaptured = true;
+            }
             if (recaptureModifiers)
             {
                 CollectRendererDraws(state, captureBounds, false, true, authored);
@@ -463,7 +482,11 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                     state.Planes[i].normal.z, state.Planes[i].distance);
 
             BuildDispatches(graph, state, owner, cameraBounds, spacing, authored, density);
-            BuildGeneration(graph, state, owner, height, density, mask, positions, counts, arguments,
+            TextureHandle variantWeights0 = mixesKinds ? graph.ImportTexture(state.VariantWeights0) :
+                ImportTexture(graph, state, Texture2D.whiteTexture);
+            TextureHandle variantWeights1 = mixesKinds ? graph.ImportTexture(state.VariantWeights1) : variantWeights0;
+            BuildGeneration(graph, state, owner, height, density, mask, variantWeights0, variantWeights1,
+                positions, counts, arguments,
                 center, cameraPosition, spacing, distanceLimit, capturePadding, bladeRadius, authored);
             if (state.DispatchCount == 0)
             {
@@ -495,6 +518,10 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                 pass.Properties = state.DrawProperties;
                 pass.ShaderPass = forwardPass;
                 pass.ArgumentStride = argumentStride;
+                pass.HeadMaterial = drawsHeads ? state.HeadMaterial : null;
+                pass.HeadMeshes = state.HeadMeshes;
+                pass.HeadProperties = state.HeadProperties;
+                pass.HeadCapacities = state.HeadCapacities;
                 builder.UseBuffer(positions, AccessFlags.Read);
                 builder.UseBuffer(arguments, AccessFlags.Read);
                 for (int i = 0; i < state.VertexTextures.Length; i++)
@@ -512,6 +539,10 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                     for (int lod = 0; lod < 3; lod++)
                         context.cmd.DrawMeshInstancedIndirect(data.Meshes[lod], 0, data.Material,
                             data.ShaderPass, data.Arguments, lod * data.ArgumentStride, data.Properties[lod]);
+                    for (int queue = 0; data.HeadMaterial && queue < 2; queue++)
+                        if (data.HeadCapacities[queue] > 0 && data.HeadMeshes[queue])
+                            context.cmd.DrawMeshInstancedIndirect(data.HeadMeshes[queue], 0, data.HeadMaterial, 0,
+                                data.Arguments, (3 + queue) * data.ArgumentStride, data.HeadProperties[queue]);
                 });
             }
 

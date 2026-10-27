@@ -54,6 +54,21 @@ public sealed class GrassPlacementAreaEditor : Editor
             if (importer && importer.sRGBTexture)
                 EditorGUILayout.HelpBox("Density is linear data. Disable sRGB on this density texture to preserve brush strength and soft boundaries.", MessageType.Warning);
         }
+        if (area.OverridesVariantWeights)
+        {
+            // The weights follow the renderer profile's kind order; name them so the array reads as the meadow.
+            GrassVariantProfile profile = InfiniteGrassRenderer.Instance ? InfiniteGrassRenderer.Instance.variants : null;
+            if (!profile || profile.KindCount == 0)
+                EditorGUILayout.HelpBox("Variant weights apply once the Infinite Grass Renderer has a Variant Profile.", MessageType.Info);
+            else
+            {
+                var names = new System.Text.StringBuilder("Element order follows the renderer's profile:");
+                for (int k = 0; k < profile.KindCount; k++)
+                    names.Append("\n").Append(k).Append(": ").Append(profile.kinds[k] != null ? profile.kinds[k].name : "(missing)")
+                        .Append(" = ").Append(area.GetVariantWeight(k).ToString("0.##"));
+                EditorGUILayout.HelpBox(names.ToString(), MessageType.None);
+            }
+        }
         if (area.GroundColorTexture is RenderTexture groundTarget)
         {
             if (groundTarget.antiAliasing > 1 && groundTarget.bindTextureMS)

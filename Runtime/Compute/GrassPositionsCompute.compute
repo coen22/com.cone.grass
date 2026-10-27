@@ -3,6 +3,7 @@
 #pragma kernel FinalizeArgs
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+#include "../Shaders/GrassVariants.hlsl"
 
 // Keep one explicit constant-buffer layout across all kernels. Grid indices and
 // indirect-argument byte offsets must be uploaded with integer setters.
@@ -41,6 +42,15 @@ CBUFFER_START(GrassGenerationParameters)
     float4 _FrustumPlanes[6];
 CBUFFER_END
 
+// Flower heads (GrassVariantProfile): queue 0 holds quad-cross heads and queue 1 the profile's mesh heads, after the
+// three LOD ranges. Zero queues leaves the counter and argument layout exactly as without variants.
+CBUFFER_START(GrassHeadParameters)
+    int _GrassHeadQueues;
+    int3 _GrassHeadPadding;
+    int2 _GrassHeadOffsets;
+    int2 _GrassHeadCapacities;
+CBUFFER_END
+
 SamplerState linearClampSampler;
 SamplerState pointClampSampler;
 
@@ -49,6 +59,9 @@ SamplerState pointClampSampler;
 Texture2D<float2> _GrassHeightMapRT;
 Texture2D<float> _GrassDensityRT;
 Texture2D<float> _GrassMaskMapRT;
+// Per-kind weight multipliers of the Placement Areas over a root (kinds 0-3, then 4-7); white keeps the profile's mix.
+Texture2D<float4> _GrassVariantWeightsRT0;
+Texture2D<float4> _GrassVariantWeightsRT1;
 
 // A Terrain dispatch owns a half-open XZ rectangle. The heightmap must retain
 // all four channels: Unity packs height into RG on Vulkan/GLES/WebGPU.
@@ -58,7 +71,8 @@ Texture2D<float> _TerrainHoles;
 // One persistent buffer, partitioned into three non-overlapping LOD ranges.
 // xyz = world-space root, w = fractional coverage for the blade shader.
 RWStructuredBuffer<float4> _GrassPositions;
-// Attempted near/middle/far counts, then the number rejected by capacity limits.
+// Attempted near/middle/far counts, then the number rejected by capacity limits,
+// then the attempted counts of the head queues when there are any.
 RWStructuredBuffer<uint> _GrassCounts;
 // IndirectArguments exposes an R32_UINT UAV on D3D11, not a raw byte-address view.
 RWBuffer<uint> _GrassIndirectArgs;
@@ -217,17 +231,20 @@ uint GrassSelectLod(float distanceToCamera, float randomValue)
     return randomValue < toMiddle ? 1u : 0u;
 }
 
-[numthreads(4, 1, 1)]
+[numthreads(8, 1, 1)]
 void ResetCounts(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x < 4)
+    // With any head queue both head counters reset, so an unused queue never keeps a stale count.
+    if (id.x < (_GrassHeadQueues > 0 ? 6u : 4u))
         _GrassCounts[id.x] = 0;
 }
 
-bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod)
+bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out uint headQueue)
 {
     candidate = 0.0;
     lod = 0;
+    // Zero: no head; otherwise one plus the head queue.
+    headQueue = 0;
     // Dispatch dimensions are rounded up to whole groups, never whole sources.
     if (any(_GridSize <= 0) || any(id >= (uint2)_GridSize) ||
         !isfinite(_Spacing) || !isfinite(_DrawDistance) || !isfinite(_TextureUpdateThreshold) ||
@@ -293,38 +310,87 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod)
         return false;
 
     lod = GrassSelectLod(distanceToCamera, GrassRandom(seed, 0x68e31da4u));
-    candidate = float4(positionWS, coverage);
+    uint kind = 0u;
+    if (_GrassVariantKinds > 1)
+    {
+        float4 areaWeights0 = 1.0, areaWeights1 = 1.0;
+        if (_AuthoredAreas != 0)
+        {
+            areaWeights0 = _GrassVariantWeightsRT0.SampleLevel(linearClampSampler, uv, 0);
+            areaWeights1 = _GrassVariantWeightsRT1.SampleLevel(linearClampSampler, uv, 0);
+            // No area wrote weights here (filtering at a far edge): keep the profile's mix.
+            if (dot(areaWeights0, 1.0) + dot(areaWeights1, 1.0) <= 0.0)
+                areaWeights0 = areaWeights1 = 1.0;
+        }
+        // The ground's slope, only when a kind prefers flat ground or slopes: two height samples half a metre away.
+        float slope = 0.0;
+        if (_GrassVariantParams2.y > 0.5)
+        {
+            float2 step = float2(0.5, 0.5);
+            float heightX = heightWS, heightZ = heightWS;
+            if (_UseTerrain != 0)
+            {
+                if (!GrassTerrainHeight(positionXZ + float2(step.x, 0.0), heightX))
+                    heightX = heightWS;
+                if (!GrassTerrainHeight(positionXZ + float2(0.0, step.y), heightZ))
+                    heightZ = heightWS;
+            }
+            else
+            {
+                float2 uvStep = step / (2.0 * captureExtent);
+                float validity;
+                if (!GrassCapturedSurfaceHeight(uv + float2(uvStep.x, 0.0), heightX, validity))
+                    heightX = heightWS;
+                if (!GrassCapturedSurfaceHeight(uv + float2(0.0, uvStep.y), heightZ, validity))
+                    heightZ = heightWS;
+            }
+            // 0 on flat ground, 1 at a gradient of 0.7 (about 35 degrees).
+            slope = saturate(length(float2(heightX - heightWS, heightZ - heightWS) / step) / 0.7);
+        }
+        kind = GrassSelectKind(positionXZ, slope, seed, areaWeights0, areaWeights1);
+    }
+    uint head = (uint)max(_GrassKindShape[kind].w, 0.0);
+    if (head > 0u && head <= (uint)clamp(_GrassHeadQueues, 0, 2) && distanceToCamera < _GrassVariantParams.z)
+        headQueue = head;
+    candidate = float4(positionWS, GrassPackKind(coverage, kind));
     return true;
 }
 
-// Reserve one contiguous range per non-empty workgroup/LOD instead of one
+// Reserve one contiguous range per non-empty workgroup/queue instead of one
 // global atomic per blade. Rejected edge threads still reach every barrier.
-groupshared uint GrassGroupCounts[3];
-groupshared uint GrassGroupBases[3];
-groupshared uint GrassGroupAccepted[3];
+// Slots 0-2 are the LOD queues, 3-4 the head queues.
+groupshared uint GrassGroupCounts[5];
+groupshared uint GrassGroupBases[5];
+groupshared uint GrassGroupAccepted[5];
 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
 {
-    if (lane < 3)
+    if (lane < 5)
         GrassGroupCounts[lane] = 0;
     GroupMemoryBarrierWithGroupSync();
 
     float4 candidate;
     uint lod;
-    bool visible = GrassEvaluateCandidate(id.xy, candidate, lod);
+    uint headQueue;
+    bool visible = GrassEvaluateCandidate(id.xy, candidate, lod, headQueue);
     uint localSlot = 0;
+    uint headSlot = 0;
     if (visible)
         InterlockedAdd(GrassGroupCounts[lod], 1u, localSlot);
+    if (visible && headQueue > 0u)
+        InterlockedAdd(GrassGroupCounts[2u + headQueue], 1u, headSlot);
     GroupMemoryBarrierWithGroupSync();
 
-    if (lane < 3)
+    if (lane < 5)
     {
+        // Head queues count after the overflow slot, at 4 and 5.
+        bool head = lane >= 3;
         uint count = GrassGroupCounts[lane];
-        uint capacity = (uint)max(_LodCapacities[lane], 0);
+        uint capacity = head ? (uint)max(_GrassHeadCapacities[lane - 3], 0) : (uint)max(_LodCapacities[lane], 0);
         uint first = 0;
         if (count > 0)
-            InterlockedAdd(_GrassCounts[lane], count, first);
+            InterlockedAdd(_GrassCounts[head ? lane + 1 : lane], count, first);
         uint accepted = first < capacity ? min(count, capacity - first) : 0;
         GrassGroupBases[lane] = first;
         GrassGroupAccepted[lane] = accepted;
@@ -338,17 +404,26 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
         uint destination = (uint)_LodOffsets[lod] + GrassGroupBases[lod] + localSlot;
         _GrassPositions[destination] = candidate;
     }
+    // A head shares its blade's root: the head pass rebuilds the bent blade and sits on its tip.
+    uint headLane = 2u + headQueue;
+    if (visible && headQueue > 0u && headSlot < GrassGroupAccepted[headLane])
+    {
+        uint destination = (uint)_GrassHeadOffsets[headQueue - 1u] + GrassGroupBases[headLane] + headSlot;
+        _GrassPositions[destination] = candidate;
+    }
 }
 
-[numthreads(4, 1, 1)]
+[numthreads(8, 1, 1)]
 void FinalizeArgs(uint3 id : SV_DispatchThreadID)
 {
     uint lod = id.x;
-    if (lod >= 3)
+    if (lod >= (_GrassHeadQueues > 0 ? 5u : 3u))
         return;
 
-    uint capacity = (uint)max(_LodCapacities[lod], 0);
-    uint instanceCount = min(_GrassCounts[lod], capacity);
+    // Arguments 3 and 4 draw the head queues, whose counts follow the overflow slot.
+    bool head = lod >= 3u;
+    uint capacity = head ? (uint)max(_GrassHeadCapacities[lod - 3u], 0) : (uint)max(_LodCapacities[lod], 0);
+    uint instanceCount = min(_GrassCounts[head ? lod + 1u : lod], capacity);
     // The CPU initializes the other fields using IndirectDrawIndexedArgs.
     // Its platform-supplied stride and field offset avoid assuming a 20-byte ABI.
     uint byteOffset = lod * (uint)_ArgsStride + (uint)_ArgsInstanceCountOffset;

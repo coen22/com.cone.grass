@@ -25,14 +25,24 @@ public partial class GrassDataRendererFeature
             public bool Authored, DensityShortens, HasMeshSurfaceFallback, RequiresMeshHeight, SurfaceDirty, HadDensitySources;
             public double LastUsedTime;
             public RTHandle Height, HeightDepth, Density, Mask, Color, Slope, Ground;
+            // Per-kind weights of the Placement Areas (kinds 0-3 and 4-7), only while a profile mixes kinds.
+            public RTHandle VariantWeights0, VariantWeights1;
+            public bool VariantWeightsCaptured;
             public GraphicsBuffer Positions, Counts, Arguments;
-            public Material BladeMaterial;
+            public Material BladeMaterial, HeadMaterial;
             private Material sourceMaterial;
             private int allocatedCapacity;
-            private readonly Mesh[] argumentMeshes = new Mesh[3];
-            private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] argumentData = new GraphicsBuffer.IndirectDrawIndexedArgs[3];
+            // Three LOD draws, then the quad-cross and mesh head draws.
+            public const int ArgumentCount = 5;
+            private readonly Mesh[] argumentMeshes = new Mesh[ArgumentCount];
+            private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] argumentData = new GraphicsBuffer.IndirectDrawIndexedArgs[ArgumentCount];
             public readonly int[] LodOffsets = new int[4];
             public readonly int[] LodCapacities = new int[4];
+            public readonly int[] HeadOffsets = new int[2];
+            public readonly int[] HeadCapacities = new int[2];
+            public readonly GrassVariantGpuData Variants = new GrassVariantGpuData();
+            public readonly MaterialPropertyBlock[] HeadProperties = { new MaterialPropertyBlock(), new MaterialPropertyBlock() };
+            public readonly Mesh[] HeadMeshes = new Mesh[2];
             public readonly Plane[] Planes = new Plane[6];
             public readonly Vector4[] Frustum = new Vector4[6];
             public readonly MaterialPropertyBlock[] DrawProperties = { new MaterialPropertyBlock(), new MaterialPropertyBlock(), new MaterialPropertyBlock() };
@@ -101,7 +111,16 @@ public partial class GrassDataRendererFeature
                 changed |= Allocate(ref Slope, resolution, GraphicsFormat.R8G8B8A8_UNorm, "Grass Interaction");
                 changed |= Allocate(ref Ground, resolution, GraphicsFormat.R16G16B16A16_SFloat, "Grass Ground Color");
 
-                int capacity = Mathf.Max(3, owner.Capacity);
+                owner.GetLodCapacity(LodCapacities, LodOffsets);
+                int bladeCapacity = Mathf.Max(3, owner.Capacity);
+                // Head queues follow the three LOD ranges in the same buffer.
+                HeadMeshes[0] = owner.GetHeadMesh();
+                HeadMeshes[1] = owner.variants ? owner.variants.headMesh : null;
+                HeadCapacities[0] = owner.HeadQueueCapacity(0);
+                HeadCapacities[1] = HeadMeshes[1] ? owner.HeadQueueCapacity(1) : 0;
+                HeadOffsets[0] = bladeCapacity;
+                HeadOffsets[1] = bladeCapacity + HeadCapacities[0];
+                int capacity = bladeCapacity + HeadCapacities[0] + HeadCapacities[1];
                 if (Positions == null || !Positions.IsValid() || allocatedCapacity < capacity || capacity <= allocatedCapacity / 2)
                 {
                     Positions?.Dispose();
@@ -109,19 +128,19 @@ public partial class GrassDataRendererFeature
                     { name = "Grass Positions " + Camera.GetEntityId() };
                     allocatedCapacity = capacity;
                 }
-                if (Counts == null || !Counts.IsValid())
+                // Three LOD counts, overflow, then the two head counts.
+                if (Counts == null || !Counts.IsValid() || Counts.count < 6)
                 {
                     Counts?.Dispose();
-                    Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 4, sizeof(uint)) { name = "Grass Counts" };
+                    Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 6, sizeof(uint)) { name = "Grass Counts" };
                 }
                 bool uploadArguments = Arguments == null || !Arguments.IsValid();
                 if (uploadArguments)
                 {
                     Arguments?.Dispose();
                     Arguments = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments,
-                        3, argumentStride) { name = "Grass Indirect Arguments" };
+                        ArgumentCount, argumentStride) { name = "Grass Indirect Arguments" };
                 }
-                owner.GetLodCapacity(LodCapacities, LodOffsets);
                 uploadArguments |= UpdateArgumentData(meshes);
                 if (uploadArguments)
                     Arguments.SetData(argumentData);
@@ -138,27 +157,68 @@ public partial class GrassDataRendererFeature
             private bool UpdateArgumentData(Mesh[] meshes)
             {
                 bool changed = false;
-                for (int lod = 0; lod < 3; lod++)
+                for (int lod = 0; lod < ArgumentCount; lod++)
                 {
-                    var next = new GraphicsBuffer.IndirectDrawIndexedArgs
+                    Mesh mesh = lod < 3 ? meshes[lod] : HeadMeshes[lod - 3];
+                    // An absent head mesh draws nothing: its queue has no capacity.
+                    var next = mesh ? new GraphicsBuffer.IndirectDrawIndexedArgs
                     {
-                        indexCountPerInstance = meshes[lod].GetIndexCount(0),
+                        indexCountPerInstance = mesh.GetIndexCount(0),
                         instanceCount = 0,
-                        startIndex = meshes[lod].GetIndexStart(0),
-                        baseVertexIndex = meshes[lod].GetBaseVertex(0),
+                        startIndex = mesh.GetIndexStart(0),
+                        baseVertexIndex = mesh.GetBaseVertex(0),
                         startInstance = 0
-                    };
+                    } : default;
                     // Public cache accessors expose mutable Mesh instances.
                     // Topology can change while the mesh reference stays stable.
                     GraphicsBuffer.IndirectDrawIndexedArgs previous = argumentData[lod];
-                    changed |= argumentMeshes[lod] != meshes[lod] ||
+                    changed |= argumentMeshes[lod] != mesh ||
                         previous.indexCountPerInstance != next.indexCountPerInstance ||
                         previous.startIndex != next.startIndex ||
                         previous.baseVertexIndex != next.baseVertexIndex;
-                    argumentMeshes[lod] = meshes[lod];
+                    argumentMeshes[lod] = mesh;
                     argumentData[lod] = next;
                 }
                 return changed;
+            }
+
+            /// <summary>Allocates the kind-weight captures while a profile mixes kinds in authored areas; releases them otherwise.</summary>
+            public bool EnsureVariantWeights(bool needed, InfiniteGrassRenderer owner)
+            {
+                if (!needed)
+                {
+                    VariantWeights0?.Release();
+                    VariantWeights1?.Release();
+                    VariantWeights0 = VariantWeights1 = null;
+                    VariantWeightsCaptured = false;
+                    return false;
+                }
+                // Kind weights change slowly across a meadow: a quarter of the capture's resolution suffices.
+                int resolution = Mathf.Max(64, CaptureResolution(owner) / 4);
+                bool changed = Allocate(ref VariantWeights0, resolution, GraphicsFormat.R8G8B8A8_UNorm, "Grass Kind Weights 0-3");
+                changed |= Allocate(ref VariantWeights1, resolution, GraphicsFormat.R8G8B8A8_UNorm, "Grass Kind Weights 4-7");
+                if (changed)
+                    VariantWeightsCaptured = false;
+                return changed;
+            }
+
+            /// <summary>The head draws copy the blade material, so a head rebuilds exactly the blade it sits on.</summary>
+            public bool UpdateHeadMaterial(Shader headShader, bool needed)
+            {
+                if (!needed || !headShader || !BladeMaterial)
+                {
+                    CoreUtils.Destroy(HeadMaterial);
+                    HeadMaterial = null;
+                    return false;
+                }
+                if (!HeadMaterial || HeadMaterial.shader != headShader)
+                {
+                    CoreUtils.Destroy(HeadMaterial);
+                    HeadMaterial = new Material(headShader) { hideFlags = HideFlags.HideAndDontSave };
+                }
+                HeadMaterial.CopyPropertiesFromMaterial(BladeMaterial);
+                HeadMaterial.enableInstancing = true;
+                return true;
             }
 
             public bool UpdateMaterial(InfiniteGrassRenderer owner, bool multisampled)
@@ -196,13 +256,15 @@ public partial class GrassDataRendererFeature
                 // Use the scene ambient probe, packed by Core's official helper;
                 // this does not sample local LightProbes at individual grass roots.
                 SHCoefficients ambient = new SHCoefficients(RenderSettings.ambientProbe);
-                for (int lod = 0; lod < 3; lod++)
+                // The three LOD draws, then the two head draws: the same inputs at their own queue offsets.
+                for (int lod = 0; lod < 5; lod++)
                 {
-                    MaterialPropertyBlock properties = DrawProperties[lod];
+                    MaterialPropertyBlock properties = lod < 3 ? DrawProperties[lod] : HeadProperties[lod - 3];
                     properties.Clear();
                     properties.SetInteger(Id.ExplicitTime, 0);
                     properties.SetBuffer(Id.Positions, Positions);
-                    properties.SetInteger(Id.InstanceOffset, LodOffsets[lod]);
+                    properties.SetInteger(Id.InstanceOffset, lod < 3 ? LodOffsets[lod] : HeadOffsets[lod - 3]);
+                    Variants.Apply(properties);
                     properties.SetInteger(Id.MainLightCascades, mainLightCascades);
                     properties.SetVector(Id.SHAr, ambient.SHAr);
                     properties.SetVector(Id.SHAg, ambient.SHAg);
@@ -294,6 +356,8 @@ public partial class GrassDataRendererFeature
                 Color?.Release();
                 Slope?.Release();
                 Ground?.Release();
+                VariantWeights0?.Release();
+                VariantWeights1?.Release();
                 Positions?.Dispose();
                 Counts?.Dispose();
                 Arguments?.Dispose();
@@ -308,6 +372,7 @@ public partial class GrassDataRendererFeature
                 CaptureTextures.Clear();
                 InteractionDraws.Clear();
                 CoreUtils.Destroy(BladeMaterial);
+                CoreUtils.Destroy(HeadMaterial);
             }
         }
     }
