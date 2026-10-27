@@ -546,14 +546,18 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                 });
             }
 
+            // The heads' contact-depth and motion passes draw beside the blades' (#90).
+            var heads = drawsHeads
+                ? new GrassHeadDraws(state.HeadMaterial, state.HeadMeshes, state.HeadProperties, state.HeadCapacities)
+                : default;
             if (WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
                     cameraData.cameraTargetDescriptor.msaaSamples, owner.motionVectors, state.BladeMaterial))
                 motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
                     state.Counts, state.Arguments, meshes, state.BladeMaterial, state.DrawProperties,
-                    state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing);
+                    state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing, heads);
             contacts.Record(graph, frameData, positions, arguments, state.Positions,
                 state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.contactShadows,
-                state.VertexTextures);
+                state.VertexTextures, heads);
             BuildReadback(graph, state, counts, owner);
             state.PruneTextureWrappers();
         }

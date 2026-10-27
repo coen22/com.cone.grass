@@ -17,6 +17,8 @@ float4 _GrassPreviousCameraForward;
 float4 _GrassPreviousCameraRight;
 float4 _GrassPreviousProjection;
 float4 _GrassPreviousMap; // center XZ, reciprocal full extent, unused
+// The previous main light direction, as _MainLightPosition: the head motion pass turns previous heads toward it.
+float4 _GrassPreviousMainLight;
 
 TEXTURE2D(_GrassPreviousSlope);
 SAMPLER(sampler_GrassPreviousSlope);
@@ -43,6 +45,54 @@ bool FindPreviousGrassRoot(float3 pivot, out float4 previous)
     // Appending and LOD compaction may reorder every instance between frames.
     // Match the exact stable XZ coordinates; Y is allowed to move with the surface.
     return GrassFindPreviousRoot(pivot.xz, (uint)_GrassMotionHashMask, previous);
+}
+
+// The previous frame's root at this stable XZ, rebuilt with the previous shape, view, interaction and wind, as the
+// blade motion pass and the head motion pass both use it. rows is the previous LOD's row count; densityCoverage the
+// root's packed coverage.
+bool BuildPreviousGrassRoot(float3 pivot, out GrassRootData root, out float rows, out float densityCoverage)
+{
+    root = (GrassRootData)0;
+    rows = 0.0;
+    densityCoverage = 0.0;
+    float4 previous;
+    if (!FindPreviousGrassRoot(pivot, previous))
+        return false;
+    GrassShapeParameters shape;
+    shape.dimensions = _GrassPreviousDimensions;
+    shape.shaping = _GrassPreviousShaping;
+    shape.ranges = _GrassPreviousRanges;
+    shape.windST = _GrassPreviousWindST;
+    shape.windMotion = _GrassPreviousWindMotion;
+    float2 mapUV = (previous.xz - _GrassPreviousMap.xy) * _GrassPreviousMap.z + 0.5;
+    float4 slope = SAMPLE_TEXTURE2D_LOD(_GrassPreviousSlope, sampler_GrassPreviousSlope, mapUV, 0);
+    float2 windUV = previous.xz * shape.windST.xy + shape.windST.zw + shape.windMotion.xy * shape.windMotion.w;
+    float2 wind = SAMPLE_TEXTURE2D_LOD(_GrassPreviousWind, sampler_GrassPreviousWind, windUV, 0).rg * 2.0 - 1.0;
+    // The history stores 16 * kind + rows + coverage / 2.
+    float kindAndRows = floor(previous.w);
+    float previousKind = floor(kindAndRows / 16.0);
+    rows = kindAndRows - 16.0 * previousKind;
+    densityCoverage = frac(previous.w) * 2.0;
+    root = BuildGrassRoot(float4(previous.xyz, GrassPackKind(densityCoverage, (uint)previousKind)),
+        shape, GrassPreviousView(), slope, wind, mapUV);
+    return true;
+}
+
+// URP's documented non-jittered UV motion convention between two world positions. Its stock helper also checks
+// unity_MotionVectorsParams, which these indirect commands do not own.
+float4 GrassMotionVelocity(float3 currentWS, float3 previousWS)
+{
+    float4 currentCS = mul(_NonJitteredViewProjMatrix, float4(currentWS, 1.0));
+    float4 previousCS = mul(_PrevViewProjMatrix, float4(previousWS, 1.0));
+    if (_GrassMotionHistoryValid == 0)
+        return 0.0; // Newly initialized or explicitly reset temporal history.
+    if (previousCS.w <= 0.00001)
+        return float4(2.0, 2.0, 0.0, 0.0); // Previous point was behind the camera.
+    float2 velocity = (currentCS.xy / max(currentCS.w, 0.00001) - previousCS.xy / previousCS.w) * 0.5;
+    #if UNITY_UV_STARTS_AT_TOP
+        velocity.y = -velocity.y;
+    #endif
+    return float4(clamp(velocity, -2.0, 2.0), 0.0, 0.0);
 }
 
 struct GrassMotionVaryings
@@ -74,26 +124,10 @@ GrassMotionVaryings GrassMotionVertex(GrassAttributes input, uint instanceID : S
     output.coverage = current.coverage;
     output.seed = current.seed;
 
-    float4 previous;
-    if (FindPreviousGrassRoot(current.pivot, previous))
+    GrassRootData root;
+    float rows, previousCoverage;
+    if (BuildPreviousGrassRoot(current.pivot, root, rows, previousCoverage))
     {
-        GrassShapeParameters shape;
-        shape.dimensions = _GrassPreviousDimensions;
-        shape.shaping = _GrassPreviousShaping;
-        shape.ranges = _GrassPreviousRanges;
-        shape.windST = _GrassPreviousWindST;
-        shape.windMotion = _GrassPreviousWindMotion;
-        float2 mapUV = (previous.xz - _GrassPreviousMap.xy) * _GrassPreviousMap.z + 0.5;
-        float4 slope = SAMPLE_TEXTURE2D_LOD(_GrassPreviousSlope, sampler_GrassPreviousSlope, mapUV, 0);
-        float2 windUV = previous.xz * shape.windST.xy + shape.windST.zw + shape.windMotion.xy * shape.windMotion.w;
-        float2 wind = SAMPLE_TEXTURE2D_LOD(_GrassPreviousWind, sampler_GrassPreviousWind, windUV, 0).rg * 2.0 - 1.0;
-        // The history stores 16 * kind + rows + coverage / 2.
-        float kindAndRows = floor(previous.w);
-        float previousKind = floor(kindAndRows / 16.0);
-        float rows = kindAndRows - 16.0 * previousKind;
-        float previousCoverage = frac(previous.w) * 2.0;
-        GrassRootData root = BuildGrassRoot(float4(previous.xyz, GrassPackKind(previousCoverage, (uint)previousKind)),
-            shape, GrassPreviousView(), slope, wind, mapUV);
         output.previousPivotAndRows = float4(root.pivot, rows);
         output.previousDirectionAndWidth = float4(root.slopeDirection, root.width);
         output.previousWindAndHeight = float4(root.wind, root.height, root.coverage);
@@ -138,23 +172,9 @@ float4 GrassMotionFragment(GrassMotionVaryings input) : SV_Target
     // enables this pass for temporal AA/object blur; matching deterministic
     // coverage is retained for explicit custom consumers on MSAA cameras.
     GrassFragmentCoverageWithMode(input.shapeCoordinates, input.coverage, input.seed, false);
-    float4 currentCS = mul(_NonJitteredViewProjMatrix, float4(input.currentPositionWS, 1.0));
     float3 previousWS = input.previousPivotAndRows.w >= 1.0
         ? PreviousGrassSurface(input) : input.currentPositionWS;
-    float4 previousCS = mul(_PrevViewProjMatrix, float4(previousWS, 1.0));
-
-    if (_GrassMotionHistoryValid == 0)
-        return 0.0; // Newly initialized or explicitly reset temporal history.
-    if (previousCS.w <= 0.00001)
-        return float4(2.0, 2.0, 0.0, 0.0); // Previous point was behind the camera.
-
-    // URP's documented non-jittered UV motion convention. Its stock helper also
-    // checks unity_MotionVectorsParams, which this indirect command does not own.
-    float2 velocity = (currentCS.xy / max(currentCS.w, 0.00001) - previousCS.xy / previousCS.w) * 0.5;
-    #if UNITY_UV_STARTS_AT_TOP
-        velocity.y = -velocity.y;
-    #endif
-    return float4(clamp(velocity, -2.0, 2.0), 0.0, 0.0);
+    return GrassMotionVelocity(input.currentPositionWS, previousWS);
 }
 
 #endif
