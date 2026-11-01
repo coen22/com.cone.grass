@@ -87,4 +87,35 @@ Each camera that draws grass has its own captures, buffers and generation. A sec
 
 ## Measured
 
-<!-- MEASURED-NUMBERS -->
+The Meadow sample, measured in a Windows development player with its character walking the autopilot path, after 240
+warm-up frames per scene.
+
+| Setting | Value |
+|---|---|
+| Hardware | NVIDIA GeForce RTX 3090, Direct3D 12, Windows 11 |
+| Unity | 6000.6.7f1, URP 17.6 default renderer, no MSAA, SMAA |
+| Resolution | 1920 × 1080 |
+| Grass | Spacing 0.08 m (156 roots per m²), draw distance 150 m, full density to 40 m, capacity 6 million, capture 1024² |
+| Plant kinds | Meadow preset: three grasses and herbs, clover and three flowers |
+
+Two runs, about 720–900 frames per scene each:
+
+| Scene | GPU frame, median (run 1 / run 2) | GPU 95th percentile | CPU main thread | Graphics memory | Blades drawn |
+|---|---|---|---|---|---|
+| Meadow: grass and flowers | 2.01 / 2.06 ms | 2.38 / 2.11 ms | 1.25 / 0.95 ms | 368 / 370 MB | about 488,000 |
+| Grass without plant kinds | 2.19 / 2.20 ms | 2.59 / 2.30 ms | 1.20 / 1.03 ms | 368 / 370 MB | about 489,000 |
+| No grass | 0.13 / 0.14 ms | 0.14 / 0.14 ms | 0.61 / 0.62 ms | 238 / 241 MB | 0 |
+
+**Measured:** every number in the table. GPU and CPU times come from `FrameTimingManager`, graphics memory from
+`Profiler.GetAllocatedMemoryForGraphicsDriver`, and the blade count from the renderer's Preview Visible Grass Count
+(read back asynchronously, peak per scene). No blades overflowed their queues.
+
+**Derived:** the grass itself costs about **1.9 ms of GPU time**, **0.3–0.6 ms of main-thread CPU time** and
+**130 MB of graphics memory** (the meadow scene minus the scene without grass). With the meadow plant kinds the GPU frame
+was 0.14 ms *shorter* in both runs than with the material's single blade, most likely because most of the preset's
+blades are shorter (0.35 to 0.62 of the material height), so they cover fewer pixels. The flower heads added no
+measurable cost.
+
+The machine was shared with other GPU work during the runs, so treat the times as an upper bound. A development player
+also adds some CPU overhead. The memory figure is the driver's total, so it includes buffers the grass reserves but does
+not fill. The GPU position buffer alone is 16 bytes per root of capacity: 92 MB at 6 million.

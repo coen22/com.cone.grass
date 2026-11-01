@@ -18,7 +18,7 @@ GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 
 - Unity 6000.6
 - Universal Render Pipeline 17.6 with RenderGraph, Universal Renderer
-- A GPU with compute shaders, instancing and indirect draws. Intended for desktop DirectX 11, DirectX 12, Vulkan and Metal; tested on Direct3D 11 on Windows.
+- A GPU with compute shaders, instancing and indirect draws. Intended for desktop DirectX 11, DirectX 12, Vulkan and Metal; tested on Direct3D 12 on Windows.
 
 ## Install
 

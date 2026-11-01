@@ -364,8 +364,9 @@ namespace Cone.Grass.Tests
 
                     QualitySettings.globalTextureMipmapLimit = 1;
                     // Unity re-uploads imported textures when the limit changes. A
-                    // script-created texture applies the new limit on its next upload.
-                    source.Apply(false, false);
+                    // script-created texture applies the new limit on its next upload,
+                    // and only once its CPU copy is released.
+                    source.Apply(false, true);
                     Assert.That(source.activeMipmapLimit, Is.EqualTo(1),
                         "The opted-in texture must upload without its full-resolution mip.");
                     Assert.That(fixture.EnsureAllocation(source), Is.True);

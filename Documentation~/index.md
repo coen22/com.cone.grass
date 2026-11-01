@@ -25,7 +25,7 @@ You decide *where* grass grows with Placement Areas and painted density maps. Yo
 | GPU | Compute shaders, GPU instancing and indirect argument buffers |
 | Graphics APIs | Desktop DirectX 11, DirectX 12, Vulkan and Metal are the intended targets |
 
-Tested on Direct3D 11 on Windows. The other desktop APIs are expected to work because the package uses only standard compute and indirect-draw features, but they have not been tested for this release. Mobile, WebGL and consoles are not supported targets.
+Tested on Direct3D 12 on Windows (Unity 6000.6.7f1). The other desktop APIs are expected to work because the package uses only standard compute and indirect-draw features, but they have not been tested for this release. Mobile, WebGL and consoles are not supported targets.
 
 The package depends on the Terrain, Terrain Physics, Physics and IMGUI built-in modules; Package Manager enables them for you.
 
