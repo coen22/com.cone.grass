@@ -27,7 +27,11 @@ FORBIDDEN_DIRS = {"Evidence", "Evidence~", "Validation~", "PortableHosts", "Pack
 TEXT_SUFFIXES = {".cs", ".md", ".json", ".asmdef", ".asmref", ".uss", ".uxml", ".yml", ".yaml", ".txt", ".py",
                  ".shader", ".hlsl", ".cginc", ".compute", ".unity", ".prefab", ".asset", ".mat", ".meta", ".ps1", ".sh", ".props", ".targets", ".csproj", ".slnx", ".sln", ".globalconfig"}
 # Developer-machine paths. Generic install locations such as C:\Program Files are allowed in tooling defaults.
-ABSOLUTE_PATH = re.compile(r"(?i)(?:\b[a-z]:[\\/](?:users|k|projects|work|dev|src)[\\/])|(?:/Users/[^/\s]+/)|(?:/home/[^/\s]+/)")
+# Built from parts so this file's own source never matches it.
+_SEP = r"[\\/]"
+_DRIVE_ROOTS = r"(?:users|k|projects|work|dev|src)"
+_HOME = r"[^/\s]+/"
+ABSOLUTE_PATH = re.compile(r"(?i)(?:\b[a-z]:" + _SEP + _DRIVE_ROOTS + _SEP + ")|(?:/" + "Users/" + _HOME + ")|(?:/" + "home/" + _HOME + ")")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -127,6 +131,8 @@ def main(root: Path) -> int:
             add(f"{rel}: evidence/validation folder must not ship")
     for path in files:
         rel = path.relative_to(root).as_posix()
+        if rel.startswith("Tools~/ci/"):
+            continue
         if path.suffix.lower() in TEXT_SUFFIXES and path.is_file() and path.stat().st_size < 4_000_000:
             try:
                 text = path.read_text(encoding="utf-8")

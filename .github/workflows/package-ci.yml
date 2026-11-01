@@ -1,4 +1,6 @@
-# Shared Cone package CI (template: copy unchanged; package specifics go in Tools~/ci/test-project.json).
+# Shared Cone package CI (template: copy unchanged). Package specifics go in Tools~/ci/test-project.json:
+#   {"modes": ["EditMode", "PlayMode"], "dependencies": {...}, "testables": [...]}   (every key optional;
+#   modes defaults to both; an editor-only package lists ["EditMode"]) and in extra Tools~/ci/check_*.py scripts.
 # hygiene: release shape of the package (Tools~/ci/check_package.py, stdlib Python).
 # format:  dotnet format whitespace against the shared .editorconfig.
 # unity:   EditMode and PlayMode tests in a generated project that contains only this package. Runs only when the
@@ -53,13 +55,35 @@ jobs:
       - name: Whitespace and layout match .editorconfig
         run: dotnet format whitespace --folder --verify-no-changes --verbosity minimal .
 
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      modes: ${{ steps.modes.outputs.modes }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Test modes this package declares
+        id: modes
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib, sys
+          path = pathlib.Path("Tools~/ci/test-project.json")
+          modes = json.loads(path.read_text()).get("modes", ["EditMode", "PlayMode"]) if path.exists() else ["EditMode", "PlayMode"]
+          if not modes or any(m not in ("EditMode", "PlayMode") for m in modes):
+              sys.exit(f"Tools~/ci/test-project.json: modes must be a non-empty subset of EditMode, PlayMode (got {modes})")
+          print("modes=" + json.dumps(modes))
+          PY
+
   unity:
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        mode: [EditMode, PlayMode]
+        mode: ${{ fromJSON(needs.plan.outputs.modes) }}
     steps:
       - name: Licence present?
         id: licence
