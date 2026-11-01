@@ -1,8 +1,9 @@
-using UnityEngine;
 
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using System.Threading;
+using UnityEngine;
+using UnityEngine.Serialization;
 #endif
 
 namespace Cone.Grass.MicroVerse
@@ -20,60 +21,60 @@ namespace Cone.Grass.MicroVerse
 #if UNITY_EDITOR
         // Keep the producer asset reference out of the player. Runtime rendering only
         // needs the Texture2D reference serialized on the adjacent placement area.
-        [SerializeField] private ScriptableObject maskTarget;
-        [SerializeField] private Terrain terrain;
-        [SerializeField] private string textureSubAssetName;
-        [SerializeField] private TerrainLayer groundLayer;
-        [SerializeField] private Texture2D groundColorOverride;
-        [SerializeField] private bool bakeTerrainGroundColor;
-        [SerializeField, Range(64, 4096)] private int groundBakeResolution = 1024;
-        [SerializeField] private string groundBakeAssetPath;
-        [SerializeField, HideInInspector] private Texture2D bakedGroundColor;
-        [SerializeField, HideInInspector] private string groundBakeSourceKey;
-        [SerializeField, HideInInspector] private string groundBakeOutputKey;
-        [SerializeField] private Color groundTint = Color.white;
-        [SerializeField, Range(0f, 1f)] private float groundColorStrength = 1f;
-        [SerializeField] private bool autoRefresh = true;
-        [SerializeField] private bool pollWhileEditing = true;
-        [SerializeField, Range(0.25f, 10f)] private float pollInterval = 1f;
+        [SerializeField, FormerlySerializedAs("maskTarget")] private readonly ScriptableObject _maskTarget;
+        [SerializeField, FormerlySerializedAs("terrain")] private Terrain _terrain;
+        [SerializeField, FormerlySerializedAs("textureSubAssetName")] private readonly string _textureSubAssetName;
+        [SerializeField, FormerlySerializedAs("groundLayer")] private readonly TerrainLayer _groundLayer;
+        [SerializeField, FormerlySerializedAs("groundColorOverride")] private readonly Texture2D _groundColorOverride;
+        [SerializeField, FormerlySerializedAs("bakeTerrainGroundColor")] private readonly bool _bakeTerrainGroundColor;
+        [SerializeField, Range(64, 4096), FormerlySerializedAs("groundBakeResolution")] private readonly int _groundBakeResolution = 1024;
+        [SerializeField, FormerlySerializedAs("groundBakeAssetPath")] private string _groundBakeAssetPath;
+        [SerializeField, HideInInspector, FormerlySerializedAs("bakedGroundColor")] private Texture2D _bakedGroundColor;
+        [SerializeField, HideInInspector, FormerlySerializedAs("groundBakeSourceKey")] private string _groundBakeSourceKey;
+        [SerializeField, HideInInspector, FormerlySerializedAs("groundBakeOutputKey")] private string _groundBakeOutputKey;
+        [SerializeField, FormerlySerializedAs("groundTint")] private Color _groundTint = Color.white;
+        [SerializeField, Range(0f, 1f), FormerlySerializedAs("groundColorStrength")] private readonly float _groundColorStrength = 1f;
+        [SerializeField, FormerlySerializedAs("autoRefresh")] private readonly bool _autoRefresh = true;
+        [SerializeField, FormerlySerializedAs("pollWhileEditing")] private readonly bool _pollWhileEditing = true;
+        [SerializeField, Range(0.25f, 10f), FormerlySerializedAs("pollInterval")] private readonly float _pollInterval = 1f;
 
-        private static readonly HashSet<GrassMicroVerseBridge> activeBridges =
+        private static readonly HashSet<GrassMicroVerseBridge> s_activeBridges =
             new HashSet<GrassMicroVerseBridge>();
 
-        [System.NonSerialized] private int refreshRequested = 1;
-        [System.NonSerialized] private GrassPlacementArea placementArea;
+        [System.NonSerialized] private int _refreshRequested = 1;
+        [System.NonSerialized] private GrassPlacementArea _placementArea;
 
-        public static IReadOnlyCollection<GrassMicroVerseBridge> ActiveBridges => activeBridges;
-        public ScriptableObject MaskTarget => maskTarget;
-        public Terrain Terrain => terrain;
-        public string TextureSubAssetName => textureSubAssetName;
-        public TerrainLayer GroundLayer => groundLayer;
-        public Texture2D GroundColorOverride => groundColorOverride;
-        public bool BakeTerrainGroundColor => bakeTerrainGroundColor;
-        public int GroundBakeResolution => Mathf.Clamp(groundBakeResolution, 64, 4096);
-        public string GroundBakeAssetPath => groundBakeAssetPath;
-        public Texture2D BakedGroundColor => bakedGroundColor;
-        public string GroundBakeSourceKey => groundBakeSourceKey;
-        public string GroundBakeOutputKey => groundBakeOutputKey;
-        public Color GroundTint => groundTint;
-        public float GroundColorStrength => groundColorStrength;
-        public bool AutoRefresh => autoRefresh;
-        public bool PollWhileEditing => pollWhileEditing;
-        public float PollInterval => Mathf.Clamp(pollInterval, 0.25f, 10f);
-        public GrassPlacementArea PlacementArea => placementArea
-            ? placementArea
-            : placementArea = GetComponent<GrassPlacementArea>();
+        public static IReadOnlyCollection<GrassMicroVerseBridge> ActiveBridges => s_activeBridges;
+        public ScriptableObject MaskTarget => _maskTarget;
+        public Terrain Terrain => _terrain;
+        public string TextureSubAssetName => _textureSubAssetName;
+        public TerrainLayer GroundLayer => _groundLayer;
+        public Texture2D GroundColorOverride => _groundColorOverride;
+        public bool BakeTerrainGroundColor => _bakeTerrainGroundColor;
+        public int GroundBakeResolution => Mathf.Clamp(_groundBakeResolution, 64, 4096);
+        public string GroundBakeAssetPath => _groundBakeAssetPath;
+        public Texture2D BakedGroundColor => _bakedGroundColor;
+        public string GroundBakeSourceKey => _groundBakeSourceKey;
+        public string GroundBakeOutputKey => _groundBakeOutputKey;
+        public Color GroundTint => _groundTint;
+        public float GroundColorStrength => _groundColorStrength;
+        public bool AutoRefresh => _autoRefresh;
+        public bool PollWhileEditing => _pollWhileEditing;
+        public float PollInterval => Mathf.Clamp(_pollInterval, 0.25f, 10f);
+        public GrassPlacementArea PlacementArea => _placementArea
+            ? _placementArea
+            : _placementArea = GetComponent<GrassPlacementArea>();
 
         public bool LastRefreshSucceeded { get; private set; }
         public string LastRefreshMessage { get; private set; }
 
         private void Reset()
         {
-            terrain = GetComponentInParent<Terrain>();
+            _terrain = GetComponentInParent<Terrain>();
             // An unconfigured adapter must produce zero grass, including before the
             // first delayed editor refresh or while its mask is being regenerated.
-            PlacementArea.ConfigureTexture(terrain, null);
-            Interlocked.Exchange(ref refreshRequested, 1);
+            PlacementArea.ConfigureTexture(_terrain, null);
+            Interlocked.Exchange(ref _refreshRequested, 1);
         }
 
         private void OnEnable()
@@ -84,25 +85,28 @@ namespace Cone.Grass.MicroVerse
             // must not depend on isLoaded; the watcher waits until loading completes.
             if (gameObject.scene.IsValid() &&
                 !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
-                activeBridges.Add(this);
-            Interlocked.Exchange(ref refreshRequested, 1);
+            {
+                s_activeBridges.Add(this);
+            }
+
+            Interlocked.Exchange(ref _refreshRequested, 1);
         }
 
         private void OnDisable()
         {
-            activeBridges.Remove(this);
+            s_activeBridges.Remove(this);
         }
 
         private void OnValidate()
         {
             // Unity may invoke validation from a loading thread. AssetDatabase and
             // rendering calls are deferred to the editor update by this flag.
-            Interlocked.Exchange(ref refreshRequested, 1);
+            Interlocked.Exchange(ref _refreshRequested, 1);
         }
 
         public bool ConsumeRefreshRequest()
         {
-            return Interlocked.Exchange(ref refreshRequested, 0) != 0;
+            return Interlocked.Exchange(ref _refreshRequested, 0) != 0;
         }
 
         public void SetRefreshResult(bool succeeded, string message)
@@ -113,10 +117,10 @@ namespace Cone.Grass.MicroVerse
 
         public void SetBakedGroundColor(Texture2D texture, string assetPath, string sourceKey, string outputKey)
         {
-            bakedGroundColor = texture;
-            groundBakeAssetPath = assetPath;
-            groundBakeSourceKey = sourceKey;
-            groundBakeOutputKey = outputKey;
+            _bakedGroundColor = texture;
+            _groundBakeAssetPath = assetPath;
+            _groundBakeSourceKey = sourceKey;
+            _groundBakeOutputKey = outputKey;
         }
 #endif
     }

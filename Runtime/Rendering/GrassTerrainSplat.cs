@@ -10,27 +10,27 @@ namespace Cone.Grass
     internal static class GrassTerrainSplat
     {
         private const int Layers = 4;
-        private static readonly int TerrainRect = Shader.PropertyToID("_GrassSplatTerrain");
-        private static readonly int Control = Shader.PropertyToID("_GrassSplatControl");
-        private static readonly int ControlTexelSize = Shader.PropertyToID("_GrassSplatControl_TexelSize");
-        private static readonly int Tile = Shader.PropertyToID("_GrassSplatTile");
-        private static readonly int Remap = Shader.PropertyToID("_GrassSplatRemap");
-        private static readonly int LodBias = Shader.PropertyToID("_GrassSplatLodBias");
-        private static readonly int Surface = Shader.PropertyToID("_GrassSplatSurface");
-        private static readonly int[] Diffuse =
+        private static readonly int s_terrainRect = Shader.PropertyToID("_GrassSplatTerrain");
+        private static readonly int s_control = Shader.PropertyToID("_GrassSplatControl");
+        private static readonly int s_controlTexelSize = Shader.PropertyToID("_GrassSplatControl_TexelSize");
+        private static readonly int s_tile = Shader.PropertyToID("_GrassSplatTile");
+        private static readonly int s_remap = Shader.PropertyToID("_GrassSplatRemap");
+        private static readonly int s_lodBias = Shader.PropertyToID("_GrassSplatLodBias");
+        private static readonly int s_surface = Shader.PropertyToID("_GrassSplatSurface");
+        private static readonly int[] s_diffuse =
         {
             Shader.PropertyToID("_GrassSplatDiffuse0"), Shader.PropertyToID("_GrassSplatDiffuse1"),
             Shader.PropertyToID("_GrassSplatDiffuse2"), Shader.PropertyToID("_GrassSplatDiffuse3")
         };
-        private static readonly int[] Normal =
+        private static readonly int[] s_normal =
         {
             Shader.PropertyToID("_GrassSplatNormal0"), Shader.PropertyToID("_GrassSplatNormal1"),
             Shader.PropertyToID("_GrassSplatNormal2"), Shader.PropertyToID("_GrassSplatNormal3")
         };
-        private static readonly Vector4[] tiles = new Vector4[Layers];
-        private static readonly Vector4[] remaps = new Vector4[Layers];
-        private static readonly Vector4[] surfaces = new Vector4[Layers];
-        private static readonly Vector4[] lodBiases = new Vector4[Layers];
+        private static readonly Vector4[] s_tiles = new Vector4[Layers];
+        private static readonly Vector4[] s_remaps = new Vector4[Layers];
+        private static readonly Vector4[] s_surfaces = new Vector4[Layers];
+        private static readonly Vector4[] s_lodBiases = new Vector4[Layers];
 
         // The scalar vertex footprint is isotropic. Use its most detailed texture
         // axis, independently for diffuse and normal maps, including rectangular maps.
@@ -48,9 +48,9 @@ namespace Cone.Grass
             bool usable = layers != null && layers.Length > 0;
             Vector3 origin = usable ? terrain.transform.position : Vector3.zero;
             Vector3 size = usable ? data.size : Vector3.zero;
-            properties.SetVector(TerrainRect, new Vector4(origin.x, origin.z, size.x, size.z));
-            properties.SetTexture(Control, usable ? control : Texture2D.blackTexture);
-            properties.SetVector(ControlTexelSize, usable
+            properties.SetVector(s_terrainRect, new Vector4(origin.x, origin.z, size.x, size.z));
+            properties.SetTexture(s_control, usable ? control : Texture2D.blackTexture);
+            properties.SetVector(s_controlTexelSize, usable
                 ? new Vector4(1f / control.width, 1f / control.height, control.width, control.height)
                 : Vector4.one);
             for (int i = 0; i < Layers; i++)
@@ -62,23 +62,23 @@ namespace Cone.Grass
                 tileSize = new Vector2(Mathf.Max(tileSize.x, 0.0001f), Mathf.Max(tileSize.y, 0.0001f));
                 Vector2 offset = layer ? layer.tileOffset : Vector2.zero;
                 // TerrainLit's layer UV is (position - terrain origin + tile offset) / tile size.
-                tiles[i] = new Vector4(1f / tileSize.x, 1f / tileSize.y,
+                s_tiles[i] = new Vector4(1f / tileSize.x, 1f / tileSize.y,
                     (offset.x - origin.x) / tileSize.x, (offset.y - origin.z) / tileSize.y);
                 // TerrainLit scales the albedo by (remap max - remap min) without adding the minimum.
                 Vector4 scale = layer ? layer.diffuseRemapMax - layer.diffuseRemapMin : Vector4.zero;
-                remaps[i] = new Vector4(scale.x, scale.y, scale.z, layer ? layer.normalScale : 1f);
+                s_remaps[i] = new Vector4(scale.x, scale.y, scale.z, layer ? layer.normalScale : 1f);
                 // Match the actual bound textures, not the diffuse width for both maps.
-                lodBiases[i] = new Vector4(TextureLodBias(diffuse, tileSize), TextureLodBias(normal, tileSize), 0f, 0f);
+                s_lodBiases[i] = new Vector4(TextureLodBias(diffuse, tileSize), TextureLodBias(normal, tileSize), 0f, 0f);
                 // TerrainLit's smoothness constant, its source (TerrainLitPasses SplatmapMix) and metallic.
-                surfaces[i] = layer ? new Vector4(layer.smoothness, (float)layer.smoothnessSource, layer.metallic, 0f)
+                s_surfaces[i] = layer ? new Vector4(layer.smoothness, (float)layer.smoothnessSource, layer.metallic, 0f)
                     : Vector4.zero;
-                properties.SetTexture(Diffuse[i], diffuse);
-                properties.SetTexture(Normal[i], normal);
+                properties.SetTexture(s_diffuse[i], diffuse);
+                properties.SetTexture(s_normal[i], normal);
             }
-            properties.SetVectorArray(Tile, tiles);
-            properties.SetVectorArray(Remap, remaps);
-            properties.SetVectorArray(Surface, surfaces);
-            properties.SetVectorArray(LodBias, lodBiases);
+            properties.SetVectorArray(s_tile, s_tiles);
+            properties.SetVectorArray(s_remap, s_remaps);
+            properties.SetVectorArray(s_surface, s_surfaces);
+            properties.SetVectorArray(s_lodBias, s_lodBiases);
         }
     }
 }

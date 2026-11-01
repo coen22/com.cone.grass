@@ -16,9 +16,9 @@ namespace Cone.Grass.Tests
     public sealed class GrassContactRenderingTests
     {
         private const int Size = 64;
-        private static readonly Color InitialColor = new Color(0.8f, 0.6f, 0.4f, 0.37f);
+        private static readonly Color s_initialColor = new Color(0.8f, 0.6f, 0.4f, 0.37f);
         private const float ColorTolerance = 0.006f;
-        private Material material;
+        private Material _material;
 
         public enum ContactLayout
         {
@@ -39,21 +39,26 @@ namespace Cone.Grass.Tests
                 !SystemInfo.SupportsTextureFormat(TextureFormat.RGBAFloat) ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Render) ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Blend))
+            {
                 Assert.Ignore("Contact rendering tests require a graphics device, floating-point depth samples, and color blending.");
+            }
 
             Shader shader = Resources.Load<Shader>("InfiniteGrassContactShadows");
             Assert.That(shader, Is.Not.Null, "The installed contact resource shader must import successfully.");
             Assert.That(shader.isSupported, Is.True, "The contact shader must support the active graphics API.");
-            material = new Material(shader);
-            Assert.That(material.FindPass("GrassContactShadows"), Is.EqualTo(0));
-            ShaderUtil.CompilePass(material, 0, true);
-            Assert.That(ShaderUtil.IsPassCompiled(material, 0), Is.True);
+            _material = new Material(shader);
+            Assert.That(_material.FindPass("GrassContactShadows"), Is.EqualTo(0));
+            ShaderUtil.CompilePass(_material, 0, true);
+            Assert.That(ShaderUtil.IsPassCompiled(_material, 0), Is.True);
         }
 
         [TearDown]
         public void TearDown()
         {
-            if (material) Object.DestroyImmediate(material);
+            if (_material)
+            {
+                Object.DestroyImmediate(_material);
+            }
         }
 
         [TestCase(false, ContactLayout.SceneToGrass)]
@@ -68,11 +73,11 @@ namespace Cone.Grass.Tests
             // The ray starts left of a depth discontinuity and travels toward it.
             // Contact requires the other surface, so a blank/error shader cannot pass.
             Color receiver = pixels[Size / 2 * Size + 26];
-            Assert.That(receiver.r, Is.LessThan(InitialColor.r - 0.15f));
-            Assert.That(receiver.g / InitialColor.g,
-                Is.EqualTo(receiver.r / InitialColor.r).Within(ColorTolerance * 2f));
-            Assert.That(receiver.b / InitialColor.b,
-                Is.EqualTo(receiver.r / InitialColor.r).Within(ColorTolerance * 2f));
+            Assert.That(receiver.r, Is.LessThan(s_initialColor.r - 0.15f));
+            Assert.That(receiver.g / s_initialColor.g,
+                Is.EqualTo(receiver.r / s_initialColor.r).Within(ColorTolerance * 2f));
+            Assert.That(receiver.b / s_initialColor.b,
+                Is.EqualTo(receiver.r / s_initialColor.r).Within(ColorTolerance * 2f));
             AssertAlphaUnchanged(pixels);
         }
 
@@ -88,7 +93,9 @@ namespace Cone.Grass.Tests
             // Grass is absent, behind opaque geometry, or has no coverage.
             Color[] pixels = Render(orthographic, layout);
             for (int index = 0; index < pixels.Length; index++)
-                AssertColor(pixels[index], InitialColor, "Scene-only pixel " + index);
+            {
+                AssertColor(pixels[index], s_initialColor, "Scene-only pixel " + index);
+            }
         }
 
         [TestCase(false, ContactLayout.SceneToGrass)]
@@ -104,7 +111,9 @@ namespace Cone.Grass.Tests
             // Both depth textures contain the same normalized viewport geometry.
             // Their unused allocation texels must never alter ray reconstruction.
             for (int index = 0; index < reference.Length; index++)
+            {
                 AssertColor(scaled[index], reference[index], "Scaled contact pixel " + index);
+            }
         }
 
         [TestCase(ContactLayout.SceneToGrass)]
@@ -113,12 +122,12 @@ namespace Cone.Grass.Tests
         {
             Color solid = Render(false, layout)[Size / 2 * Size + 26];
             Color fractional = Render(false, layout, grassCoverage: 0.25f)[Size / 2 * Size + 26];
-            Assert.That(solid.r, Is.LessThan(InitialColor.r - 0.15f));
+            Assert.That(solid.r, Is.LessThan(s_initialColor.r - 0.15f));
             Assert.That(fractional.r, Is.GreaterThan(solid.r + 0.1f));
-            Assert.That(fractional.r, Is.LessThan(InitialColor.r - 0.03f));
-            Assert.That(InitialColor.r - fractional.r,
-                Is.EqualTo((InitialColor.r - solid.r) * 0.25f).Within(ColorTolerance));
-            Assert.That(fractional.a, Is.EqualTo(InitialColor.a).Within(ColorTolerance));
+            Assert.That(fractional.r, Is.LessThan(s_initialColor.r - 0.03f));
+            Assert.That(s_initialColor.r - fractional.r,
+                Is.EqualTo((s_initialColor.r - solid.r) * 0.25f).Within(ColorTolerance));
+            Assert.That(fractional.a, Is.EqualTo(s_initialColor.a).Within(ColorTolerance));
         }
 
         [TestCase(ContactLayout.SceneToGrass)]
@@ -127,7 +136,9 @@ namespace Cone.Grass.Tests
         {
             Color[] pixels = Render(false, layout, maximumDistance: 1f);
             for (int index = 0; index < pixels.Length; index++)
-                AssertColor(pixels[index], InitialColor, "Out-of-range pixel " + index);
+            {
+                AssertColor(pixels[index], s_initialColor, "Out-of-range pixel " + index);
+            }
         }
 
         [TestCase(false)]
@@ -135,10 +146,15 @@ namespace Cone.Grass.Tests
         public void ReceiverDepthTexelCannotCastAContactOnItself(bool orthographic)
         {
             Color[] pixels = Render(orthographic, ContactLayout.GrassOnly, lightDirection: Vector3.back);
-            AssertColor(pixels[Size / 2 * Size + Size / 2], InitialColor, "Origin grass texel");
+            AssertColor(pixels[Size / 2 * Size + Size / 2], s_initialColor, "Origin grass texel");
             if (orthographic)
+            {
                 for (int index = 0; index < pixels.Length; index++)
-                    AssertColor(pixels[index], InitialColor, "Parallel origin ray " + index);
+                {
+                    AssertColor(pixels[index], s_initialColor, "Parallel origin ray " + index);
+                }
+            }
+
             AssertAlphaUnchanged(pixels);
         }
 
@@ -153,8 +169,8 @@ namespace Cone.Grass.Tests
             // A known self grass sample must not hide the separately stored scene
             // layer at eye depth 5.08. Only the receiver contributes grass coverage.
             float attenuation = 1f - 0.6f * coverage;
-            AssertColor(receiver, new Color(InitialColor.r * attenuation, InitialColor.g * attenuation,
-                InitialColor.b * attenuation, InitialColor.a), "Scene behind grass");
+            AssertColor(receiver, new Color(s_initialColor.r * attenuation, s_initialColor.g * attenuation,
+                s_initialColor.b * attenuation, s_initialColor.a), "Scene behind grass");
             AssertAlphaUnchanged(pixels);
         }
 
@@ -164,7 +180,9 @@ namespace Cone.Grass.Tests
             Color[] pixels = Render(true, ContactLayout.SceneBehindGrass,
                 lightDirection: Vector3.back, rayLength: 0.03f);
             for (int index = 0; index < pixels.Length; index++)
-                AssertColor(pixels[index], InitialColor, "Scene beyond short origin ray " + index);
+            {
+                AssertColor(pixels[index], s_initialColor, "Scene beyond short origin ray " + index);
+            }
         }
 
         [TestCase(0.5f, 0.25f, 26)]
@@ -182,7 +200,7 @@ namespace Cone.Grass.Tests
 
             Color[] pixels = Render(true, ContactLayout.GrassOnly, grassScale: scale,
                 grassOffset: Vector2.one * offset, lightDirection: direction, rayLength: 0.09f);
-            AssertColor(pixels[Size / 2 * Size + pixelX], InitialColor, "Angled ray inside one grass texel");
+            AssertColor(pixels[Size / 2 * Size + pixelX], s_initialColor, "Angled ray inside one grass texel");
             AssertAlphaUnchanged(pixels);
         }
 
@@ -193,9 +211,11 @@ namespace Cone.Grass.Tests
             Color[] reference = Render(true, ContactLayout.GrassToGrass);
             Color[] shifted = Render(true, ContactLayout.GrassToGrass, grassScale: scale,
                 grassOffset: Vector2.one * offset);
-            Assert.That(reference[Size / 2 * Size + 26].r, Is.LessThan(InitialColor.r - 0.15f));
+            Assert.That(reference[Size / 2 * Size + 26].r, Is.LessThan(s_initialColor.r - 0.15f));
             for (int index = 0; index < reference.Length; index++)
+            {
                 AssertColor(shifted[index], reference[index], "Shifted grass contact pixel " + index);
+            }
         }
 
         private Color[] Render(bool orthographic, ContactLayout layout, float grassCoverage = 1f,
@@ -210,8 +230,13 @@ namespace Cone.Grass.Tests
                 out Matrix4x4 inverseProjection), Is.True);
             var settings = new GrassContactShadows.Settings
             {
-                enabled = true, strength = 0.6f, rayLength = rayLength, bias = 0.03f,
-                thickness = 0.15f, steps = 8, maxDistance = maximumDistance
+                Enabled = true,
+                Strength = 0.6f,
+                RayLength = rayLength,
+                Bias = 0.03f,
+                Thickness = 0.15f,
+                Steps = 8,
+                MaxDistance = maximumDistance
             };
             Assert.That(GrassContactShadows.TryGetParameters(settings, out Vector4 parameters,
                 out Vector4 limits, out _), Is.True);
@@ -229,7 +254,9 @@ namespace Cone.Grass.Tests
                 target = new RenderTexture(new RenderTextureDescriptor(Size, Size)
                 {
                     graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
-                    depthBufferBits = 0, msaaSamples = 1, sRGB = false
+                    depthBufferBits = 0,
+                    msaaSamples = 1,
+                    sRGB = false
                 });
                 Assert.That(target.Create(), Is.True);
                 readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
@@ -259,8 +286,8 @@ namespace Cone.Grass.Tests
                 commands.SetGlobalVector("_MainLightPosition", new Vector4(direction.x, direction.y, direction.z, 0f));
                 commands.SetRenderTarget(target);
                 commands.SetViewport(new Rect(0f, 0f, Size, Size));
-                commands.ClearRenderTarget(false, true, InitialColor);
-                commands.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3, 1, properties);
+                commands.ClearRenderTarget(false, true, s_initialColor);
+                commands.DrawProcedural(Matrix4x4.identity, _material, 0, MeshTopology.Triangles, 3, 1, properties);
                 commands.SetGlobalVector("_WorldSpaceCameraPos", cameraPosition);
                 commands.SetGlobalVector("_MainLightPosition", lightPosition);
                 Graphics.ExecuteCommandBuffer(commands);
@@ -274,10 +301,25 @@ namespace Cone.Grass.Tests
             {
                 RenderTexture.active = previousTarget;
                 commands.Release();
-                if (target) Object.DestroyImmediate(target);
-                if (readback) Object.DestroyImmediate(readback);
-                if (scene) Object.DestroyImmediate(scene);
-                if (grass) Object.DestroyImmediate(grass);
+                if (target)
+                {
+                    Object.DestroyImmediate(target);
+                }
+
+                if (readback)
+                {
+                    Object.DestroyImmediate(readback);
+                }
+
+                if (scene)
+                {
+                    Object.DestroyImmediate(scene);
+                }
+
+                if (grass)
+                {
+                    Object.DestroyImmediate(grass);
+                }
             }
         }
 
@@ -286,7 +328,8 @@ namespace Cone.Grass.Tests
         {
             var texture = new Texture2D(Size, Size, TextureFormat.RGBAFloat, false, true)
             {
-                filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
             };
             int viewportSize = Mathf.RoundToInt(Size * scale);
             int viewportX = Mathf.RoundToInt(Size * offset.x);
@@ -294,38 +337,58 @@ namespace Cone.Grass.Tests
             float farDepth = SystemInfo.usesReversedZBuffer ? 0f : 1f;
             var pixels = new Color[Size * Size];
             for (int y = 0; y < Size; y++)
-            for (int x = 0; x < Size; x++)
             {
-                float eyeDepth = 0f;
-                float pixelCoverage = 0f;
-                if (x >= viewportX && y >= viewportY &&
-                    x < viewportX + viewportSize && y < viewportY + viewportSize)
+                for (int x = 0; x < Size; x++)
                 {
-                    bool left = x - viewportX < viewportSize / 2;
-                    if (!grass)
-                        eyeDepth = layout == ContactLayout.GrassOnly || layout == ContactLayout.GrassToGrass ? 0f
+                    float eyeDepth = 0f;
+                    float pixelCoverage = 0f;
+                    if (x >= viewportX && y >= viewportY &&
+                        x < viewportX + viewportSize && y < viewportY + viewportSize)
+                    {
+                        bool left = x - viewportX < viewportSize / 2;
+                        if (!grass)
+                        {
+                            eyeDepth = layout == ContactLayout.GrassOnly || layout == ContactLayout.GrassToGrass ? 0f
                             : layout == ContactLayout.SceneBehindGrass ? 5.08f
                             : layout == ContactLayout.SceneToGrass
                             ? (left ? 6f : 4.92f)
                             : layout == ContactLayout.GrassToScene ? 5f : (left ? 5f : 4.92f);
-                    else if (layout == ContactLayout.GrassOnly || layout == ContactLayout.SceneBehindGrass)
-                        eyeDepth = 5f;
-                    else if (layout == ContactLayout.GrassToGrass)
-                        eyeDepth = left ? 5f : 4.92f;
-                    else if (layout == ContactLayout.SceneToGrass && left)
-                        eyeDepth = 5f;
-                    else if (!left && layout == ContactLayout.GrassToScene)
-                        eyeDepth = 4.92f;
-                    else if (!left && layout == ContactLayout.HiddenGrass)
-                        eyeDepth = 5.1f;
-                    else if (!left && layout == ContactLayout.ZeroCoverage)
-                        eyeDepth = 4.8f;
-                    if (grass && eyeDepth > 0f && layout != ContactLayout.ZeroCoverage)
-                        pixelCoverage = coverage;
+                        }
+                        else if (layout == ContactLayout.GrassOnly || layout == ContactLayout.SceneBehindGrass)
+                        {
+                            eyeDepth = 5f;
+                        }
+                        else if (layout == ContactLayout.GrassToGrass)
+                        {
+                            eyeDepth = left ? 5f : 4.92f;
+                        }
+                        else if (layout == ContactLayout.SceneToGrass && left)
+                        {
+                            eyeDepth = 5f;
+                        }
+                        else if (!left && layout == ContactLayout.GrassToScene)
+                        {
+                            eyeDepth = 4.92f;
+                        }
+                        else if (!left && layout == ContactLayout.HiddenGrass)
+                        {
+                            eyeDepth = 5.1f;
+                        }
+                        else if (!left && layout == ContactLayout.ZeroCoverage)
+                        {
+                            eyeDepth = 4.8f;
+                        }
+
+                        if (grass && eyeDepth > 0f && layout != ContactLayout.ZeroCoverage)
+                        {
+                            pixelCoverage = coverage;
+                        }
+                    }
+                    pixels[y * Size + x] = new Color(eyeDepth > 0f ? RawDepth(projection, eyeDepth) : farDepth,
+                        pixelCoverage, 0f, 0f);
                 }
-                pixels[y * Size + x] = new Color(eyeDepth > 0f ? RawDepth(projection, eyeDepth) : farDepth,
-                    pixelCoverage, 0f, 0f);
             }
+
             texture.SetPixels(pixels);
             texture.Apply(false, false);
             return texture;
@@ -344,8 +407,10 @@ namespace Cone.Grass.Tests
         private static void AssertAlphaUnchanged(Color[] pixels)
         {
             for (int index = 0; index < pixels.Length; index++)
-                Assert.That(pixels[index].a, Is.EqualTo(InitialColor.a).Within(ColorTolerance),
+            {
+                Assert.That(pixels[index].a, Is.EqualTo(s_initialColor.a).Within(ColorTolerance),
                     "The contact overlay must preserve destination alpha at pixel " + index);
+            }
         }
 
         private static void AssertColor(Color actual, Color expected, string message)

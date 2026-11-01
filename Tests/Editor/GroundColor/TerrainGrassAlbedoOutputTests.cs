@@ -1,7 +1,7 @@
-using Cone.Grass.Editor;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Cone.Grass.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -15,19 +15,27 @@ namespace Cone.Grass.Tests
     /// <summary>Output guards and source notifications can run without a graphics device.</summary>
     public sealed class TerrainGrassAlbedoOutputTests
     {
-        private readonly List<Object> owned = new List<Object>();
-        private string folder;
+        private readonly List<Object> _owned = new List<Object>();
+        private string _folder;
 
         [TearDown]
         public void TearDown()
         {
-            for (int i = owned.Count - 1; i >= 0; i--)
-                if (owned[i])
-                    Object.DestroyImmediate(owned[i]);
-            owned.Clear();
-            if (!string.IsNullOrEmpty(folder))
-                AssetDatabase.DeleteAsset(folder);
-            folder = null;
+            for (int i = _owned.Count - 1; i >= 0; i--)
+            {
+                if (_owned[i])
+                {
+                    Object.DestroyImmediate(_owned[i]);
+                }
+            }
+
+            _owned.Clear();
+            if (!string.IsNullOrEmpty(_folder))
+            {
+                AssetDatabase.DeleteAsset(_folder);
+            }
+
+            _folder = null;
         }
 
         [TestCase("diffuse")]
@@ -36,15 +44,20 @@ namespace Cone.Grass.Tests
         public void SourceTextureCaseAliasesCannotBeUsedAsTheBakeOutput(string sourceKind)
         {
             if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset))
+            {
                 Assert.Ignore("Ground-albedo output checks require a URP Editor test project.");
+            }
+
             Shader shader = Shader.Find(TerrainGrassAlbedoBaker.NativeTerrainShaderName);
             Assert.That(shader, Is.Not.Null);
             string folderName = "ConeGrassAlbedoOutputTests_" + Guid.NewGuid().ToString("N");
-            folder = "Assets/" + folderName;
+            _folder = "Assets/" + folderName;
             AssetDatabase.CreateFolder("Assets", folderName);
             TerrainData data = Own(new TerrainData
             {
-                heightmapResolution = 33, alphamapResolution = 16, size = new Vector3(16f, 8f, 16f)
+                heightmapResolution = 33,
+                alphamapResolution = 16,
+                size = new Vector3(16f, 8f, 16f)
             });
             Terrain terrain = Own(Terrain.CreateTerrainGameObject(data)).GetComponent<Terrain>();
             terrain.materialTemplate = Own(new Material(shader));
@@ -61,14 +74,19 @@ namespace Cone.Grass.Tests
             data.terrainLayers = new[] { layer };
             float[,,] weights = new float[16, 16, 1];
             for (int y = 0; y < 16; y++)
+            {
                 for (int x = 0; x < 16; x++)
+                {
                     weights[y, x, 0] = 1f;
+                }
+            }
+
             data.SetAlphamaps(0, 0, weights);
 
-            string sourcePath = folder + "/TerrainSource.asset";
-            string aliasPath = folder + "/TERRAINSOURCE.ASSET";
+            string sourcePath = _folder + "/TerrainSource.asset";
+            string aliasPath = _folder + "/TERRAINSOURCE.ASSET";
             AssetDatabase.CreateAsset(source, sourcePath);
-            owned.Remove(source);
+            _owned.Remove(source);
             AssetDatabase.SaveAssetIfDirty(source);
             Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(aliasPath), Is.SameAs(source),
                 "Unity resolves an existing asset path case-insensitively.");
@@ -114,6 +132,6 @@ namespace Cone.Grass.Tests
             }
         }
 
-        private T Own<T>(T value) where T : Object { owned.Add(value); return value; }
+        private T Own<T>(T value) where T : Object { _owned.Add(value); return value; }
     }
 }

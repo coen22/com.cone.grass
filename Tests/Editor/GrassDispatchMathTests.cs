@@ -40,16 +40,25 @@ namespace Cone.Grass.Tests
             float[] offsets = { -0.5f, -0.499f, -0.25f, 0f, 0.25f, 0.499f };
             // Evaluate world points independently of the range-construction formula.
             for (int z = -20; z <= 20; z++)
-            for (int x = -20; x <= 20; x++)
-            foreach (float dz in offsets)
-            foreach (float dx in offsets)
             {
-                double worldX = ((double)x + dx) * spacing;
-                double worldZ = ((double)z + dz) * spacing;
-                if (worldX < minX || worldX >= maxX || worldZ < minZ || worldZ >= maxZ)
-                    continue;
-                Assert.That(x, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
-                Assert.That(z, Is.GreaterThanOrEqualTo(range.MinZ).And.LessThan(range.MaxZ));
+                for (int x = -20; x <= 20; x++)
+                {
+                    foreach (float dz in offsets)
+                    {
+                        foreach (float dx in offsets)
+                        {
+                            double worldX = ((double)x + dx) * spacing;
+                            double worldZ = ((double)z + dz) * spacing;
+                            if (worldX < minX || worldX >= maxX || worldZ < minZ || worldZ >= maxZ)
+                            {
+                                continue;
+                            }
+
+                            Assert.That(x, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
+                            Assert.That(z, Is.GreaterThanOrEqualTo(range.MinZ).And.LessThan(range.MaxZ));
+                        }
+                    }
+                }
             }
         }
 
@@ -102,14 +111,14 @@ namespace Cone.Grass.Tests
         [TestCase(0.25f, 2f)]
         public void SparseTilesIncludePositiveBilinearDensityAcrossAnAuthoredBoundary(float spacing, float captureTexel)
         {
-            const int nextTileCell = 256;
-            float tileEdge = nextTileCell * spacing;
+            const int NextTileCell = 256;
+            float tileEdge = NextTileCell * spacing;
             float authoredEnd = tileEdge - 0.75f * spacing;
             Bounds source = default;
             source.SetMinMax(new Vector3(authoredEnd - 4f * captureTexel, 0f, -captureTexel),
                 new Vector3(authoredEnd, 0f, captureTexel));
             Assert.That(GrassDispatchMath.TryGetGridRange(source, spacing, out GrassGridRange unfiltered), Is.True);
-            Assert.That(unfiltered.MaxX, Is.EqualTo(nextTileCell));
+            Assert.That(unfiltered.MaxX, Is.EqualTo(NextTileCell));
             Assert.That(GrassDispatchMath.TryGetGridRange(GrassDispatchMath.ExpandXZ(source, captureTexel),
                 spacing, out GrassGridRange filtered), Is.True);
 
@@ -119,20 +128,25 @@ namespace Cone.Grass.Tests
             float occupiedCenter = tileEdge - captureTexel * 0.5f;
             float emptyCenter = tileEdge + captureTexel * 0.5f;
             int positiveRootsInNextTile = 0;
-            for (int cell = nextTileCell - 32; cell < nextTileCell + 32; cell++)
+            for (int cell = NextTileCell - 32; cell < NextTileCell + 32; cell++)
             {
                 float worldX = (cell + 0.25f) * spacing;
                 if (worldX < occupiedCenter || worldX >= emptyCenter)
+                {
                     continue;
+                }
+
                 float sampledDensity = (emptyCenter - worldX) / captureTexel;
                 Assert.That(sampledDensity, Is.GreaterThan(0f));
                 Assert.That(cell, Is.GreaterThanOrEqualTo(filtered.MinX).And.LessThan(filtered.MaxX));
-                if (cell >= nextTileCell)
+                if (cell >= NextTileCell)
+                {
                     positiveRootsInNextTile++;
+                }
             }
             Assert.That(positiveRootsInNextTile, Is.GreaterThan(0), "The regression must exercise the formerly omitted tile.");
 
-            Bounds nextTile = new Bounds(new Vector3((nextTileCell + 128f) * spacing, 0f, 0f),
+            Bounds nextTile = new Bounds(new Vector3((NextTileCell + 128f) * spacing, 0f, 0f),
                 new Vector3(257f * spacing, 0f, 257f * spacing));
             Assert.That(source.max.x, Is.LessThan(nextTile.min.x));
             Assert.That(source.max.x, Is.GreaterThanOrEqualTo(GrassDispatchMath.ExpandXZ(nextTile, captureTexel).min.x),
@@ -146,9 +160,9 @@ namespace Cone.Grass.Tests
         public void FilterExpansionRetainsSeededRootsAcrossEitherSignedAxis(
             int cellX, int cellZ, bool transpose, float expectedRoot)
         {
-            const float spacing = 0.1f;
-            const float margin = 0.050001f;
-            Vector2 root = SeededRoot(cellX, cellZ, spacing);
+            const float Spacing = 0.1f;
+            const float Margin = 0.050001f;
+            Vector2 root = SeededRoot(cellX, cellZ, Spacing);
             int boundaryCell = transpose ? cellZ : cellX;
             float boundaryRoot = transpose ? root.y : root.x;
             Assert.That(boundaryRoot, Is.EqualTo(expectedRoot));
@@ -160,22 +174,24 @@ namespace Cone.Grass.Tests
                 ? (transpose ? source.min.z : source.min.x)
                 : (transpose ? source.max.z : source.max.x);
             Assert.That(sourceEdge, Is.Zero);
-            Assert.That(Math.Abs((double)boundaryRoot - sourceEdge), Is.LessThan(margin),
+            Assert.That(Math.Abs((double)boundaryRoot - sourceEdge), Is.LessThan(Margin),
                 "This actual shader root lies inside the source's requested filter support.");
 
             Bounds former = source;
-            former.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
-            Assert.That(GrassDispatchMath.TryGetGridRange(former, spacing, out GrassGridRange omitted), Is.True);
+            former.Expand(new Vector3(Margin * 2f, 0f, Margin * 2f));
+            Assert.That(GrassDispatchMath.TryGetGridRange(former, Spacing, out GrassGridRange omitted), Is.True);
             Assert.That(boundaryCell < (transpose ? omitted.MinZ : omitted.MinX) ||
                 boundaryCell >= (transpose ? omitted.MaxZ : omitted.MaxX), Is.True,
                 "The former extent addition must reproduce the missing cell.");
             if (boundaryCell < 0)
+            {
                 Assert.That(GrassDispatchMath.FloorDivide(transpose ? omitted.MinZ : omitted.MinX, 256), Is.Zero,
                     "Rounding the minimum inward formerly skipped the complete negative tile.");
+            }
 
-            Bounds expanded = GrassDispatchMath.ExpandXZ(source, margin);
-            AssertExpandedSupport(source, expanded, margin);
-            Assert.That(GrassDispatchMath.TryGetGridRange(expanded, spacing, out GrassGridRange range), Is.True);
+            Bounds expanded = GrassDispatchMath.ExpandXZ(source, Margin);
+            AssertExpandedSupport(source, expanded, Margin);
+            Assert.That(GrassDispatchMath.TryGetGridRange(expanded, Spacing, out GrassGridRange range), Is.True);
             Assert.That(cellX, Is.GreaterThanOrEqualTo(range.MinX).And.LessThan(range.MaxX));
             Assert.That(cellZ, Is.GreaterThanOrEqualTo(range.MinZ).And.LessThan(range.MaxZ));
         }
@@ -185,12 +201,12 @@ namespace Cone.Grass.Tests
         public void CameraClippingRetainsSeededRootsInsideTheExpandedFilterEnvelope(
             int cellX, int cellZ, bool transpose, float expectedRoot)
         {
-            const float spacing = 0.1f;
-            const float captureExtent = 563.20105f;
-            const int captureResolution = 2048;
-            const float cameraExtent = 512.4873657226562f;
-            float margin = (2f * captureExtent) / captureResolution;
-            Vector2 root = SeededRoot(cellX, cellZ, spacing);
+            const float Spacing = 0.1f;
+            const float CaptureExtent = 563.20105f;
+            const int CaptureResolution = 2048;
+            const float CameraExtent = 512.4873657226562f;
+            float margin = (2f * CaptureExtent) / CaptureResolution;
+            Vector2 root = SeededRoot(cellX, cellZ, Spacing);
             float boundaryRoot = transpose ? root.y : root.x;
             Assert.That(boundaryRoot, Is.EqualTo(expectedRoot));
             Bounds source = new Bounds(transpose
@@ -198,14 +214,14 @@ namespace Cone.Grass.Tests
                 transpose ? new Vector3(2f, 6f, 1000f) : new Vector3(1000f, 6f, 2f));
             Bounds camera = new Bounds(transpose
                 ? new Vector3(root.x, 99f, 0f) : new Vector3(0f, 99f, root.y),
-                new Vector3(cameraExtent * 2f, 8f, cameraExtent * 2f));
+                new Vector3(CameraExtent * 2f, 8f, CameraExtent * 2f));
             Assert.That(boundaryRoot, Is.LessThan(margin),
                 "The root is inside the source's one-capture-texel envelope, independent of rendered density acceptance.");
             Assert.That(root.x, Is.InRange(camera.min.x, camera.max.x));
             Assert.That(root.y, Is.InRange(camera.min.z, camera.max.z));
 
             Bounds expanded = GrassDispatchMath.ExpandXZ(source, margin);
-            Assert.That(GrassDispatchMath.TryGetGridRange(expanded, spacing, out GrassGridRange beforeClipping), Is.True);
+            Assert.That(GrassDispatchMath.TryGetGridRange(expanded, Spacing, out GrassGridRange beforeClipping), Is.True);
             Assert.That(cellX, Is.GreaterThanOrEqualTo(beforeClipping.MinX).And.LessThan(beforeClipping.MaxX));
             Assert.That(cellZ, Is.GreaterThanOrEqualTo(beforeClipping.MinZ).And.LessThan(beforeClipping.MaxZ));
             Vector3 minimum = new Vector3(Mathf.Max(expanded.min.x, camera.min.x), 0f,
@@ -214,7 +230,7 @@ namespace Cone.Grass.Tests
                 Mathf.Min(expanded.max.z, camera.max.z));
             Bounds former = default;
             former.SetMinMax(minimum, maximum);
-            Assert.That(GrassDispatchMath.TryGetGridRange(former, spacing, out GrassGridRange omitted), Is.True);
+            Assert.That(GrassDispatchMath.TryGetGridRange(former, Spacing, out GrassGridRange omitted), Is.True);
             Assert.That(transpose ? omitted.MaxZ : omitted.MaxX, Is.EqualTo(6),
                 "The later native Bounds conversion must reproduce losing the cell even after outward expansion.");
 
@@ -225,7 +241,7 @@ namespace Cone.Grass.Tests
             Assert.That(intersection.max.z, Is.GreaterThanOrEqualTo(maximum.z));
             Assert.That(intersection.center.y, Is.Zero);
             Assert.That(intersection.extents.y, Is.Zero);
-            Assert.That(GrassDispatchMath.TryGetGridRange(intersection, spacing, out GrassGridRange retained), Is.True);
+            Assert.That(GrassDispatchMath.TryGetGridRange(intersection, Spacing, out GrassGridRange retained), Is.True);
             Assert.That(cellX, Is.GreaterThanOrEqualTo(retained.MinX).And.LessThan(retained.MaxX));
             Assert.That(cellZ, Is.GreaterThanOrEqualTo(retained.MinZ).And.LessThan(retained.MaxZ));
         }
@@ -289,8 +305,10 @@ namespace Cone.Grass.Tests
         public void InvalidFilterExpansionRetainsItsFormerExceptionsAndRangeRejection()
         {
             foreach (float margin in new[] { -1f, float.NaN, float.PositiveInfinity, float.MaxValue })
+            {
                 Assert.Throws<ArgumentOutOfRangeException>(() =>
                     GrassDispatchMath.ExpandXZ(new Bounds(Vector3.zero, Vector3.one), margin));
+            }
 
             Bounds inverted = new Bounds(Vector3.zero, Vector3.zero);
             inverted.extents = new Vector3(-2f, 3f, -2f);
@@ -320,32 +338,32 @@ namespace Cone.Grass.Tests
         [TestCase(-144729, false)]
         public void SparseTileBoundsRetainRootsRoundedBeyondTheFormerWorldBounds(int tile, bool minimum)
         {
-            const int cells = 256;
-            const float spacing = 0.1f;
-            const float captureFootprint = 20f / 2048f;
-            int first = tile * cells;
-            int cell = first + (minimum ? 0 : cells - 1);
+            const int Cells = 256;
+            const float Spacing = 0.1f;
+            const float CaptureFootprint = 20f / 2048f;
+            int first = tile * Cells;
+            int cell = first + (minimum ? 0 : Cells - 1);
             // At these cell magnitudes every supported jitter rounds back to the
             // same integer-to-float coordinate. This is an actual generated root.
-            float root = (float)((double)(float)cell * spacing);
-            Bounds former = new Bounds(new Vector3((tile + 0.5f) * cells * spacing, 0f, 0f),
-                new Vector3((cells + 1) * spacing, 0f, (cells + 1) * spacing));
-            former.Expand(new Vector3(captureFootprint * 2f, 0f, captureFootprint * 2f));
+            float root = (float)((double)(float)cell * Spacing);
+            Bounds former = new Bounds(new Vector3((tile + 0.5f) * Cells * Spacing, 0f, 0f),
+                new Vector3((Cells + 1) * Spacing, 0f, (Cells + 1) * Spacing));
+            former.Expand(new Vector3(CaptureFootprint * 2f, 0f, CaptureFootprint * 2f));
             Assert.That(minimum ? former.min.x > root : former.max.x < root, Is.True,
                 "The existing capture margin must still leave the root outside the former tile query.");
 
-            var range = new GrassGridRange(first, -128, cells, cells);
-            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, captureFootprint, out Bounds bounds), Is.True);
-            Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - captureFootprint));
-            Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + captureFootprint));
+            var range = new GrassGridRange(first, -128, Cells, Cells);
+            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, Spacing, CaptureFootprint, out Bounds bounds), Is.True);
+            Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - CaptureFootprint));
+            Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + CaptureFootprint));
             // Querying a source that ends/starts at this root used to reject the
             // entire tile even though grid enumeration already retained its cell.
             float sourceCenter = root + (minimum ? -0.5f : 0.5f);
             Bounds source = new Bounds(new Vector3(sourceCenter, 0f, 0f), new Vector3(1f, 0f, 1f));
             Assert.That(source.min.x <= bounds.max.x && source.max.x >= bounds.min.x, Is.True);
 
-            var transposed = new GrassGridRange(-128, first, cells, cells);
-            Assert.That(GrassDispatchMath.TryGetCandidateBounds(transposed, spacing, captureFootprint, out Bounds zBounds), Is.True);
+            var transposed = new GrassGridRange(-128, first, Cells, Cells);
+            Assert.That(GrassDispatchMath.TryGetCandidateBounds(transposed, Spacing, CaptureFootprint, out Bounds zBounds), Is.True);
             Assert.That(zBounds.min.z, Is.EqualTo(bounds.min.x));
             Assert.That(zBounds.max.z, Is.EqualTo(bounds.max.x));
         }
@@ -363,13 +381,13 @@ namespace Cone.Grass.Tests
         [TestCase(-1073741311)]
         public void CandidateBoundsKeepSubUlpMarginsAroundCollapsedRootCoordinates(int cell)
         {
-            const float spacing = 0.125f;
-            const float margin = 0.01f;
+            const float Spacing = 0.125f;
+            const float Margin = 0.01f;
             var range = new GrassGridRange(cell, cell, 1, 1);
-            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, margin, out Bounds bounds), Is.True);
-            float root = (float)((double)(float)cell * spacing);
-            Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - margin));
-            Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + margin));
+            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, Spacing, Margin, out Bounds bounds), Is.True);
+            float root = (float)((double)(float)cell * Spacing);
+            Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo((double)root - Margin));
+            Assert.That((double)bounds.max.x, Is.GreaterThanOrEqualTo((double)root + Margin));
             Assert.That(bounds.min.z, Is.EqualTo(bounds.min.x));
             Assert.That(bounds.max.z, Is.EqualTo(bounds.max.x));
         }
@@ -377,11 +395,11 @@ namespace Cone.Grass.Tests
         [Test]
         public void CandidateBoundsRetainTinyEndpointAcrossALargeRange()
         {
-            const float spacing = 0.1f;
+            const float Spacing = 0.1f;
             float margin = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(0.05f) + 1);
             var range = new GrassGridRange(1, 0, 1073741000, 1);
-            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, spacing, margin, out Bounds bounds), Is.True);
-            double minimum = (double)(0.5f * spacing) - margin;
+            Assert.That(GrassDispatchMath.TryGetCandidateBounds(range, Spacing, margin, out Bounds bounds), Is.True);
+            double minimum = (double)(0.5f * Spacing) - margin;
             Assert.That(minimum, Is.LessThan(0.0));
             Assert.That((double)bounds.min.x, Is.LessThanOrEqualTo(minimum),
                 "Center/extents cancellation must not collapse the tiny negative endpoint to zero.");
@@ -417,10 +435,10 @@ namespace Cone.Grass.Tests
         [Test]
         public void BudgetAcceptsExactLimitAndRejectsOneAdditionalCellWithoutChangingIt()
         {
-            const long limit = GrassDispatchMath.MaximumCandidates;
-            Assert.That(GrassDispatchMath.TryAddCandidateBudget(0, 8192, 8192, limit, out long used), Is.True);
-            Assert.That(used, Is.EqualTo(limit));
-            Assert.That(GrassDispatchMath.TryAddCandidateBudget(used, 1, 1, limit, out long unchanged), Is.False);
+            const long Limit = GrassDispatchMath.MaximumCandidates;
+            Assert.That(GrassDispatchMath.TryAddCandidateBudget(0, 8192, 8192, Limit, out long used), Is.True);
+            Assert.That(used, Is.EqualTo(Limit));
+            Assert.That(GrassDispatchMath.TryAddCandidateBudget(used, 1, 1, Limit, out long unchanged), Is.False);
             Assert.That(unchanged, Is.EqualTo(used));
         }
 
@@ -438,16 +456,19 @@ namespace Cone.Grass.Tests
                 "The regression must exercise a window the former estimate rejected.");
             long candidates = 0;
             for (int tileZ = firstTileZ; tileZ <= lastTileZ; tileZ++)
-            for (int tileX = firstTileX; tileX <= lastTileX; tileX++)
             {
-                Assert.That(GrassDispatchMath.TryClipTile(cameraGrid, tileX, tileZ, 256, out GrassGridRange clipped), Is.True);
-                Assert.That(clipped.MinX, Is.GreaterThanOrEqualTo(cameraGrid.MinX));
-                Assert.That(clipped.MinZ, Is.GreaterThanOrEqualTo(cameraGrid.MinZ));
-                Assert.That(clipped.MaxX, Is.LessThanOrEqualTo(cameraGrid.MaxX));
-                Assert.That(clipped.MaxZ, Is.LessThanOrEqualTo(cameraGrid.MaxZ));
-                Assert.That(GrassDispatchMath.TryAddCandidateBudget(candidates, clipped.Width, clipped.Height,
-                    GrassDispatchMath.MaximumCandidates, out candidates), Is.True);
+                for (int tileX = firstTileX; tileX <= lastTileX; tileX++)
+                {
+                    Assert.That(GrassDispatchMath.TryClipTile(cameraGrid, tileX, tileZ, 256, out GrassGridRange clipped), Is.True);
+                    Assert.That(clipped.MinX, Is.GreaterThanOrEqualTo(cameraGrid.MinX));
+                    Assert.That(clipped.MinZ, Is.GreaterThanOrEqualTo(cameraGrid.MinZ));
+                    Assert.That(clipped.MaxX, Is.LessThanOrEqualTo(cameraGrid.MaxX));
+                    Assert.That(clipped.MaxZ, Is.LessThanOrEqualTo(cameraGrid.MaxZ));
+                    Assert.That(GrassDispatchMath.TryAddCandidateBudget(candidates, clipped.Width, clipped.Height,
+                        GrassDispatchMath.MaximumCandidates, out candidates), Is.True);
+                }
             }
+
             Assert.That(candidates, Is.EqualTo(300000L * height));
         }
 

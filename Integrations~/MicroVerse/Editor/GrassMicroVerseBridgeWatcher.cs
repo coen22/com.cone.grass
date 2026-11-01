@@ -1,5 +1,5 @@
-using Cone.Grass.Editor;
 using System.Collections.Generic;
+using Cone.Grass.Editor;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -16,14 +16,14 @@ namespace Cone.Grass.MicroVerse
     {
         private const double DebounceSeconds = 0.35;
         private const double CacheCleanupIntervalSeconds = 1d;
-        private static readonly Dictionary<GrassMicroVerseBridge, double> nextPoll =
+        private static readonly Dictionary<GrassMicroVerseBridge, double> s_nextPoll =
             new Dictionary<GrassMicroVerseBridge, double>();
-        private static readonly List<GrassMicroVerseBridge> staleEntries =
+        private static readonly List<GrassMicroVerseBridge> s_staleEntries =
             new List<GrassMicroVerseBridge>();
-        private static readonly List<GrassMicroVerseBridge> activeSnapshot =
+        private static readonly List<GrassMicroVerseBridge> s_activeSnapshot =
             new List<GrassMicroVerseBridge>();
-        private static double refreshAfter = -1;
-        private static double nextCacheCleanup;
+        private static double s_refreshAfter = -1;
+        private static double s_nextCacheCleanup;
 
         static GrassMicroVerseBridgeWatcher()
         {
@@ -40,7 +40,7 @@ namespace Cone.Grass.MicroVerse
 
         public static void QueueRefresh()
         {
-            refreshAfter = EditorApplication.timeSinceStartup + DebounceSeconds;
+            s_refreshAfter = EditorApplication.timeSinceStartup + DebounceSeconds;
         }
 
         private static void SceneOpened(Scene scene, OpenSceneMode mode) => QueueRefresh();
@@ -52,23 +52,33 @@ namespace Cone.Grass.MicroVerse
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer ||
                 EditorSceneManager.IsPreviewScene(scene))
+            {
                 return;
+            }
 
             // Resolve before serialization, so saved runtime references agree with
             // cached and clean builds. Never invoke MicroVerse generation here.
             foreach (GameObject root in scene.GetRootGameObjects())
             {
                 if (!root)
+                {
                     continue;
+                }
+
                 foreach (GrassMicroVerseBridge bridge in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
                 {
                     // An earlier Baked callback may delete a later root/component
                     // from these snapshots, or the bridge currently refreshing.
                     if (!bridge || !bridge.enabled)
+                    {
                         continue;
+                    }
+
                     bool resolved = GrassMicroVerseBridgeUtility.Refresh(bridge);
                     if (bridge && !resolved)
+                    {
                         Debug.LogWarning("Unresolved grass output while saving: " + bridge.LastRefreshMessage, bridge);
+                    }
                 }
             }
         }
@@ -77,59 +87,72 @@ namespace Cone.Grass.MicroVerse
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling ||
                 EditorApplication.isUpdating || BuildPipeline.isBuildingPlayer)
+            {
                 return;
+            }
 
             double now = EditorApplication.timeSinceStartup;
-            if (now >= nextCacheCleanup)
+            if (now >= s_nextCacheCleanup)
             {
                 // Manual refresh with Auto Refresh disabled never enters nextPoll.
                 // Clean all observations so closing those scenes does not retain
                 // their bridge objects and generated texture metadata indefinitely.
                 GrassMicroVerseBridgeUtility.PruneInactiveCaches();
-                nextCacheCleanup = now + CacheCleanupIntervalSeconds;
+                s_nextCacheCleanup = now + CacheCleanupIntervalSeconds;
             }
-            if (refreshAfter >= 0 && now < refreshAfter)
+            if (s_refreshAfter >= 0 && now < s_refreshAfter)
+            {
                 return;
+            }
 
-            bool refreshAll = refreshAfter >= 0;
-            refreshAfter = -1;
+            bool refreshAll = s_refreshAfter >= 0;
+            s_refreshAfter = -1;
             bool refreshed = false;
 
-            activeSnapshot.Clear();
-            activeSnapshot.AddRange(GrassMicroVerseBridge.ActiveBridges);
-            foreach (GrassMicroVerseBridge bridge in activeSnapshot)
+            s_activeSnapshot.Clear();
+            s_activeSnapshot.AddRange(GrassMicroVerseBridge.ActiveBridges);
+            foreach (GrassMicroVerseBridge bridge in s_activeSnapshot)
             {
                 if (!bridge || !bridge.AutoRefresh || !bridge.gameObject.scene.isLoaded ||
                     EditorSceneManager.IsPreviewScene(bridge.gameObject.scene))
+                {
                     continue;
+                }
 
                 bool changed = bridge.ConsumeRefreshRequest();
                 bool poll = bridge.PollWhileEditing &&
-                    (!nextPoll.TryGetValue(bridge, out double due) || now >= due);
+                    (!s_nextPoll.TryGetValue(bridge, out double due) || now >= due);
                 if (!changed && !refreshAll && !poll)
+                {
                     continue;
+                }
 
                 uint previousRevision = bridge.PlacementArea.SourceRevision;
                 string previousMessage = bridge.LastRefreshMessage;
                 bool previousSuccess = bridge.LastRefreshSucceeded;
                 GrassMicroVerseBridgeUtility.Refresh(bridge, false, true, false);
                 if (!bridge || !bridge.PlacementArea)
+                {
                     continue;
-                nextPoll[bridge] = now + bridge.PollInterval;
+                }
+
+                s_nextPoll[bridge] = now + bridge.PollInterval;
                 refreshed |= previousRevision != bridge.PlacementArea.SourceRevision ||
                     previousMessage != bridge.LastRefreshMessage || previousSuccess != bridge.LastRefreshSucceeded;
             }
 
-            staleEntries.Clear();
-            foreach (GrassMicroVerseBridge bridge in nextPoll.Keys)
+            s_staleEntries.Clear();
+            foreach (GrassMicroVerseBridge bridge in s_nextPoll.Keys)
             {
                 if (!bridge || !bridge.isActiveAndEnabled)
-                    staleEntries.Add(bridge);
+                {
+                    s_staleEntries.Add(bridge);
+                }
             }
 
-            foreach (GrassMicroVerseBridge bridge in staleEntries)
+            foreach (GrassMicroVerseBridge bridge in s_staleEntries)
             {
-                nextPoll.Remove(bridge);
+                s_nextPoll.Remove(bridge);
                 GrassMicroVerseBridgeUtility.Forget(bridge);
             }
 
@@ -158,7 +181,9 @@ namespace Cone.Grass.MicroVerse
         private static void Invalidate(string[] paths)
         {
             foreach (string path in paths)
+            {
                 GrassMicroVerseBridgeUtility.InvalidateAssetPath(path);
+            }
         }
     }
 
@@ -169,7 +194,10 @@ namespace Cone.Grass.MicroVerse
             // ScriptableObject subasset creation can be saved without an import or
             // projectChanged notification. Re-discover only when this path is used.
             foreach (string path in paths)
+            {
                 GrassMicroVerseBridgeUtility.InvalidateAssetPath(path);
+            }
+
             GrassMicroVerseBridgeWatcher.QueueRefresh();
             return paths;
         }

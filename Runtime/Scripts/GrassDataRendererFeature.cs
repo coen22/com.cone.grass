@@ -6,6 +6,7 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass
 {
@@ -13,11 +14,11 @@ namespace Cone.Grass
     public partial class GrassDataRendererFeature : ScriptableRendererFeature
     {
         // Keep these serialized names so existing renderer assets retain their references.
-        [SerializeField] private LayerMask heightMapLayer;
-        [SerializeField] private Material heightMapMat;
-        [SerializeField] private ComputeShader computeShader;
+        [SerializeField, FormerlySerializedAs("heightMapLayer")] private LayerMask _heightMapLayer;
+        [SerializeField, FormerlySerializedAs("heightMapMat")] private Material _heightMapMat;
+        [SerializeField, FormerlySerializedAs("computeShader")] private ComputeShader _computeShader;
 
-        private GrassDataPass grassPass;
+        private GrassDataPass _grassPass;
 
         /// <summary>
         /// Creates the grass pass, assigning the package's compute shader and height material in the editor when they
@@ -28,8 +29,8 @@ namespace Cone.Grass
 #if UNITY_EDITOR
             AssignPackageDefaults();
 #endif
-            grassPass?.Dispose();
-            grassPass = new GrassDataPass(heightMapLayer, heightMapMat, computeShader)
+            _grassPass?.Dispose();
+            _grassPass = new GrassDataPass(_heightMapLayer, _heightMapMat, _computeShader)
             {
                 // Opaque depth and lighting are available; grass still precedes transparents.
                 renderPassEvent = RenderPassEvent.BeforeRenderingTransparents
@@ -43,12 +44,17 @@ namespace Cone.Grass
         // material, so it works without further setup.
         private void AssignPackageDefaults()
         {
-            if (!computeShader)
-                computeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(
+            if (!_computeShader)
+            {
+                _computeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(
                     UnityEditor.AssetDatabase.GUIDToAssetPath("6faaeebb3c9e1434a9a262ec25b9c479"));
-            if (!heightMapMat)
-                heightMapMat = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
+            }
+
+            if (!_heightMapMat)
+            {
+                _heightMapMat = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
                     UnityEditor.AssetDatabase.GUIDToAssetPath("95d63adac2015d142aac17b9b535fd20"));
+            }
         }
 #endif
 
@@ -57,9 +63,13 @@ namespace Cone.Grass
             // URP skips AddRenderPasses on inactive features and renderers unused by
             // the current cameras. Their GPU caches still need a cleanup path.
             if (!isActive)
-                grassPass?.ReleaseCameras();
+            {
+                _grassPass?.ReleaseCameras();
+            }
             else
-                grassPass?.PruneCameras();
+            {
+                _grassPass?.PruneCameras();
+            }
         }
 
         /// <summary>
@@ -70,40 +80,44 @@ namespace Cone.Grass
         /// <param name="renderingData">The camera's rendering data.</param>
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
-            grassPass?.PruneCameras();
+            _grassPass?.PruneCameras();
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
             // Without blades only the interaction capture runs: it needs no blade material, compute or indirect draws.
-            bool blades = owner && owner.drawBlades;
-            if (!owner || !owner.IsReadyForRendering || blades && (!owner.grassMaterial || !computeShader ||
+            bool blades = owner && owner.DrawBlades;
+            if (!owner || !owner.IsReadyForRendering || blades && (!owner.GrassMaterial || !_computeShader ||
                 !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer))
             {
-                grassPass?.ReleaseCameras();
+                _grassPass?.ReleaseCameras();
                 GrassInteractionPublisher.Withdraw();
                 return;
             }
-            if (grassPass == null || blades && !grassPass.TryGetForwardPass(owner, out _))
+            if (_grassPass == null || blades && !_grassPass.TryGetForwardPass(owner, out _))
+            {
                 return;
+            }
 
             Camera camera = renderingData.cameraData.camera;
             if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera))
             {
-                grassPass?.ReleaseCamera(camera);
+                _grassPass?.ReleaseCamera(camera);
                 return;
             }
 
-            bool contacts = blades && GrassContactShadows.TryGetParameters(owner.contactShadows, out _, out _, out _);
-            bool motion = blades && grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
+            bool contacts = blades && GrassContactShadows.TryGetParameters(owner.ContactShadows, out _, out _, out _);
+            bool motion = blades && _grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
                 renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,
-                owner.motionVectors, owner.grassMaterial);
+                owner.MotionVectors, owner.GrassMaterial);
             ScriptableRenderPassInput inputs = contacts || motion ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None;
             if (motion)
+            {
                 inputs |= ScriptableRenderPassInput.Motion;
+            }
             // Explicit Depth schedules URP's depth copy and built-in motion producer
             // before this pass, so grass can augment the completed vector textures.
-            grassPass.ConfigureInput(inputs);
+            _grassPass.ConfigureInput(inputs);
             // The contact overlay multiplies the existing attachment without sampling camera color.
-            grassPass.requiresIntermediateTexture = false;
-            renderer.EnqueuePass(grassPass);
+            _grassPass.requiresIntermediateTexture = false;
+            renderer.EnqueuePass(_grassPass);
         }
 
         /// <summary>
@@ -113,8 +127,8 @@ namespace Cone.Grass
         protected override void Dispose(bool disposing)
         {
             RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
-            grassPass?.Dispose();
-            grassPass = null;
+            _grassPass?.Dispose();
+            _grassPass = null;
             GrassInteractionPublisher.Withdraw();
         }
 
@@ -227,43 +241,43 @@ namespace Cone.Grass
             private const double CameraIdleSeconds = 10.0;
             private const double GroupIdleSeconds = 3.0;
             private const ulong VersionSeed = 14695981039346656037UL;
-            private static readonly ShaderTagId LightMode = new ShaderTagId("LightMode");
+            private static readonly ShaderTagId s_lightMode = new ShaderTagId("LightMode");
 
-            private readonly LayerMask surfaceLayer;
-            private readonly Material heightMaterial;
-            private readonly ComputeShader generationShader;
-            private readonly Dictionary<Camera, CameraState> cameras = new Dictionary<Camera, CameraState>();
-            private readonly List<Camera> staleCameras = new List<Camera>();
-            private readonly List<Material> sharedMaterials = new List<Material>();
-            private readonly GrassContactShadows contacts = new GrassContactShadows();
-            private readonly GrassMotionVectors motion = new GrassMotionVectors();
-            private readonly List<Renderer> modifierInventory = new List<Renderer>();
-            private Renderer[] rendererInventory;
-            private readonly List<Terrain> terrainInventory = new List<Terrain>();
-            private InfiniteGrassRenderer inventoryOwner;
-            private uint inventoryOwnerRevision;
-            private uint inventoryRevision;
-            private bool inventoryDirty = true;
-            private readonly int resetKernel;
-            private readonly int generateKernel;
-            private readonly int finalizeKernel;
-            private readonly int argumentStride;
-            private readonly int argumentCountOffset;
-            private readonly bool kernelsValid;
-            private Material placementMaterial;
-            private Mesh captureQuad;
-            private Shader headShader;
-            private bool missingPlacementWarning, missingHeadWarning;
-            private bool missingHeightWarning;
-            private bool missingForwardWarning;
-            private bool warnedBufferLimit;
-            private bool disposed;
+            private readonly LayerMask _surfaceLayer;
+            private readonly Material _heightMaterial;
+            private readonly ComputeShader _generationShader;
+            private readonly Dictionary<Camera, CameraState> _cameras = new Dictionary<Camera, CameraState>();
+            private readonly List<Camera> _staleCameras = new List<Camera>();
+            private readonly List<Material> _sharedMaterials = new List<Material>();
+            private readonly GrassContactShadows _contacts = new GrassContactShadows();
+            private readonly GrassMotionVectors _motion = new GrassMotionVectors();
+            private readonly List<Renderer> _modifierInventory = new List<Renderer>();
+            private Renderer[] _rendererInventory;
+            private readonly List<Terrain> _terrainInventory = new List<Terrain>();
+            private InfiniteGrassRenderer _inventoryOwner;
+            private uint _inventoryOwnerRevision;
+            private uint _inventoryRevision;
+            private bool _inventoryDirty = true;
+            private readonly int _resetKernel;
+            private readonly int _generateKernel;
+            private readonly int _finalizeKernel;
+            private readonly int _argumentStride;
+            private readonly int _argumentCountOffset;
+            private readonly bool _kernelsValid;
+            private Material _placementMaterial;
+            private Mesh _captureQuad;
+            private Shader _headShader;
+            private bool _missingPlacementWarning, _missingHeadWarning;
+            private bool _missingHeightWarning;
+            private bool _missingForwardWarning;
+            private bool _warnedBufferLimit;
+            private bool _disposed;
 
             public GrassDataPass(LayerMask layer, Material height, ComputeShader shader)
             {
-                surfaceLayer = layer;
-                heightMaterial = height;
-                generationShader = shader;
+                _surfaceLayer = layer;
+                _heightMaterial = height;
+                _generationShader = shader;
                 SceneManager.sceneLoaded += OnSceneLoaded;
                 SceneManager.sceneUnloaded += OnSceneUnloaded;
                 TerrainCallbacks.heightmapChanged += OnTerrainHeightChanged;
@@ -271,17 +285,17 @@ namespace Cone.Grass
 #if UNITY_EDITOR
                 UnityEditor.EditorApplication.hierarchyChanged += InvalidateInventory;
 #endif
-                argumentStride = GraphicsBuffer.IndirectDrawIndexedArgs.size;
+                _argumentStride = GraphicsBuffer.IndirectDrawIndexedArgs.size;
                 try
                 {
-                    argumentCountOffset = FindInstanceCountOffset();
+                    _argumentCountOffset = FindInstanceCountOffset();
                     if (shader && shader.HasKernel("ResetCounts") && shader.HasKernel("CSMain") &&
                         shader.HasKernel("FinalizeArgs"))
                     {
-                        resetKernel = shader.FindKernel("ResetCounts");
-                        generateKernel = shader.FindKernel("CSMain");
-                        finalizeKernel = shader.FindKernel("FinalizeArgs");
-                        kernelsValid = true;
+                        _resetKernel = shader.FindKernel("ResetCounts");
+                        _generateKernel = shader.FindKernel("CSMain");
+                        _finalizeKernel = shader.FindKernel("FinalizeArgs");
+                        _kernelsValid = true;
                     }
                 }
                 catch (Exception exception)
@@ -295,18 +309,24 @@ namespace Cone.Grass
                 // Each camera publishes its own capture below; one that returns before that must not read another camera's.
                 GrassInteractionPublisher.Withdraw();
                 InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
-                if (disposed)
+                if (_disposed)
+                {
                     return;
-                bool blades = owner && owner.drawBlades;
-                if (!owner || !owner.IsReadyForRendering || blades && !owner.grassMaterial)
+                }
+
+                bool blades = owner && owner.DrawBlades;
+                if (!owner || !owner.IsReadyForRendering || blades && !owner.GrassMaterial)
                 {
                     ReleaseCameras();
                     return;
                 }
                 int forwardPass = -1;
                 if (blades && !TryGetForwardPass(owner, out forwardPass))
+                {
                     return;
-                if (blades && !kernelsValid)
+                }
+
+                if (blades && !_kernelsValid)
                 {
                     ReleaseCameras();
                     return;
@@ -328,65 +348,81 @@ namespace Cone.Grass
                 }
 
                 if (!ValidateBufferCapacity(owner, camera, SystemInfo.maxGraphicsBufferSize))
+                {
                     return;
+                }
+
                 PruneCameras();
-                if (!cameras.TryGetValue(camera, out CameraState state))
+                if (!_cameras.TryGetValue(camera, out CameraState state))
                 {
                     state = new CameraState(camera);
-                    cameras.Add(camera, state);
+                    _cameras.Add(camera, state);
                 }
                 state.LastUsedTime = Time.realtimeSinceStartupAsDouble;
                 state.ImportedTextures.Clear();
 
-                bool authored = owner.placementMode == GrassPlacementMode.AuthoredAreas;
+                bool authored = owner.PlacementMode == GrassPlacementMode.AuthoredAreas;
                 if (authored && !EnsurePlacementMaterial())
+                {
                     return;
+                }
 
                 Mesh[] meshes = owner.GetLodMeshes();
                 if (meshes == null || meshes.Length != 3 || !meshes[0] || !meshes[1] || !meshes[2])
+                {
                     return;
+                }
 
                 bool ownerChanged = state.Owner != owner;
-                bool allocationChanged = state.EnsureResources(owner, meshes, argumentStride);
+                bool allocationChanged = state.EnsureResources(owner, meshes, _argumentStride);
                 bool materialChanged = state.UpdateMaterial(owner,
                     graph.GetRenderTargetInfo(resources.activeColorTexture).msaaSamples > 1);
                 // Plant kinds: their packed table, the area weight captures that reweight them, and the head material.
-                bool variantsChanged = state.Variants.Update(owner.variants, owner.variants && owner.variants.headMesh);
+                bool variantsChanged = state.Variants.Update(owner.Variants, owner.Variants && owner.Variants.HeadMesh);
                 bool mixesKinds = authored && state.Variants.KindCount > 1;
                 state.EnsureVariantWeights(mixesKinds, owner);
                 bool headsNeeded = state.Variants.HeadQueues > 0;
                 bool drawsHeads = state.UpdateHeadMaterial(headsNeeded ? EnsureHeadShader() : null, headsNeeded);
 
-                float spacing = Mathf.Max(0.001f, FiniteOr(owner.spacing, 0.1f));
-                float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f));
-                float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.textureUpdateThreshold, 10f));
+                float spacing = Mathf.Max(0.001f, FiniteOr(owner.Spacing, 0.1f));
+                float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.DrawDistance, 300f));
+                float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.TextureUpdateThreshold, 10f));
                 if (ownerChanged || materialChanged || variantsChanged || state.MotionSpacing != spacing)
-                    motion.ResetHistory(camera);
+                {
+                    _motion.ResetHistory(camera);
+                }
+
                 state.MotionSpacing = spacing;
                 Vector3 cameraPosition = camera.transform.position;
                 if (!IsFinite(cameraPosition))
+                {
                     return;
+                }
+
                 Vector2 center = new Vector2(Mathf.Floor(cameraPosition.x / capturePadding) * capturePadding,
                     Mathf.Floor(cameraPosition.z / capturePadding) * capturePadding);
                 float extent = distanceLimit + capturePadding;
                 if (!IsFinite(new Vector3(center.x, extent * 2f, center.y)))
+                {
                     return;
+                }
+
                 Bounds captureBounds = new Bounds(new Vector3(center.x, 0f, center.y),
                     new Vector3(2f * extent, 0f, 2f * extent));
 
                 // Capture the complete window, not just this frame's view. Rotating a
                 // stationary camera must not reveal regions missing from cached maps.
                 EnsureInventory(owner);
-                state.CaptureRenderers = rendererInventory;
-                state.ModifierRenderers = modifierInventory;
+                state.CaptureRenderers = _rendererInventory;
+                state.ModifierRenderers = _modifierInventory;
                 CollectSources(state, captureBounds, authored);
                 CollectSurfaceTerrains(state, captureBounds, authored);
-                Vector2 captureRange = ResolveCaptureHeightRange(owner.captureHeightRange);
+                Vector2 captureRange = ResolveCaptureHeightRange(owner.CaptureHeightRange);
                 bool captureMappingChanged = allocationChanged || !state.CacheValid ||
                     state.Owner != owner || state.Center != center ||
                     state.CaptureExtent != extent || state.CaptureRange != captureRange ||
                     state.Authored != authored;
-                bool inventoryChanged = state.InventoryRevision != inventoryRevision;
+                bool inventoryChanged = state.InventoryRevision != _inventoryRevision;
                 bool refreshRequested = state.OwnerRevision != owner.Revision;
                 bool groundDirty = captureMappingChanged || refreshRequested || state.GroundVersion != state.NextGroundVersion;
 
@@ -396,16 +432,25 @@ namespace Cone.Grass
                 {
                     Terrain terrain = state.SurfaceTerrains[i];
                     if (!terrain || !terrain.terrainData)
+                    {
                         continue;
+                    }
+
                     Vector3 origin = terrain.transform.position;
                     Vector3 size = terrain.terrainData.size;
                     if (!IsFinite(origin) || !IsFinite(size))
+                    {
                         continue;
+                    }
+
                     minHeight = Mathf.Min(minHeight, origin.y);
                     maxHeight = Mathf.Max(maxHeight, origin.y + size.y);
                 }
                 if (!IsFinite(new Vector3(minHeight, maxHeight, maxHeight - minHeight + 2f)))
+                {
                     return;
+                }
+
                 captureBounds.SetMinMax(new Vector3(center.x - extent, minHeight, center.y - extent),
                     new Vector3(center.x + extent, Mathf.Max(minHeight + 1f, maxHeight), center.y + extent));
                 Matrix4x4 captureVP = MakeCaptureMatrix(center, extent, captureBounds.min.y, captureBounds.max.y);
@@ -429,7 +474,10 @@ namespace Cone.Grass
                     if (i == 0)
                     {
                         if (state.PrimaryDensityGroup != group)
+                        {
                             group.DensityCaptured = false;
+                        }
+
                         if (!group.UsesPrimaryDensity)
                         {
                             group.DensityMap?.Release();
@@ -444,7 +492,10 @@ namespace Cone.Grass
                         bool reallocated = CameraState.Allocate(ref group.DensityMap, state.Density.rt.width,
                             GraphicsFormat.R8_UNorm, "Grass Surface Density");
                         if (group.UsesPrimaryDensity || reallocated)
+                        {
                             group.DensityCaptured = false;
+                        }
+
                         group.UsesPrimaryDensity = false;
                         group.DensityTexture = graph.ImportTexture(group.DensityMap);
                     }
@@ -453,8 +504,8 @@ namespace Cone.Grass
                 }
                 state.PrimaryDensityGroup = state.ActiveGroups.Count > 0 ? state.ActiveGroups[0] : null;
                 bool recaptureHeight = captureMappingChanged || inventoryChanged || state.SurfaceDirty ||
-                    state.SurfaceVersion != state.NextSurfaceVersion || !owner.cacheSurfaceData;
-                bool recaptureModifiers = captureMappingChanged || inventoryChanged || owner.updateModifiersEveryFrame;
+                    state.SurfaceVersion != state.NextSurfaceVersion || !owner.CacheSurfaceData;
+                bool recaptureModifiers = captureMappingChanged || inventoryChanged || owner.UpdateModifiersEveryFrame;
                 CollectInteractionDraws(state, captureBounds);
                 bool recaptureInteraction = recaptureModifiers || state.InteractionVersion != state.NextInteractionVersion ||
                     state.OwnerInteractionRevision != owner.InteractionRevision;
@@ -485,7 +536,10 @@ namespace Cone.Grass
                 if (recaptureInteraction)
                 {
                     if (!recaptureModifiers)
+                    {
                         CollectRendererDraws(state, captureBounds, false, true, authored);
+                    }
+
                     BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default,
                         captureVP, Color.clear, state.InteractionDraws);
                 }
@@ -497,9 +551,9 @@ namespace Cone.Grass
                 GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
                 state.CaptureRange = captureRange;
                 state.Authored = authored;
-                state.DensityShortens = authored && owner.densityShortensBlades;
+                state.DensityShortens = authored && owner.DensityShortensBlades;
                 state.OwnerRevision = owner.Revision;
-                state.InventoryRevision = inventoryRevision;
+                state.InventoryRevision = _inventoryRevision;
                 state.InteractionVersion = state.NextInteractionVersion;
                 state.OwnerInteractionRevision = owner.InteractionRevision;
                 state.SurfaceVersion = state.NextSurfaceVersion;
@@ -510,14 +564,19 @@ namespace Cone.Grass
                 // Match the target-size input URP uses for _ScaledScreenParams.
                 float scaledHeight = Mathf.Max(1, cameraData.cameraTargetDescriptor.height);
                 if (camera.allowDynamicResolution)
+                {
                     scaledHeight *= Mathf.Clamp(ScalableBufferManager.heightScaleFactor, 0.01f, 1f);
+                }
+
                 float bladeRadius = CalculateBladeRadius(state.BladeMaterial, owner, camera, scaledHeight);
                 Bounds cameraBounds = CalculateCameraBounds(camera, distanceLimit, bladeRadius);
-                owner.cameraBounds = cameraBounds;
+                owner.CameraBounds = cameraBounds;
                 GeometryUtility.CalculateFrustumPlanes(camera, state.Planes);
                 for (int i = 0; i < 6; i++)
+                {
                     state.Frustum[i] = new Vector4(state.Planes[i].normal.x, state.Planes[i].normal.y,
                         state.Planes[i].normal.z, state.Planes[i].distance);
+                }
 
                 BuildDispatches(graph, state, owner, cameraBounds, spacing, authored, density);
                 BuildGeneration(graph, state, owner, height, density, mask, variantWeights0, variantWeights1,
@@ -527,7 +586,7 @@ namespace Cone.Grass
                 {
                     // Counts and indirect instance counts still reset to zero, but
                     // there is no grass to draw, snapshot, or ray-march this frame.
-                    motion.Release(camera);
+                    _motion.Release(camera);
                     BuildReadback(graph, state, counts, owner);
                     state.PruneTextureWrappers();
                     return;
@@ -552,7 +611,7 @@ namespace Cone.Grass
                     pass.Material = state.BladeMaterial;
                     pass.Properties = state.DrawProperties;
                     pass.ShaderPass = forwardPass;
-                    pass.ArgumentStride = argumentStride;
+                    pass.ArgumentStride = _argumentStride;
                     pass.HeadMaterial = drawsHeads ? state.HeadMaterial : null;
                     pass.HeadMeshes = state.HeadMeshes;
                     pass.HeadProperties = state.HeadProperties;
@@ -560,24 +619,39 @@ namespace Cone.Grass
                     builder.UseBuffer(positions, AccessFlags.Read);
                     builder.UseBuffer(arguments, AccessFlags.Read);
                     for (int i = 0; i < state.VertexTextures.Length; i++)
+                    {
                         builder.UseTexture(state.VertexTextures[i], AccessFlags.Read);
+                    }
                     // The package blade shader samples these atlases at blade world
                     // positions. Avoid extending unrelated global texture lifetimes.
                     if (resources.mainShadowsTexture.IsValid())
+                    {
                         builder.UseTexture(resources.mainShadowsTexture, AccessFlags.Read);
+                    }
+
                     if (resources.additionalShadowsTexture.IsValid())
+                    {
                         builder.UseTexture(resources.additionalShadowsTexture, AccessFlags.Read);
+                    }
+
                     builder.SetRenderAttachment(resources.activeColorTexture, 0, AccessFlags.ReadWrite);
                     builder.SetRenderAttachmentDepth(resources.activeDepthTexture, AccessFlags.ReadWrite);
                     builder.SetRenderFunc(static (DrawPass data, RasterGraphContext context) =>
                     {
                         for (int lod = 0; lod < 3; lod++)
+                        {
                             context.cmd.DrawMeshInstancedIndirect(data.Meshes[lod], 0, data.Material,
                                 data.ShaderPass, data.Arguments, lod * data.ArgumentStride, data.Properties[lod]);
+                        }
+
                         for (int queue = 0; data.HeadMaterial && queue < 2; queue++)
+                        {
                             if (data.HeadCapacities[queue] > 0 && data.HeadMeshes[queue])
+                            {
                                 context.cmd.DrawMeshInstancedIndirect(data.HeadMeshes[queue], 0, data.HeadMaterial, 0,
                                     data.Arguments, (3 + queue) * data.ArgumentStride, data.HeadProperties[queue]);
+                            }
+                        }
                     });
                 }
 
@@ -586,12 +660,15 @@ namespace Cone.Grass
                     ? new GrassHeadDraws(state.HeadMaterial, state.HeadMeshes, state.HeadProperties, state.HeadCapacities)
                     : default;
                 if (WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
-                        cameraData.cameraTargetDescriptor.msaaSamples, owner.motionVectors, state.BladeMaterial))
-                    motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
+                        cameraData.cameraTargetDescriptor.msaaSamples, owner.MotionVectors, state.BladeMaterial))
+                {
+                    _motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
                         state.Counts, state.Arguments, meshes, state.BladeMaterial, state.DrawProperties,
                         state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing, heads);
-                contacts.Record(graph, frameData, positions, arguments, state.Positions,
-                    state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.contactShadows,
+                }
+
+                _contacts.Record(graph, frameData, positions, arguments, state.Positions,
+                    state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.ContactShadows,
                     state.VertexTextures, heads);
                 BuildReadback(graph, state, counts, owner);
                 state.PruneTextureWrappers();
@@ -600,38 +677,51 @@ namespace Cone.Grass
             public void PruneCameras()
             {
                 double now = Time.realtimeSinceStartupAsDouble;
-                staleCameras.Clear();
-                foreach (KeyValuePair<Camera, CameraState> pair in cameras)
+                _staleCameras.Clear();
+                foreach (KeyValuePair<Camera, CameraState> pair in _cameras)
+                {
                     if (!pair.Key || now - pair.Value.LastUsedTime > CameraIdleSeconds)
-                        staleCameras.Add(pair.Key);
-                for (int i = 0; i < staleCameras.Count; i++)
-                    ReleaseCamera(staleCameras[i]);
+                    {
+                        _staleCameras.Add(pair.Key);
+                    }
+                }
+
+                for (int i = 0; i < _staleCameras.Count; i++)
+                {
+                    ReleaseCamera(_staleCameras[i]);
+                }
             }
 
             public void ReleaseCamera(Camera camera)
             {
-                motion.Release(camera);
-                if (ReferenceEquals(camera, null) || !cameras.TryGetValue(camera, out CameraState state))
+                _motion.Release(camera);
+                if (ReferenceEquals(camera, null) || !_cameras.TryGetValue(camera, out CameraState state))
+                {
                     return;
+                }
+
                 state.Dispose();
-                cameras.Remove(camera);
+                _cameras.Remove(camera);
             }
 
             public void ReleaseCameras()
             {
-                foreach (KeyValuePair<Camera, CameraState> pair in cameras)
+                foreach (KeyValuePair<Camera, CameraState> pair in _cameras)
                 {
-                    motion.Release(pair.Key);
+                    _motion.Release(pair.Key);
                     pair.Value.Dispose();
                 }
-                cameras.Clear();
+                _cameras.Clear();
             }
 
             public void Dispose()
             {
-                if (disposed)
+                if (_disposed)
+                {
                     return;
-                disposed = true;
+                }
+
+                _disposed = true;
                 SceneManager.sceneLoaded -= OnSceneLoaded;
                 SceneManager.sceneUnloaded -= OnSceneUnloaded;
                 TerrainCallbacks.heightmapChanged -= OnTerrainHeightChanged;
@@ -640,12 +730,12 @@ namespace Cone.Grass
                 UnityEditor.EditorApplication.hierarchyChanged -= InvalidateInventory;
 #endif
                 ReleaseCameras();
-                motion.Dispose();
-                contacts.Dispose();
-                CoreUtils.Destroy(placementMaterial);
-                CoreUtils.Destroy(captureQuad);
-                placementMaterial = null;
-                captureQuad = null;
+                _motion.Dispose();
+                _contacts.Dispose();
+                CoreUtils.Destroy(_placementMaterial);
+                CoreUtils.Destroy(_captureQuad);
+                _placementMaterial = null;
+                _captureQuad = null;
             }
         }
     }

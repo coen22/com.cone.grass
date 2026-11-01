@@ -18,12 +18,18 @@ namespace Cone.Grass.Editor
         public static UniversalRendererData ActiveRendererData()
         {
             if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset pipeline))
+            {
                 return null;
+            }
+
             using var serialized = new SerializedObject(pipeline);
             SerializedProperty list = serialized.FindProperty("m_RendererDataList");
             int index = serialized.FindProperty("m_DefaultRendererIndex").intValue;
             if (list == null || index < 0 || index >= list.arraySize)
+            {
                 return null;
+            }
+
             return list.GetArrayElementAtIndex(index).objectReferenceValue as UniversalRendererData;
         }
 
@@ -31,10 +37,18 @@ namespace Cone.Grass.Editor
         public static GrassDataRendererFeature FindFeature(ScriptableRendererData renderer)
         {
             if (!renderer)
+            {
                 return null;
+            }
+
             foreach (ScriptableRendererFeature feature in renderer.rendererFeatures)
+            {
                 if (feature is GrassDataRendererFeature grass)
+                {
                     return grass;
+                }
+            }
+
             return null;
         }
 
@@ -53,7 +67,10 @@ namespace Cone.Grass.Editor
         {
             UniversalRendererData renderer = ActiveRendererData();
             if (!renderer)
+            {
                 return null;
+            }
+
             GrassDataRendererFeature feature = FindFeature(renderer);
             if (feature)
             {
@@ -92,9 +109,13 @@ namespace Cone.Grass.Editor
         {
             GrassDataRendererFeature feature = Install();
             if (feature)
+            {
                 Debug.Log($"Infinite Grass: the Grass Data Renderer Feature is active on {AssetDatabase.GetAssetPath(ActiveRendererData())}.");
+            }
             else
+            {
                 Debug.LogWarning("Infinite Grass: the active render pipeline is not URP; grass needs a URP renderer.");
+            }
         }
 
         [MenuItem(MenuPath, true)]

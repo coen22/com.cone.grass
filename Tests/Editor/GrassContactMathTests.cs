@@ -20,11 +20,13 @@ namespace Cone.Grass.Tests
             {
                 null,
                 new GrassContactShadows.Settings(),
-                new GrassContactShadows.Settings { enabled = true, strength = 0f }
+                new GrassContactShadows.Settings { Enabled = true, Strength = 0f }
             };
             foreach (GrassContactShadows.Settings settings in disabledSettings)
+            {
                 Assert.DoesNotThrow(() => contacts.Record(null, null, default, default,
                     null, null, null, null, null, settings));
+            }
         }
 
         [TestCase(1)]
@@ -34,7 +36,9 @@ namespace Cone.Grass.Tests
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
                 !SystemInfo.supportsComputeShaders || !SystemInfo.supportsIndirectArgumentsBuffer)
+            {
                 Assert.Ignore("The backbuffer regression requires a graphics device with indirect buffers.");
+            }
 
             GraphicsFormat colorFormat = SystemInfo.GetGraphicsFormat(DefaultFormat.LDR);
             bool depthCoverageSupported = SupportsContactFormat(GraphicsFormat.R32G32_SFloat) ||
@@ -45,7 +49,9 @@ namespace Cone.Grass.Tests
             if (!depthCoverageSupported || !GraphicsFormatUtility.IsDepthFormat(depthFormat) ||
                 !SystemInfo.IsFormatSupported(depthFormat, GraphicsFormatUsage.Render) ||
                 !SystemInfo.IsFormatSupported(colorFormat, GraphicsFormatUsage.Blend))
+            {
                 Assert.Ignore("The backbuffer regression requires contact-shadow attachment formats.");
+            }
 
             Shader shader = Shader.Find("Hidden/InternalErrorShader");
             Assert.That(shader, Is.Not.Null);
@@ -78,8 +84,11 @@ namespace Cone.Grass.Tests
                 backbuffer = RTHandles.Alloc(new RenderTargetIdentifier(BuiltinRenderTextureType.CameraTarget));
                 var targetInfo = new RenderTargetInfo
                 {
-                    width = 64, height = 64, volumeDepth = 1,
-                    msaaSamples = samples, format = colorFormat
+                    width = 64,
+                    height = 64,
+                    volumeDepth = 1,
+                    msaaSamples = samples,
+                    format = colorFormat
                 };
                 TextureHandle cameraColor = graph.ImportTexture(backbuffer, targetInfo);
                 Assert.Throws<ArgumentException>(() => graph.GetTextureDesc(cameraColor));
@@ -128,7 +137,7 @@ namespace Cone.Grass.Tests
                 Assert.DoesNotThrow(() => contacts.Record(graph, frameData,
                     positionsHandle, argumentsHandle, positions, arguments,
                     new[] { mesh, mesh, mesh }, material, properties,
-                    new GrassContactShadows.Settings { enabled = true }));
+                    new GrassContactShadows.Settings { Enabled = true }));
             }
             finally
             {
@@ -147,11 +156,11 @@ namespace Cone.Grass.Tests
         {
             var variants = new[]
             {
-                new GrassContactShadows.Settings { enabled = true, strength = invalid },
-                new GrassContactShadows.Settings { enabled = true, rayLength = invalid },
-                new GrassContactShadows.Settings { enabled = true, bias = invalid },
-                new GrassContactShadows.Settings { enabled = true, thickness = invalid },
-                new GrassContactShadows.Settings { enabled = true, maxDistance = invalid }
+                new GrassContactShadows.Settings { Enabled = true, Strength = invalid },
+                new GrassContactShadows.Settings { Enabled = true, RayLength = invalid },
+                new GrassContactShadows.Settings { Enabled = true, Bias = invalid },
+                new GrassContactShadows.Settings { Enabled = true, Thickness = invalid },
+                new GrassContactShadows.Settings { Enabled = true, MaxDistance = invalid }
             };
             foreach (GrassContactShadows.Settings settings in variants)
             {
@@ -168,7 +177,10 @@ namespace Cone.Grass.Tests
         {
             var settings = new GrassContactShadows.Settings
             {
-                enabled = true, maxDistance = 50f, rayLength = 0.75f, bias = 0.03f
+                Enabled = true,
+                MaxDistance = 50f,
+                RayLength = 0.75f,
+                Bias = 0.03f
             };
             Assert.That(GrassContactShadows.TryGetParameters(settings, out Vector4 parameters,
                 out Vector4 limits, out float radius), Is.True);
@@ -179,16 +191,22 @@ namespace Cone.Grass.Tests
             };
             float[] fractions = { 0f, 0.25f, 0.5f, 0.999f, 1f };
             foreach (Vector3 receiverDirection in directions)
-            foreach (Vector3 lightDirection in directions)
-            foreach (float receiverFraction in fractions)
-            foreach (float rayFraction in fractions)
             {
-                Vector3 receiver = receiverDirection * limits.x * receiverFraction;
-                Vector3 sample = receiver + lightDirection * (parameters.z + parameters.y * rayFraction);
-                Assert.That(sample.magnitude, Is.LessThanOrEqualTo(radius + 0.00001f));
+                foreach (Vector3 lightDirection in directions)
+                {
+                    foreach (float receiverFraction in fractions)
+                    {
+                        foreach (float rayFraction in fractions)
+                        {
+                            Vector3 receiver = receiverDirection * limits.x * receiverFraction;
+                            Vector3 sample = receiver + lightDirection * (parameters.z + parameters.y * rayFraction);
+                            Assert.That(sample.magnitude, Is.LessThanOrEqualTo(radius + 0.00001f));
+                        }
+                    }
+                }
             }
             // Omitting either ray length or bias would lose a reachable caster here.
-            Assert.That(radius, Is.GreaterThan(settings.maxDistance + settings.rayLength));
+            Assert.That(radius, Is.GreaterThan(settings.MaxDistance + settings.RayLength));
         }
 
         [Test]
@@ -197,13 +215,15 @@ namespace Cone.Grass.Tests
             var variants = new[]
             {
                 new GrassContactShadows.Settings(),
-                new GrassContactShadows.Settings { enabled = true, strength = 0f },
-                new GrassContactShadows.Settings { enabled = true, rayLength = 0f },
-                new GrassContactShadows.Settings { enabled = true, maxDistance = -1f },
-                new GrassContactShadows.Settings { enabled = true, maxDistance = 1e30f }
+                new GrassContactShadows.Settings { Enabled = true, Strength = 0f },
+                new GrassContactShadows.Settings { Enabled = true, RayLength = 0f },
+                new GrassContactShadows.Settings { Enabled = true, MaxDistance = -1f },
+                new GrassContactShadows.Settings { Enabled = true, MaxDistance = 1e30f }
             };
             foreach (GrassContactShadows.Settings settings in variants)
+            {
                 Assert.That(GrassContactShadows.TryGetParameters(settings, out _, out _, out _), Is.False);
+            }
         }
 
         [TestCase(false, false, false, 0)]
@@ -264,26 +284,30 @@ namespace Cone.Grass.Tests
             Vector4 viewPoint = new Vector4(0.7f, 1.1f, -4f, 1f);
             Vector2 sceneAllocationScale = new Vector2(0.75f, 0.6f);
             foreach (bool grassBottomLeft in new[] { false, true })
-            foreach (bool colorBottomLeft in new[] { false, true })
-            foreach (bool sceneBottomLeft in new[] { false, true })
             {
-                Matrix4x4 grassProjection = MakeProjection(false, true, 2, grassBottomLeft);
-                Matrix4x4 colorProjection = MakeProjection(false, true, 2, colorBottomLeft);
-                Matrix4x4 sceneProjection = MakeProjection(false, true, 2, sceneBottomLeft);
-                Vector2 grassUV = ClipToUV(grassProjection * viewPoint, true);
-                Vector2 colorUV = ClipToUV(colorProjection * viewPoint, true);
-                Vector2 sceneUV = ClipToUV(sceneProjection * viewPoint, true);
+                foreach (bool colorBottomLeft in new[] { false, true })
+                {
+                    foreach (bool sceneBottomLeft in new[] { false, true })
+                    {
+                        Matrix4x4 grassProjection = MakeProjection(false, true, 2, grassBottomLeft);
+                        Matrix4x4 colorProjection = MakeProjection(false, true, 2, colorBottomLeft);
+                        Matrix4x4 sceneProjection = MakeProjection(false, true, 2, sceneBottomLeft);
+                        Vector2 grassUV = ClipToUV(grassProjection * viewPoint, true);
+                        Vector2 colorUV = ClipToUV(colorProjection * viewPoint, true);
+                        Vector2 sceneUV = ClipToUV(sceneProjection * viewPoint, true);
 
-                Vector4 compositeTransform = GrassContactShadows.GetUVScaleBias(Vector2.one,
-                    grassBottomLeft != colorBottomLeft);
-                Vector2 reconstructedGrassUV = ApplyScaleBias(colorUV, compositeTransform);
-                Vector4 sceneTransform = GrassContactShadows.GetUVScaleBias(sceneAllocationScale,
-                    grassBottomLeft != sceneBottomLeft);
-                Vector2 sampledSceneUV = ApplyScaleBias(reconstructedGrassUV, sceneTransform);
+                        Vector4 compositeTransform = GrassContactShadows.GetUVScaleBias(Vector2.one,
+                            grassBottomLeft != colorBottomLeft);
+                        Vector2 reconstructedGrassUV = ApplyScaleBias(colorUV, compositeTransform);
+                        Vector4 sceneTransform = GrassContactShadows.GetUVScaleBias(sceneAllocationScale,
+                            grassBottomLeft != sceneBottomLeft);
+                        Vector2 sampledSceneUV = ApplyScaleBias(reconstructedGrassUV, sceneTransform);
 
-                Assert.That(Vector2.Distance(reconstructedGrassUV, grassUV), Is.LessThan(0.000001f));
-                Assert.That(Vector2.Distance(sampledSceneUV, Vector2.Scale(sceneUV, sceneAllocationScale)),
-                    Is.LessThan(0.000001f));
+                        Assert.That(Vector2.Distance(reconstructedGrassUV, grassUV), Is.LessThan(0.000001f));
+                        Assert.That(Vector2.Distance(sampledSceneUV, Vector2.Scale(sceneUV, sceneAllocationScale)),
+                            Is.LessThan(0.000001f));
+                    }
+                }
             }
         }
 
@@ -315,11 +339,20 @@ namespace Cone.Grass.Tests
                 projection.m21 -= 0.006f;
             }
             if (depthRange != 0)
+            {
                 projection.SetRow(2, (projection.GetRow(2) + projection.GetRow(3)) * 0.5f);
+            }
+
             if (depthRange == 2)
+            {
                 projection.SetRow(2, projection.GetRow(3) - projection.GetRow(2));
+            }
+
             if (flipY)
+            {
                 projection.SetRow(1, -projection.GetRow(1));
+            }
+
             return projection;
         }
 
@@ -327,7 +360,10 @@ namespace Cone.Grass.Tests
         {
             Vector2 uv = new Vector2(clip.x / clip.w, clip.y / clip.w) * 0.5f + Vector2.one * 0.5f;
             if (uvStartsAtTop)
+            {
                 uv.y = 1f - uv.y;
+            }
+
             return uv;
         }
 

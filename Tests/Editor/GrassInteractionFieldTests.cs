@@ -79,37 +79,37 @@ namespace Cone.Grass.Tests
         [TestCase(120, 0.9f, 0.2f)]
         public void DeparturePressureAgreesAcrossSplitCadencesForAConstantTarget(int cadence, float startResponse, float target)
         {
-            const float radius = 0.25f, speed = 5f, attack = 0.06f, recovery = 1f;
-            const double duration = 0.2, now = 0.4;
+            const float Radius = 0.25f, Speed = 5f, Attack = 0.06f, Recovery = 1f;
+            const double Duration = 0.2, Now = 0.4;
             var reference = new GrassInteractionField(0.125f, 128);
-            Assert.That(reference.AdvanceSweptCircle(Vector2.zero, radius, 0.0,
-                Vector2.right, radius, duration, Vector2.right, startResponse, target, attack), Is.True);
+            Assert.That(reference.AdvanceSweptCircle(Vector2.zero, Radius, 0.0,
+                Vector2.right, Radius, Duration, Vector2.right, startResponse, target, Attack), Is.True);
 
             var field = new GrassInteractionField(reference.CellSize, reference.Capacity);
             float response = startResponse;
-            for (int i = 0; i < duration * cadence; i++)
+            for (int i = 0; i < Duration * cadence; i++)
             {
                 double start = i / (double)cadence;
                 double end = (i + 1) / (double)cadence;
-                Assert.That(field.AdvanceSweptCircle(new Vector2((float)(speed * start), 0f), radius, start,
-                    new Vector2((float)(speed * end), 0f), radius, end, Vector2.right, response, target, attack), Is.True);
-                response = GrassInteractionField.EvaluateAttack(response, target, end - start, attack);
+                Assert.That(field.AdvanceSweptCircle(new Vector2((float)(Speed * start), 0f), Radius, start,
+                    new Vector2((float)(Speed * end), 0f), Radius, end, Vector2.right, response, target, Attack), Is.True);
+                response = GrassInteractionField.EvaluateAttack(response, target, end - start, Attack);
             }
             Assert.That(field.Count, Is.EqualTo(reference.Count));
             for (int i = 0; i < reference.Count; i++)
             {
                 Vector2Int key = reference.GetKey(i);
-                Assert.That(reference.TryGetNode(key, now, recovery, out Vector2 expectedDirection, out float expected), Is.True);
-                Assert.That(field.TryGetNode(key, now, recovery, out Vector2 direction, out float actual), Is.True);
+                Assert.That(reference.TryGetNode(key, Now, Recovery, out Vector2 expectedDirection, out float expected), Is.True);
+                Assert.That(field.TryGetNode(key, Now, Recovery, out Vector2 direction, out float actual), Is.True);
                 Assert.That(actual, Is.EqualTo(expected).Within(0.000001f),
                     "Pressure must be evaluated when this node leaves the footprint, not at the frame's end.");
                 Assert.That(Vector2.Distance(direction, expectedDirection), Is.LessThan(0.00001f));
             }
-            double departure = (double)radius / speed;
-            float departureResponse = (float)(target + ((double)startResponse - target) * Math.Exp(-departure / attack));
-            Assert.That(field.TryGetNode(Vector2Int.zero, now, recovery, out _, out float originStrength), Is.True);
+            double departure = (double)Radius / Speed;
+            float departureResponse = (float)(target + ((double)startResponse - target) * Math.Exp(-departure / Attack));
+            Assert.That(field.TryGetNode(Vector2Int.zero, Now, Recovery, out _, out float originStrength), Is.True);
             Assert.That(originStrength,
-                Is.EqualTo(departureResponse * GrassInteractionField.RecoveryWeight(now - departure, recovery)).Within(0.000001f));
+                Is.EqualTo(departureResponse * GrassInteractionField.RecoveryWeight(Now - departure, Recovery)).Within(0.000001f));
         }
 
         [Test]
@@ -286,8 +286,11 @@ namespace Cone.Grass.Tests
             int initialCount = field.Count;
             Assert.That(initialCount, Is.GreaterThan(1));
             for (int i = 0; i < 128; i++)
+            {
                 Assert.That(field.AdvanceSweptCircle(Vector2.zero, 0.5f, i,
                     Vector2.zero, 0.5f, i + 1.0, Vector2.right), Is.True);
+            }
+
             Assert.That(field.Count, Is.EqualTo(initialCount));
             Assert.That(field.TryGetNode(Vector2Int.zero, 128.0, 1f, out _, out float strength), Is.True);
             Assert.That(strength, Is.EqualTo(1f));
@@ -308,22 +311,22 @@ namespace Cone.Grass.Tests
         [TestCase(10f, 0.5f, 0.15f)]
         public void WalkRunAndSprintFieldsAgreeAcrossCadencesAndChangingRadii(float speed, float r0, float r1)
         {
-            const double duration = 2.0;
+            const double Duration = 2.0;
             Vector2 origin = new Vector2(0.03125f, -0.03125f);
             var reference = new GrassInteractionField(0.125f, GrassInteractionField.MaximumCapacity, origin);
             Assert.That(reference.AdvanceSweptCircle(Path(speed, 0.0), r0, 0.0,
-                Path(speed, duration), r1, duration, Vector2.right), Is.True);
+                Path(speed, Duration), r1, Duration, Vector2.right), Is.True);
             Assert.That(reference.Count, Is.GreaterThan(10));
 
             foreach (int cadence in new[] { 15, 30, 60, 120, 144 })
             {
                 var field = new GrassInteractionField(reference.CellSize, reference.Capacity, origin);
-                for (int i = 0; i < duration * cadence; i++)
+                for (int i = 0; i < Duration * cadence; i++)
                 {
                     double start = i / (double)cadence;
                     double end = (i + 1) / (double)cadence;
-                    float radius0 = (float)(r0 + ((double)r1 - r0) * start / duration);
-                    float radius1 = (float)(r0 + ((double)r1 - r0) * end / duration);
+                    float radius0 = (float)(r0 + ((double)r1 - r0) * start / Duration);
+                    float radius1 = (float)(r0 + ((double)r1 - r0) * end / Duration);
                     Assert.That(field.AdvanceSweptCircle(Path(speed, start), radius0, start,
                         Path(speed, end), radius1, end, Vector2.right), Is.True);
                 }
@@ -346,23 +349,23 @@ namespace Cone.Grass.Tests
         [TestCase(120)]
         public void DefaultFieldKeepsASustainedSprintTrailWithinItsBudgets(int cadence)
         {
-            const float cellSize = 0.15f, radius = 0.3f, speed = 10f, recovery = 2f;
-            const double duration = 12.0;
-            var field = new GrassInteractionField(cellSize);
-            for (int i = 0; i < duration * cadence; i++)
+            const float CellSize = 0.15f, Radius = 0.3f, Speed = 10f, Recovery = 2f;
+            const double Duration = 12.0;
+            var field = new GrassInteractionField(CellSize);
+            for (int i = 0; i < Duration * cadence; i++)
             {
                 double start = i / (double)cadence;
                 double end = (i + 1) / (double)cadence;
-                field.Prune(end, recovery);
-                Assert.That(field.AdvanceSweptCircle(new Vector2((float)(speed * start), 0f), radius, start,
-                    new Vector2((float)(speed * end), 0f), radius, end, Vector2.right), Is.True,
+                field.Prune(end, Recovery);
+                Assert.That(field.AdvanceSweptCircle(new Vector2((float)(Speed * start), 0f), Radius, start,
+                    new Vector2((float)(Speed * end), 0f), Radius, end, Vector2.right), Is.True,
                     "Default field budgets must retain a normal continuous sprint for longer than its recovery duration.");
             }
             Assert.That(field.Count, Is.GreaterThan(128).And.LessThanOrEqualTo(field.Capacity));
-            Assert.That(field.TryGetNode(Vector2Int.zero, duration, recovery, out _, out _), Is.False,
+            Assert.That(field.TryGetNode(Vector2Int.zero, Duration, Recovery, out _, out _), Is.False,
                 "The trail's old beginning must have expired instead of consuming the fixed node budget.");
-            var recentKey = new Vector2Int(Mathf.RoundToInt((float)(speed * (duration - 1.0)) / cellSize), 0);
-            Assert.That(field.TryGetNode(recentKey, duration, recovery, out _, out float strength), Is.True);
+            var recentKey = new Vector2Int(Mathf.RoundToInt((float)(Speed * (Duration - 1.0)) / CellSize), 0);
+            Assert.That(field.TryGetNode(recentKey, Duration, Recovery, out _, out float strength), Is.True);
             Assert.That(strength, Is.GreaterThan(0f).And.LessThan(1f));
         }
 
@@ -430,7 +433,10 @@ namespace Cone.Grass.Tests
             Assert.That(field.Prune(2.0, 1.5f), Is.EqualTo(1));
             Assert.That(field.Count, Is.EqualTo(2));
             for (int i = 0; i < field.Count; i++)
+            {
                 Assert.That(field.TryGetNode(field.GetKey(i), 2.0, 1.5f, out _, out _), Is.True);
+            }
+
             Assert.That(field.TryGetNode(Vector2Int.zero, 2.0, 1.5f, out _, out _), Is.False);
             field.Clear();
             Assert.That(field.Count, Is.Zero);
@@ -490,12 +496,18 @@ namespace Cone.Grass.Tests
             var field = new GrassInteractionField(0.25f, 128);
             bool success = true;
             for (int i = 0; i < 64; i++)
+            {
                 success &= ExerciseField(field);
+            }
+
             Assert.That(success, Is.True);
 
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 128; i++)
+            {
                 success &= ExerciseField(field);
+            }
+
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.That(success, Is.True);
             Assert.That(allocated, Is.Zero, "The fixed node pool and reserved lookup must be reused after warmup.");

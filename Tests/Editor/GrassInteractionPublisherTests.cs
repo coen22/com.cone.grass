@@ -5,23 +5,23 @@ namespace Cone.Grass.Tests
 {
     public class GrassInteractionPublisherTests
     {
-        Texture previousField;
-        Vector4 previousScaleOffset, previousParams;
+        private Texture _previousField;
+        private Vector4 _previousScaleOffset, _previousParams;
 
         [SetUp]
         public void SaveGlobals()
         {
-            previousField = Shader.GetGlobalTexture(GrassInteractionPublisher.FieldId);
-            previousScaleOffset = Shader.GetGlobalVector(GrassInteractionPublisher.ScaleOffsetId);
-            previousParams = Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId);
+            _previousField = Shader.GetGlobalTexture(GrassInteractionPublisher.FieldId);
+            _previousScaleOffset = Shader.GetGlobalVector(GrassInteractionPublisher.ScaleOffsetId);
+            _previousParams = Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId);
         }
 
         [TearDown]
         public void RestoreGlobals()
         {
-            Shader.SetGlobalTexture(GrassInteractionPublisher.FieldId, previousField);
-            Shader.SetGlobalVector(GrassInteractionPublisher.ScaleOffsetId, previousScaleOffset);
-            Shader.SetGlobalVector(GrassInteractionPublisher.ParamsId, previousParams);
+            Shader.SetGlobalTexture(GrassInteractionPublisher.FieldId, _previousField);
+            Shader.SetGlobalVector(GrassInteractionPublisher.ScaleOffsetId, _previousScaleOffset);
+            Shader.SetGlobalVector(GrassInteractionPublisher.ParamsId, _previousParams);
         }
 
         // GrassWorldToMapUV: uv = (xz - center) / (2 extent) + 0.5, so the centre is 0.5 and the capture's edges 0 and 1.

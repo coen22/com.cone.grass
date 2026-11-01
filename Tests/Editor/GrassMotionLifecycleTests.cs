@@ -79,7 +79,9 @@ namespace Cone.Grass.Tests
                 SetField(fixture.History, "LatestIndex", 1);
                 SetField(fixture.History, "PreviousValid", true);
                 foreach (object snapshot in fixture.Snapshots)
+                {
                     SetField(snapshot, "FrameNumber", 28);
+                }
 
                 // Release only GPU storage: the RTHandle, dimensions and format stay
                 // unchanged, so a descriptor-only reallocation check misses this.
@@ -93,9 +95,14 @@ namespace Cone.Grass.Tests
                 Assert.That(GetField(fixture.History, "RenderedFrame"), Is.EqualTo(-1));
                 Assert.That(GetField(fixture.History, "PreviousValid"), Is.False);
                 foreach (object snapshot in fixture.Snapshots)
+                {
                     Assert.That(GetField(snapshot, "FrameNumber"), Is.EqualTo(-1));
+                }
+
                 foreach (RTHandle texture in fixture.Textures)
+                {
                     Assert.That(texture.rt && texture.rt.IsCreated(), Is.True);
+                }
             }
         }
 
@@ -113,7 +120,9 @@ namespace Cone.Grass.Tests
                 SetField(fixture.History, "LatestIndex", 1);
                 SetField(fixture.History, "PreviousValid", true);
                 foreach (object snapshot in fixture.Snapshots)
+                {
                     SetField(snapshot, "FrameNumber", 28);
+                }
 
                 object owner = snapshotIndex < 0 ? fixture.History : fixture.Snapshots.GetValue(snapshotIndex);
                 GraphicsBuffer lost = (GraphicsBuffer)GetField(owner, field);
@@ -126,9 +135,15 @@ namespace Cone.Grass.Tests
                 Assert.That(GetField(fixture.History, "RenderedFrame"), Is.EqualTo(-1));
                 Assert.That(GetField(fixture.History, "PreviousValid"), Is.False);
                 foreach (object snapshot in fixture.Snapshots)
+                {
                     Assert.That(GetField(snapshot, "FrameNumber"), Is.EqualTo(-1));
+                }
+
                 foreach (GraphicsBuffer buffer in fixture.Buffers)
+                {
                     Assert.That(buffer.IsValid(), Is.True);
+                }
+
                 Assert.That(fixture.EnsureAllocation(), Is.False,
                     "Recovering one lost allocation must return to a stable allocation on the next frame.");
             }
@@ -150,7 +165,10 @@ namespace Cone.Grass.Tests
                     QualitySettings.globalTextureMipmapLimit = 0;
                     fixture.EnsureAllocation(wind);
                     foreach (object snapshot in fixture.Snapshots)
+                    {
                         SetField(snapshot, "FrameNumber", 28);
+                    }
+
                     SetField(fixture.History, "RenderedFrame", 28);
 
                     // This imported, non-streaming asset is synchronously re-uploaded.
@@ -183,7 +201,10 @@ namespace Cone.Grass.Tests
             bool wind, TextureFormat sourceFormat, bool srgb)
         {
             if (!SystemInfo.SupportsTextureFormat(sourceFormat))
+            {
                 Assert.Ignore("The deformation precision regression requires the requested source texture format.");
+            }
+
             using (var fixture = new HistoryFixture())
             {
                 var source = new Texture2D(3, 2, sourceFormat, false, !srgb)
@@ -196,7 +217,9 @@ namespace Cone.Grass.Tests
                 {
                     if (!SystemInfo.IsFormatSupported(source.graphicsFormat, GraphicsFormatUsage.Sample) ||
                         !SystemInfo.IsFormatSupported(source.graphicsFormat, GraphicsFormatUsage.Linear))
+                    {
                         Assert.Ignore("The source texture must support the same linear sampling used by grass deformation.");
+                    }
                     // Distinct texels expose shifted/flipped pixel-center copies.
                     // .5002 rounds to .5 in half storage; ordinary UNorm values also
                     // change when unnecessarily stored as half floats.
@@ -228,11 +251,15 @@ namespace Cone.Grass.Tests
                     Vector4[] samples = SampleDeformation(source, snapshot.rt);
                     int channels = wind ? 2 : 4;
                     for (int pair = 0; pair < samples.Length / 2; pair++)
+                    {
                         for (int channel = 0; channel < channels; channel++)
+                        {
                             Assert.That(samples[pair * 2 + 1][channel],
                                 Is.EqualTo(samples[pair * 2][channel]).Within(pair < 6 ? 0.000001f : 0.00001f),
                                 "Snapshot sample " + pair + " channel " + channel +
                                 " must retain the current texture's sampled-space value.");
+                        }
+                    }
 
                     // A changed source must diverge from the already captured history.
                     // This rejects aliased inputs, zero results and a blank copy pass.
@@ -255,7 +282,10 @@ namespace Cone.Grass.Tests
         {
             if (!SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm) ||
                 !SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat))
+            {
                 Assert.Ignore("The format transition regression requires exact UNorm and float snapshot storage.");
+            }
+
             using (var fixture = new HistoryFixture())
             {
                 var source = new RenderTexture(new RenderTextureDescriptor(4, 4)
@@ -340,9 +370,14 @@ namespace Cone.Grass.Tests
                     Assert.That(samples[0].x, Is.InRange(0.1f, 0.4f),
                         "The active mip is neither the black full-resolution mip nor the white last mip.");
                     for (int pair = 0; pair < samples.Length / 2; pair++)
+                    {
                         for (int channel = 0; channel < 2; channel++)
+                        {
                             Assert.That(samples[pair * 2 + 1][channel],
                                 Is.EqualTo(samples[pair * 2][channel]).Within(pair < 6 ? 0.000001f : 0.00001f));
+                        }
+                    }
+
                     LogAssert.NoUnexpectedReceived();
                 }
                 finally
@@ -359,7 +394,10 @@ namespace Cone.Grass.Tests
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
                 !SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB))
+            {
                 Assert.Ignore("The encoded history storage check requires renderable sRGB textures.");
+            }
+
             var descriptor = new RenderTextureDescriptor(4, 4)
             {
                 graphicsFormat = GraphicsFormat.R8G8B8A8_SRGB,
@@ -368,7 +406,10 @@ namespace Cone.Grass.Tests
                 bindMS = false
             };
             if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != samples)
+            {
                 Assert.Ignore("The active graphics device cannot create the requested sample count.");
+            }
+
             var source = new RenderTexture(descriptor);
             try
             {
@@ -520,9 +561,14 @@ namespace Cone.Grass.Tests
         private static void AssertReleased(GraphicsBuffer[] buffers, RTHandle[] textures)
         {
             foreach (GraphicsBuffer buffer in buffers)
+            {
                 Assert.That(buffer.IsValid(), Is.False, "No root/count/dispatch allocation should outlive unavailable motion.");
+            }
+
             foreach (RTHandle texture in textures)
+            {
                 Assert.That(texture.rt == null, Is.True, "Interaction and wind history should be released too.");
+            }
         }
 
         private static object GetField(object owner, string name) =>
@@ -543,9 +589,15 @@ namespace Cone.Grass.Tests
             {
                 if (!SystemInfo.supportsComputeShaders || !SystemInfo.supportsIndirectArgumentsBuffer ||
                     SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                {
                     Assert.Ignore("Motion lifetime regression requires actual graphics buffers and render textures.");
+                }
+
                 if (!(RenderPipelineManager.currentPipeline is UniversalRenderPipeline))
+                {
                     Assert.Ignore("Motion lifetime regression requires an initialized URP instance and its RTHandle pool.");
+                }
+
                 Camera = new GameObject("Grass motion lifetime test").AddComponent<Camera>();
                 try
                 {
@@ -570,10 +622,16 @@ namespace Cone.Grass.Tests
                 GraphicsFormat windFormat = SelectSnapshotFormat(wind, true);
                 GraphicsFormat slopeFormat = SelectSnapshotFormat(slope, false);
                 if (windFormat == GraphicsFormat.None || slopeFormat == GraphicsFormat.None)
+                {
                     Assert.Ignore("Motion lifetime regression requires compatible lossless snapshot texture formats.");
+                }
+
                 if ((windFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(wind, SystemInfo.copyTextureSupport)) ||
                     (slopeFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(slope, SystemInfo.copyTextureSupport)))
+                {
                     Assert.Ignore("sRGB motion history requires exact copying from this source texture type.");
+                }
+
                 return (bool)History.GetType().GetMethod("EnsureAllocation")
                     .Invoke(History, new object[] { 3, slope, wind, slopeFormat, windFormat });
             }
@@ -614,7 +672,9 @@ namespace Cone.Grass.Tests
             {
                 Renderer.Dispose();
                 if (Camera)
+                {
                     Object.DestroyImmediate(Camera.gameObject);
+                }
             }
         }
     }
@@ -703,10 +763,16 @@ namespace Cone.Grass.Tests
                 // Warm the exact delegate outside the measurement. Reflection and
                 // NUnit allocations are intentionally excluded from this hot path.
                 for (int i = 0; i < 16; i++)
+                {
                     captureCurrent(offsets, capacities, meshes);
+                }
+
                 long before = GC.GetAllocatedBytesForCurrentThread();
                 for (int i = 0; i < 128; i++)
+                {
                     captureCurrent(offsets, capacities, meshes);
+                }
+
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
                 Assert.That(allocated, Is.Zero, "Recording an unchanged motion layout must reuse its pooled pass storage.");
 
@@ -719,7 +785,9 @@ namespace Cone.Grass.Tests
             finally
             {
                 foreach (Mesh mesh in meshes)
+                {
                     Object.DestroyImmediate(mesh);
+                }
             }
         }
 

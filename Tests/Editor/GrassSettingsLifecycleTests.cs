@@ -21,7 +21,7 @@ namespace Cone.Grass.Tests
         [Test]
         public void NewMotionSettingsStartWithHistoryDisabled()
         {
-            Assert.That(new GrassMotionVectors.Settings().mode, Is.EqualTo(GrassMotionVectors.Mode.Off));
+            Assert.That(new GrassMotionVectors.Settings().Mode, Is.EqualTo(GrassMotionVectors.Mode.Off));
         }
 
         [Test]
@@ -36,7 +36,10 @@ namespace Cone.Grass.Tests
             {
                 fixture = new GrassSavedSceneFixture();
                 if (previous)
+                {
                     previous.enabled = false;
+                }
+
                 var gameObject = new GameObject("Grass settings registration");
                 Assert.That(gameObject.scene, Is.EqualTo(fixture.Source), "Create settings in the owned saved source scene.");
                 settings = gameObject.AddComponent<InfiniteGrassRenderer>();
@@ -69,7 +72,9 @@ namespace Cone.Grass.Tests
                     try
                     {
                         if (owned && owned.enabled)
+                        {
                             owned.enabled = false;
+                        }
                     }
                     catch (Exception error)
                     { cleanupFailures.Add(new InvalidOperationException("Disable retained owned settings after source closure failed.", error)); }
@@ -77,9 +82,14 @@ namespace Cone.Grass.Tests
                 try
                 {
                     if (previous && previous.enabled != previousEnabled)
+                    {
                         previous.enabled = previousEnabled;
+                    }
+
                     if (previous)
+                    {
                         Assert.That(previous.enabled, Is.EqualTo(previousEnabled), "Restore exact prior grass settings enabled state.");
+                    }
                 }
                 catch (Exception error)
                 { cleanupFailures.Add(new InvalidOperationException("Restore prior grass settings enabled state.", error)); }
@@ -88,7 +98,10 @@ namespace Cone.Grass.Tests
                 if (cleanupFailures.Count > 0)
                 {
                     if (bodyFailure != null)
+                    {
                         cleanupFailures.Insert(0, bodyFailure);
+                    }
+
                     throw new AggregateException("Settings registration body/owned cleanup failures retained.", cleanupFailures);
                 }
             }
@@ -121,7 +134,10 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
             bool previousEnabled = previous && previous.enabled;
             if (previous)
+            {
                 previous.enabled = false;
+            }
+
             Scene preview = default;
             GameObject gameObject = null;
             try
@@ -141,16 +157,26 @@ namespace Cone.Grass.Tests
 
                 Assert.That(InfiniteGrassRenderer.Instance, Is.Null);
                 foreach (Mesh mesh in meshes)
+                {
                     Assert.That(mesh == null, Is.True, "A former owner must release its generated meshes.");
+                }
             }
             finally
             {
                 if (gameObject)
+                {
                     Object.DestroyImmediate(gameObject);
+                }
+
                 if (preview.IsValid())
+                {
                     EditorSceneManager.ClosePreviewScene(preview);
+                }
+
                 if (previous)
+                {
                     previous.enabled = previousEnabled;
+                }
             }
         }
 
@@ -160,7 +186,10 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
             bool previousEnabled = previous && previous.enabled;
             if (previous)
+            {
                 previous.enabled = false;
+            }
+
             Scene preview = default;
             GameObject originalObject = null;
             GameObject replacementObject = null;
@@ -185,19 +214,33 @@ namespace Cone.Grass.Tests
                 Assert.That(replacement.IsReadyForRendering, Is.True);
                 Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(replacement));
                 foreach (Mesh mesh in meshes)
+                {
                     Assert.That(mesh == null, Is.True, "The invalidated owner's generated meshes must be released.");
+                }
+
                 LogAssert.NoUnexpectedReceived();
             }
             finally
             {
                 if (replacementObject)
+                {
                     Object.DestroyImmediate(replacementObject);
+                }
+
                 if (originalObject)
+                {
                     Object.DestroyImmediate(originalObject);
+                }
+
                 if (preview.IsValid())
+                {
                     EditorSceneManager.ClosePreviewScene(preview);
+                }
+
                 if (previous)
+                {
                     previous.enabled = previousEnabled;
+                }
             }
         }
 
@@ -207,7 +250,10 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer previous = InfiniteGrassRenderer.Instance;
             bool previousEnabled = previous && previous.enabled;
             if (previous)
+            {
                 previous.enabled = false;
+            }
+
             GameObject originalObject = null;
             GameObject duplicateObject = null;
             try
@@ -224,17 +270,28 @@ namespace Cone.Grass.Tests
                 Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(original));
                 Assert.That(original.IsReadyForRendering, Is.True);
                 foreach (Mesh mesh in meshes)
+                {
                     Assert.That(mesh != null, Is.True, "Rejecting a duplicate must preserve the eligible owner's meshes.");
+                }
+
                 LogAssert.NoUnexpectedReceived();
             }
             finally
             {
                 if (duplicateObject)
+                {
                     Object.DestroyImmediate(duplicateObject);
+                }
+
                 if (originalObject)
+                {
                     Object.DestroyImmediate(originalObject);
+                }
+
                 if (previous)
+                {
                     previous.enabled = previousEnabled;
+                }
             }
         }
     }
@@ -259,7 +316,7 @@ namespace Cone.Grass.Tests
             {
                 var settings = gameObject.AddComponent<InfiniteGrassRenderer>();
                 // Runtime assignments do not pass through OnValidate or OnEnable.
-                settings.maxBufferCount = millions;
+                settings.MaxBufferCount = millions;
                 Assert.That(settings.Capacity, Is.EqualTo(expected));
             }
             finally
@@ -285,8 +342,8 @@ namespace Cone.Grass.Tests
             try
             {
                 var settings = gameObject.AddComponent<InfiniteGrassRenderer>();
-                settings.maxBufferCount = millions;
-                settings.lodCapacityWeights = new Vector3(near, middle, far);
+                settings.MaxBufferCount = millions;
+                settings.LodCapacityWeights = new Vector3(near, middle, far);
                 int[] capacities = { -1, -1, -1, -1 };
                 int[] offsets = { -1, -1, -1, -1 };
 
@@ -353,22 +410,33 @@ namespace Cone.Grass.Tests
                 Assert.That(material.passCount, Is.GreaterThan(0));
                 int expected = expectedPassName == null ? -1 : material.FindPass(expectedPassName);
                 if (expectedPassName != null)
+                {
                     Assert.That(expected, Is.GreaterThanOrEqualTo(0));
+                }
+
                 if (expectedPassName != lightMode)
+                {
                     Assert.That(material.FindPass(lightMode), Is.LessThan(0),
                         "The regression must exercise the LightMode fallback after a pass-name miss.");
+                }
+
                 Assert.That(findPass(material, lightMode), Is.EqualTo(expected));
                 for (int i = 0; i < 32; i++)
+                {
                     findPass(material, lightMode);
+                }
 
-                const int iterations = 128;
+                const int Iterations = 128;
                 int result = 0;
                 long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < iterations; i++)
+                for (int i = 0; i < Iterations; i++)
+                {
                     result += findPass(material, lightMode);
+                }
+
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-                Assert.That(result, Is.EqualTo(expected * iterations));
+                Assert.That(result, Is.EqualTo(expected * Iterations));
                 Assert.That(allocated, Is.Zero,
                     "Per-frame capture pass lookup must not convert ShaderTagId values to managed tag-name strings.");
             }
@@ -393,11 +461,14 @@ namespace Cone.Grass.Tests
                 var arguments = new GraphicsBuffer.IndirectDrawIndexedArgs[3];
                 first.Arguments.GetData(arguments);
                 for (int lod = 0; lod < arguments.Length; lod++)
+                {
                     arguments[lod].instanceCount = (uint)(lod + 1);
+                }
+
                 first.Arguments.SetData(arguments);
-                fixture.Owner.lodCapacityWeights = new Vector3(0.2f, 0.3f, 0.5f);
-                fixture.Owner.spacing *= 2f;
-                fixture.Owner.drawDistance += 10f;
+                fixture.Owner.LodCapacityWeights = new Vector3(0.2f, 0.3f, 0.5f);
+                fixture.Owner.Spacing *= 2f;
+                fixture.Owner.DrawDistance += 10f;
                 for (int update = 0; update < 3; update++)
                 {
                     Assert.That(fixture.EnsureCoreResources(0), Is.False);
@@ -407,9 +478,11 @@ namespace Cone.Grass.Tests
                 second.AssertCurrent(fixture.CameraStates[1]);
                 first.Arguments.GetData(arguments);
                 for (int lod = 0; lod < arguments.Length; lod++)
+                {
                     Assert.That(arguments[lod].instanceCount, Is.EqualTo((uint)(lod + 1)));
+                }
 
-                fixture.Owner.maxBufferCount = 0.02f;
+                fixture.Owner.MaxBufferCount = 0.02f;
                 Assert.That(fixture.EnsureCoreResources(0), Is.False);
                 GraphicsBuffer grown = (GraphicsBuffer)GetField(state, "Positions");
                 Assert.That(grown, Is.Not.SameAs(first.Positions));
@@ -419,11 +492,11 @@ namespace Cone.Grass.Tests
                 first.AssertTexturesCurrent(state);
                 second.AssertCurrent(fixture.CameraStates[1]);
 
-                fixture.Owner.maxBufferCount = 0.015f;
+                fixture.Owner.MaxBufferCount = 0.015f;
                 Assert.That(fixture.EnsureCoreResources(0), Is.False);
                 Assert.That(GetField(state, "Positions"), Is.SameAs(grown),
                     "A small capacity reduction should reuse the existing buffer.");
-                fixture.Owner.maxBufferCount = 0.01f;
+                fixture.Owner.MaxBufferCount = 0.01f;
                 Assert.That(fixture.EnsureCoreResources(0), Is.False);
                 Assert.That(grown.IsValid(), Is.False);
                 var shrunk = new CoreResources(state);
@@ -431,7 +504,7 @@ namespace Cone.Grass.Tests
                 first.AssertBuffersCurrent(state, includePositions: false);
                 first.AssertTexturesCurrent(state);
 
-                fixture.Owner.grassMeshSubdivision = fixture.Owner.grassMeshSubdivision == 0 ? 1 : 0;
+                fixture.Owner.GrassMeshSubdivision = fixture.Owner.GrassMeshSubdivision == 0 ? 1 : 0;
                 Assert.That(fixture.EnsureCoreResources(0), Is.False);
                 shrunk.AssertCurrent(state);
                 shrunk.Arguments.GetData(arguments);
@@ -444,7 +517,7 @@ namespace Cone.Grass.Tests
                     Assert.That(arguments[lod].instanceCount, Is.Zero);
                 }
 
-                fixture.Owner.captureResolution = 256;
+                fixture.Owner.CaptureResolution = 256;
                 Assert.That(fixture.EnsureCoreResources(0), Is.True);
                 shrunk.AssertBuffersCurrent(state);
                 var resized = new CoreResources(state);
@@ -475,9 +548,13 @@ namespace Cone.Grass.Tests
                 before.Arguments.Dispose();
                 RTHandle lostHeight = before.Textures[0];
                 if (destroyTexture)
+                {
                     Object.DestroyImmediate(lostHeight.rt);
+                }
                 else
+                {
                     lostHeight.rt.Release();
+                }
 
                 Assert.That(fixture.EnsureCoreResources(0), Is.True,
                     "Lost capture storage must invalidate cached capture contents.");
@@ -566,8 +643,8 @@ namespace Cone.Grass.Tests
                     Assert.That(historyWind[camera].rt.Create(), Is.True);
                 }
                 long required = (long)fixture.Owner.Capacity * sizeof(float) * 4;
-                const string warning = "The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.";
-                LogAssert.Expect(LogType.Warning, warning);
+                const string Warning = "The requested grass position buffer exceeds this device's maximum graphics-buffer size. Reduce GPU Capacity.";
+                LogAssert.Expect(LogType.Warning, Warning);
                 Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
                     fixture.Cameras[0], required - 1), Is.False);
                 first.AssertReleased();
@@ -578,8 +655,11 @@ namespace Cone.Grass.Tests
                 Assert.That(historyKeys[1].IsValid() && historyWind[1].rt.IsCreated(), Is.True);
                 second.AssertCurrent(fixture.CameraStates[1]);
                 for (int attempt = 0; attempt < 3; attempt++)
+                {
                     Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
                         fixture.Cameras[0], required - 1), Is.False);
+                }
+
                 Assert.That(fixture.States.Count, Is.EqualTo(1),
                     "Repeated unsupported renders must not recreate the rejected camera's state.");
                 LogAssert.NoUnexpectedReceived();
@@ -590,7 +670,7 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.EnsureCoreResources(0), Is.True);
                 var recovered = new CoreResources(fixture.CameraStates[0]);
                 recovered.AssertLive();
-                LogAssert.Expect(LogType.Warning, warning);
+                LogAssert.Expect(LogType.Warning, Warning);
                 Assert.That(InvokePrivate(fixture.Pass, "ValidateBufferCapacity", fixture.Owner,
                     fixture.Cameras[1], required - 1), Is.False);
                 second.AssertReleased();
@@ -608,12 +688,12 @@ namespace Cone.Grass.Tests
         {
             using (var fixture = new RendererFixture())
             {
-                fixture.Owner.grassMaterial = missingMaterial ? null : AssetDatabase.LoadAssetAtPath<Material>(
+                fixture.Owner.GrassMaterial = missingMaterial ? null : AssetDatabase.LoadAssetAtPath<Material>(
                     "Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat");
                 ComputeShader shader = missingMaterial ? AssetDatabase.LoadAssetAtPath<ComputeShader>(
                     "Packages/com.cone.grass/Runtime/Compute/GrassPositionsCompute.compute") : null;
                 SetField(fixture.Feature, "computeShader", shader);
-                Assert.That(missingMaterial ? shader != null : fixture.Owner.grassMaterial != null, Is.True);
+                Assert.That(missingMaterial ? shader != null : fixture.Owner.GrassMaterial != null, Is.True);
                 RenderingData renderingData = default;
 
                 fixture.Feature.AddRenderPasses(null, ref renderingData);
@@ -621,7 +701,9 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.States.Count, Is.Zero);
                 Assert.That(fixture.Histories.Count, Is.Zero);
                 foreach (object state in fixture.CameraStates)
+                {
                     Assert.That(GetField(state, "Disposed"), Is.True);
+                }
             }
         }
 
@@ -636,29 +718,32 @@ namespace Cone.Grass.Tests
                 try
                 {
                     Assert.That(incompatible.FindPass("GrassForward"), Is.LessThan(0));
-                    fixture.Owner.grassMaterial = incompatible;
-                    const string warning = "The grass material needs the GrassForward pass from the package blade shader.";
+                    fixture.Owner.GrassMaterial = incompatible;
+                    const string Warning = "The grass material needs the GrassForward pass from the package blade shader.";
 
-                    LogAssert.Expect(LogType.Warning, warning);
+                    LogAssert.Expect(LogType.Warning, Warning);
                     ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
                     ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
 
                     Assert.That(fixture.States.Count, Is.Zero);
                     Assert.That(fixture.Histories.Count, Is.Zero);
                     foreach (object state in fixture.CameraStates)
+                    {
                         Assert.That(GetField(state, "Disposed"), Is.True);
+                    }
+
                     LogAssert.NoUnexpectedReceived();
 
-                    fixture.Owner.grassMaterial = AssetDatabase.LoadAssetAtPath<Material>(
+                    fixture.Owner.GrassMaterial = AssetDatabase.LoadAssetAtPath<Material>(
                         "Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat");
-                    Assert.That(fixture.Owner.grassMaterial, Is.Not.Null);
-                    Assert.That(fixture.Owner.grassMaterial.FindPass("GrassForward"), Is.GreaterThanOrEqualTo(0));
+                    Assert.That(fixture.Owner.GrassMaterial, Is.Not.Null);
+                    Assert.That(fixture.Owner.GrassMaterial.FindPass("GrassForward"), Is.GreaterThanOrEqualTo(0));
                     // This fixture has no compute shader; a valid material exits at
                     // that next prerequisite without constructing a graph or buffers.
                     ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
 
-                    fixture.Owner.grassMaterial = incompatible;
-                    LogAssert.Expect(LogType.Warning, warning);
+                    fixture.Owner.GrassMaterial = incompatible;
+                    LogAssert.Expect(LogType.Warning, Warning);
                     ((ScriptableRenderPass)fixture.Pass).RecordRenderGraph(null, null);
                     Assert.That(fixture.States.Count, Is.Zero,
                         "An incompatible material must never reach camera allocation.");
@@ -678,9 +763,13 @@ namespace Cone.Grass.Tests
             using (var fixture = new RendererFixture())
             {
                 if (destroyedCamera)
+                {
                     Object.DestroyImmediate(fixture.Cameras[0].gameObject);
+                }
                 else
+                {
                     SetField(fixture.CameraStates[0], "LastUsedTime", Time.realtimeSinceStartupAsDouble - 11.0);
+                }
 
                 fixture.Pass.GetType().GetMethod("PruneCameras").Invoke(fixture.Pass, null);
 
@@ -702,7 +791,10 @@ namespace Cone.Grass.Tests
                 ScriptableRendererFeature feature = fixture.Feature;
                 feature.SetActive(!inactiveFeature);
                 if (!inactiveFeature)
+                {
                     SetField(fixture.CameraStates[0], "LastUsedTime", Time.realtimeSinceStartupAsDouble - 11.0);
+                }
+
                 typeof(InfiniteGrassRenderer).GetProperty(nameof(InfiniteGrassRenderer.VisibleGrassCount))
                     .SetValue(fixture.Owner, 123u);
                 MethodInfo beginContext = typeof(GrassDataRendererFeature).GetMethod("OnBeginContextRendering",
@@ -740,7 +832,9 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.States.Count, Is.Zero);
                 Assert.That(fixture.Histories.Count, Is.Zero);
                 foreach (object state in fixture.CameraStates)
+                {
                     Assert.That(GetField(state, "Disposed"), Is.True);
+                }
             }
         }
 
@@ -855,15 +949,22 @@ namespace Cone.Grass.Tests
                     terrain.hideFlags = flags;
                     Assert.That(Array.IndexOf(Terrain.activeTerrains, terrain), Is.GreaterThanOrEqualTo(0));
                     if (flags == HideFlags.DontSave)
+                    {
                         Assert.That(Array.IndexOf(Object.FindObjectsByType<Terrain>(FindObjectsInactive.Include), terrain),
                             Is.LessThan(0), "The native active list covers sources normal object discovery excludes.");
+                    }
 
                     InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
                     IList inventory = (IList)GetField(fixture.Pass, "terrainInventory");
                     int retained = 0;
                     foreach (Terrain source in inventory)
+                    {
                         if (source == terrain)
+                        {
                             retained++;
+                        }
+                    }
+
                     Assert.That(retained, Is.EqualTo(1));
                     object state = fixture.CameraStates[0];
                     InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", state,
@@ -985,11 +1086,18 @@ namespace Cone.Grass.Tests
 
                 SubMeshDescriptor subset = mesh.GetSubMesh(0);
                 if (changedField == 0)
+                {
                     subset.indexCount = 3;
+                }
                 else if (changedField == 1)
+                {
                     subset.indexStart = 3;
+                }
                 else
+                {
                     subset.baseVertex = 1;
+                }
+
                 mesh.SetSubMesh(0, subset);
 
                 Assert.That(fixture.Owner.GetGrassMeshCache(), Is.SameAs(mesh));
@@ -1080,7 +1188,10 @@ namespace Cone.Grass.Tests
                 Assert.That(GetField(fixture.State, "CandidateCount"), Is.Zero);
                 Assert.That(GetField(fixture.State, "WarnedBudget"), Is.True);
                 foreach (object dispatch in fixture.Dispatches)
+                {
                     Assert.That(GetField(dispatch, "Group"), Is.Null);
+                }
+
                 fixture.AssertNoGpuAllocation();
             }
         }
@@ -1104,8 +1215,13 @@ namespace Cone.Grass.Tests
         private static bool ContainsDraw(IList draws, Renderer renderer)
         {
             foreach (object draw in draws)
+            {
                 if (ReferenceEquals(GetField(draw, "Renderer"), renderer))
+                {
                     return true;
+                }
+            }
+
             return false;
         }
 
@@ -1120,10 +1236,10 @@ namespace Cone.Grass.Tests
 
         private sealed class CoreResources
         {
-            private static readonly string[] TextureFields = { "Height", "HeightDepth", "Density", "Mask", "Color", "Slope", "Ground" };
+            private static readonly string[] s_textureFields = { "Height", "HeightDepth", "Density", "Mask", "Color", "Slope", "Ground" };
             public readonly GraphicsBuffer Positions, Counts, Arguments;
-            public readonly RTHandle[] Textures = new RTHandle[TextureFields.Length];
-            private readonly RenderTexture[] storage = new RenderTexture[TextureFields.Length];
+            public readonly RTHandle[] Textures = new RTHandle[s_textureFields.Length];
+            private readonly RenderTexture[] _storage = new RenderTexture[s_textureFields.Length];
 
             public CoreResources(object state)
             {
@@ -1132,8 +1248,8 @@ namespace Cone.Grass.Tests
                 Arguments = (GraphicsBuffer)GetField(state, "Arguments");
                 for (int i = 0; i < Textures.Length; i++)
                 {
-                    Textures[i] = (RTHandle)GetField(state, TextureFields[i]);
-                    storage[i] = Textures[i].rt;
+                    Textures[i] = (RTHandle)GetField(state, s_textureFields[i]);
+                    _storage[i] = Textures[i].rt;
                 }
                 AssertLive();
             }
@@ -1142,7 +1258,9 @@ namespace Cone.Grass.Tests
             {
                 Assert.That(Positions.IsValid() && Counts.IsValid() && Arguments.IsValid(), Is.True);
                 foreach (RTHandle texture in Textures)
+                {
                     Assert.That(texture.rt != null && texture.rt.IsCreated(), Is.True);
+                }
             }
 
             public void AssertCurrent(object state)
@@ -1155,7 +1273,10 @@ namespace Cone.Grass.Tests
             public void AssertBuffersCurrent(object state, bool includePositions = true)
             {
                 if (includePositions)
+                {
                     Assert.That(GetField(state, "Positions"), Is.SameAs(Positions));
+                }
+
                 Assert.That(GetField(state, "Counts"), Is.SameAs(Counts));
                 Assert.That(GetField(state, "Arguments"), Is.SameAs(Arguments));
             }
@@ -1163,12 +1284,14 @@ namespace Cone.Grass.Tests
             public void AssertTexturesCurrent(object state, string except = null)
             {
                 for (int i = 0; i < Textures.Length; i++)
-                    if (TextureFields[i] != except)
+                {
+                    if (s_textureFields[i] != except)
                     {
-                        Assert.That(GetField(state, TextureFields[i]), Is.SameAs(Textures[i]));
-                        Assert.That(Textures[i].rt, Is.SameAs(storage[i]));
-                        Assert.That(storage[i].IsCreated(), Is.True);
+                        Assert.That(GetField(state, s_textureFields[i]), Is.SameAs(Textures[i]));
+                        Assert.That(Textures[i].rt, Is.SameAs(_storage[i]));
+                        Assert.That(_storage[i].IsCreated(), Is.True);
                     }
+                }
             }
 
             public void AssertDistinctFrom(CoreResources other)
@@ -1179,7 +1302,7 @@ namespace Cone.Grass.Tests
                 for (int i = 0; i < Textures.Length; i++)
                 {
                     Assert.That(Textures[i], Is.Not.SameAs(other.Textures[i]));
-                    Assert.That(storage[i], Is.Not.SameAs(other.storage[i]));
+                    Assert.That(_storage[i], Is.Not.SameAs(other._storage[i]));
                 }
             }
 
@@ -1189,7 +1312,7 @@ namespace Cone.Grass.Tests
                 for (int i = 0; i < Textures.Length; i++)
                 {
                     Assert.That(Textures[i].rt, Is.Null);
-                    Assert.That(!storage[i] || !storage[i].IsCreated(), Is.True);
+                    Assert.That(!_storage[i] || !_storage[i].IsCreated(), Is.True);
                 }
             }
         }
@@ -1199,27 +1322,27 @@ namespace Cone.Grass.Tests
             public readonly object State;
             public readonly IList Groups, Dispatches;
             public readonly TextureHandle Black, White;
-            private readonly RendererFixture renderer;
-            private readonly RenderGraph graph;
-            private readonly RenderTexture capture;
-            private readonly Bounds bounds;
+            private readonly RendererFixture _renderer;
+            private readonly RenderGraph _graph;
+            private readonly RenderTexture _capture;
+            private readonly Bounds _bounds;
 
             public DispatchFixture(float extent)
             {
                 try
                 {
-                    renderer = new RendererFixture();
-                    State = renderer.CameraStates[0];
+                    _renderer = new RendererFixture();
+                    State = _renderer.CameraStates[0];
                     Groups = (IList)GetField(State, "ActiveGroups");
                     Dispatches = (IList)GetField(State, "Dispatches");
-                    bounds = new Bounds(new Vector3(extent * 0.5f, 0f, extent * 0.5f),
+                    _bounds = new Bounds(new Vector3(extent * 0.5f, 0f, extent * 0.5f),
                         new Vector3(extent, 0f, extent));
-                    capture = new RenderTexture(128, 128, 0);
-                    SetField(State, "Density", RTHandles.Alloc(capture));
+                    _capture = new RenderTexture(128, 128, 0);
+                    SetField(State, "Density", RTHandles.Alloc(_capture));
                     SetField(State, "CaptureExtent", extent * 0.5f);
                     // Record distinct handles without compiling or executing the graph.
                     // The planner needs capture dimensions but never its GPU storage.
-                    graph = new RenderGraph("Grass Dispatch Lifetime Test");
+                    _graph = new RenderGraph("Grass Dispatch Lifetime Test");
                     Black = RecordTexture();
                     White = RecordTexture();
                     var imported = (IDictionary)GetField(State, "ImportedTextures");
@@ -1235,14 +1358,14 @@ namespace Cone.Grass.Tests
 
             public TextureHandle AddGroup()
             {
-                Type passType = renderer.Pass.GetType();
+                Type passType = _renderer.Pass.GetType();
                 object group = Activator.CreateInstance(passType.GetNestedType("TerrainGroup", BindingFlags.NonPublic), true);
                 object source = Activator.CreateInstance(passType.GetNestedType("PlacementSource", BindingFlags.NonPublic));
                 SetField(source, "Data", new GrassPlacementDrawData
                 {
-                    WorldBounds = bounds,
-                    WorldToMask = Matrix4x4.TRS(bounds.min, Quaternion.identity,
-                        new Vector3(bounds.size.x, 1f, bounds.size.z)).inverse,
+                    WorldBounds = _bounds,
+                    WorldToMask = Matrix4x4.TRS(_bounds.min, Quaternion.identity,
+                        new Vector3(_bounds.size.x, 1f, _bounds.size.z)).inverse,
                     Shape = GrassPlacementShape.Box,
                     Density = 1f
                 });
@@ -1256,22 +1379,24 @@ namespace Cone.Grass.Tests
             public void Build(bool failImport = false)
             {
                 if (failImport)
+                {
                     ((IDictionary)GetField(State, "ImportedTextures")).Remove(Texture2D.blackTexture);
+                }
                 // A missing graph deliberately injects an import failure after CPU
                 // planning, exercising the same cleanup as a real binding exception.
-                InvokePrivate(renderer.Pass, "BuildDispatches", failImport ? null : graph,
-                    State, renderer.Owner, bounds, 1f, true, Black);
+                InvokePrivate(_renderer.Pass, "BuildDispatches", failImport ? null : _graph,
+                    State, _renderer.Owner, _bounds, 1f, true, Black);
             }
 
             public void AssertNoGpuAllocation()
             {
-                Assert.That(capture.IsCreated(), Is.False);
+                Assert.That(_capture.IsCreated(), Is.False);
                 Assert.That(GetField(State, "Positions"), Is.Null);
                 Assert.That(GetField(State, "Counts"), Is.Null);
                 Assert.That(GetField(State, "Arguments"), Is.Null);
             }
 
-            private TextureHandle RecordTexture() => graph.CreateTexture(new TextureDesc(1, 1)
+            private TextureHandle RecordTexture() => _graph.CreateTexture(new TextureDesc(1, 1)
             {
                 name = "Grass Dispatch Test Input",
                 format = GraphicsFormat.R8G8B8A8_UNorm,
@@ -1281,10 +1406,12 @@ namespace Cone.Grass.Tests
 
             public void Dispose()
             {
-                graph?.Cleanup();
-                renderer?.Dispose();
-                if (capture)
-                    Object.DestroyImmediate(capture);
+                _graph?.Cleanup();
+                _renderer?.Dispose();
+                if (_capture)
+                {
+                    Object.DestroyImmediate(_capture);
+                }
             }
         }
 
@@ -1296,25 +1423,31 @@ namespace Cone.Grass.Tests
             public readonly IDictionary States, Histories;
             public readonly Camera[] Cameras = new Camera[2];
             public readonly object[] CameraStates = new object[2];
-            private readonly InfiniteGrassRenderer previous;
-            private readonly bool previousEnabled;
+            private readonly InfiniteGrassRenderer _previous;
+            private readonly bool _previousEnabled;
 
             public RendererFixture(int surfaceLayerMask = 0, bool allocateCoreResources = false)
             {
                 if (allocateCoreResources)
+                {
                     RequireCoreGraphicsSupport();
-                previous = InfiniteGrassRenderer.Instance;
-                previousEnabled = previous && previous.enabled;
-                if (previous)
-                    previous.enabled = false;
+                }
+
+                _previous = InfiniteGrassRenderer.Instance;
+                _previousEnabled = _previous && _previous.enabled;
+                if (_previous)
+                {
+                    _previous.enabled = false;
+                }
+
                 try
                 {
                     Owner = new GameObject("Grass renderer lifetime settings").AddComponent<InfiniteGrassRenderer>();
                     Assert.That(Owner.IsReadyForRendering, Is.True);
                     if (allocateCoreResources)
                     {
-                        Owner.maxBufferCount = 0.01f;
-                        Owner.captureResolution = 128;
+                        Owner.MaxBufferCount = 0.01f;
+                        Owner.CaptureResolution = 128;
                     }
                     Feature = ScriptableObject.CreateInstance<GrassDataRendererFeature>();
                     SetField(Feature, "heightMapLayer", (LayerMask)surfaceLayerMask);
@@ -1332,7 +1465,9 @@ namespace Cone.Grass.Tests
                         States.Add(Cameras[i], CameraStates[i]);
                         Histories.Add(Cameras[i], Activator.CreateInstance(historyType, true));
                         if (allocateCoreResources)
+                        {
                             Assert.That(EnsureCoreResources(i), Is.True);
+                        }
                     }
                 }
                 catch
@@ -1360,16 +1495,26 @@ namespace Cone.Grass.Tests
                 if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !SystemInfo.supportsComputeShaders ||
                     !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer ||
                     SystemInfo.maxTextureSize < 256 || SystemInfo.maxGraphicsBufferSize < 20000L * 16)
+                {
                     Assert.Ignore("Core grass resource tests require compute, indirect buffers and the bounded test allocation sizes.");
+                }
+
                 if (!(RenderPipelineManager.currentPipeline is UniversalRenderPipeline))
+                {
                     Assert.Ignore("Core grass resource tests require an initialized URP instance and its RTHandle pool.");
+                }
+
                 foreach (GraphicsFormat format in new[]
                 {
                     GraphicsFormat.R32G32_SFloat, GraphicsFormat.D32_SFloat, GraphicsFormat.R8_UNorm,
                     GraphicsFormat.R16G16B16A16_SFloat, GraphicsFormat.R8G8B8A8_UNorm
                 })
+                {
                     if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render))
+                    {
                         Assert.Ignore("Core grass resource tests require the package's default capture render formats.");
+                    }
+                }
             }
 
             public void Dispose()
@@ -1380,12 +1525,22 @@ namespace Cone.Grass.Tests
                     Object.DestroyImmediate(Feature);
                 }
                 if (Owner)
+                {
                     Object.DestroyImmediate(Owner.gameObject);
+                }
+
                 foreach (Camera camera in Cameras)
+                {
                     if (camera)
+                    {
                         Object.DestroyImmediate(camera.gameObject);
-                if (previous)
-                    previous.enabled = previousEnabled;
+                    }
+                }
+
+                if (_previous)
+                {
+                    _previous.enabled = _previousEnabled;
+                }
             }
         }
     }
@@ -1397,7 +1552,10 @@ namespace Cone.Grass.Tests
         public void WindTextureReconfigurationRejectsOnlyUnresolvedMultisampledStorage()
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || SystemInfo.supportsMultisampledTextures == 0)
+            {
                 Assert.Ignore("The wind input regression requires multisampled texture storage.");
+            }
+
             var descriptor = new RenderTextureDescriptor(4, 4)
             {
                 graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
@@ -1407,7 +1565,9 @@ namespace Cone.Grass.Tests
                 sRGB = false
             };
             if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != 4)
+            {
                 Assert.Ignore("The active graphics device does not support the requested 4x MSAA wind texture.");
+            }
 
             Shader shader = Shader.Find("InfiniteGrass/GrassBladeShader");
             Assert.That(shader, Is.Not.Null);
@@ -1613,7 +1773,10 @@ namespace Cone.Grass.Tests
                 material.SetTexture(coverage, Texture2D.whiteTexture);
                 material.SetTexture(detail, Texture2D.blackTexture);
                 for (int i = 0; i < external.Length; i++)
+                {
                     external[i] = new RenderTexture(4, 4, 0);
+                }
+
                 var block = new MaterialPropertyBlock();
                 block.SetTexture(coverage, external[0]);
                 block.SetTexture(detail, external[1]);
@@ -1663,7 +1826,9 @@ namespace Cone.Grass.Tests
                 Assert.That(textureIds, Is.Empty);
                 Assert.That(textures, Is.Empty);
                 foreach (RenderTexture texture in external)
+                {
                     Assert.That(texture.IsCreated(), Is.False, "Dependency collection must not allocate producer storage.");
+                }
             }
             finally
             {
@@ -1671,7 +1836,9 @@ namespace Cone.Grass.Tests
                 Object.DestroyImmediate(material);
                 Object.DestroyImmediate(shader);
                 foreach (RenderTexture texture in external)
+                {
                     Object.DestroyImmediate(texture);
+                }
             }
         }
 

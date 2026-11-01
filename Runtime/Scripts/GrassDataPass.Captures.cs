@@ -13,17 +13,22 @@ namespace Cone.Grass
             private void BuildHeightCapture(RenderGraph graph, CameraState state, TextureHandle height,
                 TextureHandle depth, Matrix4x4 captureVP)
             {
-                if (!heightMaterial && state.RequiresMeshHeight && !missingHeightWarning)
+                if (!_heightMaterial && state.RequiresMeshHeight && !_missingHeightWarning)
                 {
                     Debug.LogWarning("Grass mesh surfaces require the height capture material. Explicit Terrain areas still use TerrainData.");
-                    missingHeightWarning = true;
+                    _missingHeightWarning = true;
                 }
                 BuildRendererCapture(graph, state, "Grass Surface Height", state.HeightDraws, height, depth, captureVP, Color.clear);
                 if (state.SurfaceTerrains.Count == 0 || !EnsurePlacementMaterial())
+                {
                     return;
-                int terrainPass = placementMaterial.FindPass("TerrainHeight");
+                }
+
+                int terrainPass = _placementMaterial.FindPass("TerrainHeight");
                 if (terrainPass < 0)
+                {
                     return;
+                }
 
                 state.TerrainDraws.Clear();
                 for (int i = 0; i < state.SurfaceTerrains.Count; i++)
@@ -31,11 +36,17 @@ namespace Cone.Grass
                     Terrain terrain = state.SurfaceTerrains[i];
                     TerrainData data = terrain ? terrain.terrainData : null;
                     if (!data || !data.heightmapTexture)
+                    {
                         continue;
+                    }
+
                     Vector3 origin = terrain.transform.position;
                     Vector3 size = data.size;
                     if (!IsFinite(origin) || !IsFinite(size) || size.x <= 0f || size.z <= 0f)
+                    {
                         continue;
+                    }
+
                     Texture heightmap = data.heightmapTexture;
                     Texture holes = data.holesTexture;
                     state.TerrainDraws.Add(new TerrainDraw
@@ -51,13 +62,16 @@ namespace Cone.Grass
                     });
                 }
                 if (state.TerrainDraws.Count == 0)
+                {
                     return;
+                }
+
                 using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<TerrainCapturePass>(
                            "Grass Terrain Surface Height", out TerrainCapturePass pass))
                 {
                     pass.Draws = state.TerrainDraws;
-                    pass.Quad = captureQuad;
-                    pass.Material = placementMaterial;
+                    pass.Quad = _captureQuad;
+                    pass.Material = _placementMaterial;
                     pass.PassIndex = terrainPass;
                     pass.CaptureVP = captureVP;
                     for (int i = 0; i < pass.Draws.Count; i++)
@@ -109,18 +123,25 @@ namespace Cone.Grass
                         int textureCount = CollectCaptureTextures(draw.Renderer, draw.Material, draw.Submesh,
                             state.CaptureProperties, state.CaptureTextureIds, state.CaptureTextures);
                         for (int texture = 0; texture < textureCount; texture++)
+                        {
                             builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
+                        }
                     }
                     for (int i = 0; interactions != null && i < interactions.Count; i++)
                     {
                         int textureCount = CollectCaptureTextures(null, interactions[i].Material, 0,
                             state.CaptureProperties, state.CaptureTextureIds, state.CaptureTextures);
                         for (int texture = 0; texture < textureCount; texture++)
+                        {
                             builder.UseTexture(ImportTexture(graph, state, state.CaptureTextures[texture]), AccessFlags.Read);
+                        }
                     }
                     builder.SetRenderAttachment(target, 0, AccessFlags.Write);
                     if (pass.HasDepth)
+                    {
                         builder.SetRenderAttachmentDepth(depth, AccessFlags.Write);
+                    }
+
                     builder.AllowGlobalStateModification(true);
                     builder.SetRenderFunc(static (RendererCapturePass data, RasterGraphContext context) =>
                     {
@@ -132,7 +153,9 @@ namespace Cone.Grass
                         {
                             RendererDraw draw = data.Draws[i];
                             if (draw.Renderer && draw.Material)
+                            {
                                 context.cmd.DrawRenderer(draw.Renderer, draw.Material, draw.Submesh, draw.Pass);
+                            }
                         }
                         // Interactors register their world-space mesh directly. Their
                         // owned geometry never enters scene or surface-height discovery.
@@ -140,7 +163,9 @@ namespace Cone.Grass
                         {
                             InteractionDraw draw = data.Interactions[i];
                             if (draw.Mesh && draw.Material)
+                            {
                                 context.cmd.DrawMesh(draw.Mesh, Matrix4x4.identity, draw.Material, 0, draw.Pass);
+                            }
                         }
                     });
                 }
@@ -152,24 +177,37 @@ namespace Cone.Grass
                 textureIds.Clear();
                 textures.Clear();
                 if (!material)
+                {
                     return 0;
+                }
                 // Custom capture passes can expose inputs beyond _MainTex. Reuse
                 // the list overload so discovering them does not allocate an array.
                 material.GetTexturePropertyNameIDs(textureIds);
                 if (textureIds.Count == 0)
+                {
                     return 0;
+                }
+
                 for (int i = 0; i < textureIds.Count; i++)
+                {
                     AddCaptureTexture(material.GetTexture(textureIds[i]), textures);
+                }
+
                 if (renderer && renderer.HasPropertyBlock())
                 {
                     // Declare both override scopes conservatively, including inputs
                     // supplied only through an externally rendered texture override.
                     renderer.GetPropertyBlock(properties);
                     for (int i = 0; i < textureIds.Count; i++)
+                    {
                         AddCaptureTexture(properties.GetTexture(textureIds[i]), textures);
+                    }
+
                     renderer.GetPropertyBlock(properties, materialIndex);
                     for (int i = 0; i < textureIds.Count; i++)
+                    {
                         AddCaptureTexture(properties.GetTexture(textureIds[i]), textures);
+                    }
                 }
                 return textures.Count;
             }
@@ -191,10 +229,18 @@ namespace Cone.Grass
             private static void AddCaptureTexture(Texture texture, List<Texture> textures)
             {
                 if (!texture)
+                {
                     return;
+                }
+
                 for (int i = 0; i < textures.Count; i++)
+                {
                     if (textures[i] == texture)
+                    {
                         return;
+                    }
+                }
+
                 textures.Add(texture);
             }
 
@@ -207,7 +253,10 @@ namespace Cone.Grass
                     {
                         TerrainGroup group = state.ActiveGroups[i];
                         if (!group.DensityDirty)
+                        {
                             continue;
+                        }
+
                         BuildPlacementCapture(graph, state, group.Sources, group.DensityTexture,
                             captureVP, 0, true);
                         group.DensityCaptured = true;
@@ -215,9 +264,14 @@ namespace Cone.Grass
                     }
                 }
                 if ((!authored || state.ActiveGroups.Count == 0) && clearEmptyDensity)
+                {
                     BuildPlacementCapture(graph, state, state.Sources, density, captureVP, 0, false);
+                }
+
                 if (groundDirty)
+                {
                     BuildPlacementCapture(graph, state, state.Sources, ground, captureVP, 1, authored);
+                }
             }
 
             private void BuildPlacementCapture(RenderGraph graph, CameraState state,
@@ -227,28 +281,39 @@ namespace Cone.Grass
                            passIndex == 1 ? "Grass Ground Color" : "Grass Authored Surface Density", out PlacementCapturePass pass))
                 {
                     pass.Sources = sources;
-                    pass.Quad = captureQuad;
-                    pass.Material = placementMaterial;
+                    pass.Quad = _captureQuad;
+                    pass.Material = _placementMaterial;
                     pass.CaptureVP = captureVP;
                     pass.PassIndex = passIndex;
-                    pass.DrawSources = drawSources && placementMaterial;
+                    pass.DrawSources = drawSources && _placementMaterial;
                     // Each map imports only its own source textures. Static maps do
                     // not keep wrappers or unrelated source inputs alive every frame.
                     for (int i = 0; pass.DrawSources && i < sources.Count; i++)
                     {
                         GrassPlacementDrawData source = sources[i].Data;
                         if (source.DensityTexture)
+                        {
                             builder.UseTexture(ImportTexture(graph, state, source.DensityTexture), AccessFlags.Read);
+                        }
+
                         if (passIndex != 1)
+                        {
                             continue;
+                        }
+
                         if (source.GroundColorTexture)
+                        {
                             builder.UseTexture(ImportTexture(graph, state, source.GroundColorTexture), AccessFlags.Read);
+                        }
+
                         if (source.GroundLayerTexture)
                         {
                             builder.UseTexture(ImportTexture(graph, state, source.GroundLayerTexture), AccessFlags.Read);
                             Texture samplerTexture = ResolveGroundLayerSamplerTexture(source);
                             if (samplerTexture != source.GroundLayerTexture)
+                            {
                                 builder.UseTexture(ImportTexture(graph, state, samplerTexture), AccessFlags.Read);
+                            }
                         }
                     }
                     builder.SetRenderAttachment(target, 0, AccessFlags.Write);
@@ -258,7 +323,10 @@ namespace Cone.Grass
                         context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
                         context.cmd.ClearRenderTarget(false, true, Color.clear);
                         if (!data.DrawSources)
+                        {
                             return;
+                        }
+
                         for (int i = 0; i < data.Sources.Count; i++)
                         {
                             GrassPlacementDrawData source = data.Sources[i].Data;
@@ -296,20 +364,22 @@ namespace Cone.Grass
             private void BuildVariantCapture(RenderGraph graph, CameraState state, Matrix4x4 captureVP,
                 TextureHandle weights0, TextureHandle weights1)
             {
-                int passIndex = placementMaterial ? placementMaterial.FindPass("PlacementVariants") : -1;
+                int passIndex = _placementMaterial ? _placementMaterial.FindPass("PlacementVariants") : -1;
                 using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<VariantCapturePass>(
                            "Grass Kind Weights", out VariantCapturePass pass))
                 {
                     pass.Sources = state.Sources;
-                    pass.Quad = captureQuad;
-                    pass.Material = placementMaterial;
+                    pass.Quad = _captureQuad;
+                    pass.Material = _placementMaterial;
                     pass.CaptureVP = captureVP;
                     pass.PassIndex = passIndex;
                     for (int i = 0; passIndex >= 0 && i < state.Sources.Count; i++)
                     {
                         Texture densityTexture = state.Sources[i].Data.DensityTexture;
                         if (densityTexture)
+                        {
                             builder.UseTexture(ImportTexture(graph, state, densityTexture), AccessFlags.Read);
+                        }
                     }
                     builder.SetRenderAttachment(weights0, 0, AccessFlags.Write);
                     builder.SetRenderAttachment(weights1, 1, AccessFlags.Write);
@@ -319,12 +389,18 @@ namespace Cone.Grass
                         context.cmd.SetGlobalMatrix(Id.CaptureVP, data.CaptureVP);
                         context.cmd.ClearRenderTarget(false, true, Color.clear);
                         if (data.PassIndex < 0 || !data.Material)
+                        {
                             return;
+                        }
+
                         for (int i = 0; i < data.Sources.Count; i++)
                         {
                             GrassPlacementDrawData source = data.Sources[i].Data;
                             if (!source.OverridesVariants)
+                            {
                                 continue;
+                            }
+
                             MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
                             properties.SetMatrix(Id.PlacementMapping, source.WorldToMask);
                             properties.SetVector(Id.PlacementTerrain, source.TerrainRect);
@@ -350,28 +426,30 @@ namespace Cone.Grass
             // it recaptures every frame instead of keeping the blade path's versions.
             private void RecordInteractionField(RenderGraph graph, Camera camera, InfiniteGrassRenderer owner)
             {
-                float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.textureUpdateThreshold, 10f));
-                float extent = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f)) + capturePadding;
+                float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.TextureUpdateThreshold, 10f));
+                float extent = Mathf.Max(0.01f, FiniteOr(owner.DrawDistance, 300f)) + capturePadding;
                 Vector3 cameraPosition = camera.transform.position;
                 Vector2 center = new Vector2(Mathf.Floor(cameraPosition.x / capturePadding) * capturePadding,
                     Mathf.Floor(cameraPosition.z / capturePadding) * capturePadding);
                 if (!IsFinite(cameraPosition) || !IsFinite(new Vector3(center.x, extent * 2f, center.y)))
+                {
                     return;
+                }
 
                 PruneCameras();
-                if (!cameras.TryGetValue(camera, out CameraState state))
+                if (!_cameras.TryGetValue(camera, out CameraState state))
                 {
                     state = new CameraState(camera);
-                    cameras.Add(camera, state);
+                    _cameras.Add(camera, state);
                 }
                 state.LastUsedTime = Time.realtimeSinceStartupAsDouble;
                 state.ImportedTextures.Clear();
                 // The blade caches are not kept up here; drawing blades again recaptures them all.
                 state.CacheValid = false;
-                motion.Release(camera);
+                _motion.Release(camera);
                 state.EnsureInteractionResource(owner);
 
-                Vector2 range = ResolveCaptureHeightRange(owner.captureHeightRange);
+                Vector2 range = ResolveCaptureHeightRange(owner.CaptureHeightRange);
                 Bounds bounds = new Bounds();
                 bounds.SetMinMax(new Vector3(center.x - extent, range.x, center.y - extent),
                     new Vector3(center.x + extent, Mathf.Max(range.x + 1f, range.y), center.y + extent));

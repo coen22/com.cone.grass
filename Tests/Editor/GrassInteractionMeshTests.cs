@@ -140,9 +140,13 @@ namespace Cone.Grass.Tests
                 for (int i = 0; i < vertices.Length; i++)
                 {
                     if (sharedColors.TryGetValue(vertices[i], out Color prior))
+                    {
                         Assert.That(colors[i], Is.EqualTo(prior), "Adjacent cells must agree along their common edge.");
+                    }
                     else
+                    {
                         sharedColors.Add(vertices[i], colors[i]);
+                    }
                 }
                 Assert.That(sharedColors[Vector3.zero], Is.EqualTo(new Color(1f, 0.5f, 0f, 1f)));
                 Assert.That(sharedColors[Vector3.right], Is.EqualTo(new Color(0.5f, 1f, 0f, 1f)));
@@ -320,7 +324,10 @@ namespace Cone.Grass.Tests
         {
             var field = new GrassInteractionField(1f, GrassInteractionField.MaximumCapacity);
             for (int i = 0; i < field.Capacity; i++)
+            {
                 Stamp(field, new Vector2((i % 64) * 3f, (i / 64) * 3f), 0.0, Vector2.right);
+            }
+
             Assert.That(field.Count, Is.EqualTo(GrassInteractionField.MaximumCapacity));
             using (var output = new GrassInteractionMesh())
             {
@@ -370,7 +377,9 @@ namespace Cone.Grass.Tests
                 !SystemInfo.SupportsTextureFormat(TextureFormat.RGBAFloat) ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R32G32B32A32_SFloat, GraphicsFormatUsage.Render) ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R32G32B32A32_SFloat, GraphicsFormatUsage.Blend))
+            {
                 Assert.Ignore("Interaction capture tests require a graphics device and a blendable RGBA float target.");
+            }
         }
 
         private static Color RenderSharedEdge(GrassInteractionMesh output)
@@ -389,7 +398,9 @@ namespace Cone.Grass.Tests
                 target = new RenderTexture(new RenderTextureDescriptor(1, 1)
                 {
                     graphicsFormat = GraphicsFormat.R32G32B32A32_SFloat,
-                    depthBufferBits = 0, msaaSamples = 1, sRGB = false
+                    depthBufferBits = 0,
+                    msaaSamples = 1,
+                    sRGB = false
                 });
                 Assert.That(target.Create(), Is.True);
                 readback = new Texture2D(1, 1, TextureFormat.RGBAFloat, false, true);
@@ -418,7 +429,11 @@ namespace Cone.Grass.Tests
             {
                 commands?.Release();
                 RenderTexture.active = previousTarget;
-                if (readback) Object.DestroyImmediate(readback);
+                if (readback)
+                {
+                    Object.DestroyImmediate(readback);
+                }
+
                 if (target)
                 {
                     target.Release();
@@ -449,7 +464,10 @@ namespace Cone.Grass.Tests
             for (int i = 0; i < vertices.Length; i++)
             {
                 if (vertices[i] != position)
+                {
                     continue;
+                }
+
                 found++;
                 Assert.That(colors[i], Is.EqualTo(expected));
             }
@@ -464,12 +482,18 @@ namespace Cone.Grass.Tests
             Assert.That(vertices.Length, Is.EqualTo(expectedCells * 4));
             Assert.That(triangles.Length, Is.EqualTo(expectedCells * 6));
             for (int i = 0; i < vertices.Length; i += 4)
+            {
                 Assert.That(cells.Add(new Vector2(vertices[i].x, vertices[i].z)), Is.True,
                     "Every world grid cell must be emitted once to avoid alpha accumulation.");
+            }
+
             for (int i = 0; i < triangles.Length; i += 3)
             {
                 for (int j = 0; j < 3; j++)
+                {
                     Assert.That(triangles[i + j], Is.InRange(0, vertices.Length - 1));
+                }
+
                 Vector3 normal = Vector3.Cross(vertices[triangles[i + 1]] - vertices[triangles[i]],
                     vertices[triangles[i + 2]] - vertices[triangles[i]]);
                 Assert.That(normal.y, Is.GreaterThan(0f), "Cell triangles must have consistent non-degenerate winding.");

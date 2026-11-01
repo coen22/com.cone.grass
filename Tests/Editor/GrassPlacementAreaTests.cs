@@ -1,7 +1,7 @@
-using Cone.Grass.Editor;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using Cone.Grass.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -15,20 +15,30 @@ namespace Cone.Grass.Tests
 {
     public sealed class GrassPlacementAreaTests
     {
-        private readonly List<GameObject> sceneObjects = new List<GameObject>();
-        private readonly List<Object> assets = new List<Object>();
+        private readonly List<GameObject> _sceneObjects = new List<GameObject>();
+        private readonly List<Object> _assets = new List<Object>();
 
         [TearDown]
         public void TearDown()
         {
-            for (int i = sceneObjects.Count - 1; i >= 0; i--)
-                if (sceneObjects[i])
-                    Object.DestroyImmediate(sceneObjects[i]);
-            for (int i = assets.Count - 1; i >= 0; i--)
-                if (assets[i])
-                    Object.DestroyImmediate(assets[i]);
-            sceneObjects.Clear();
-            assets.Clear();
+            for (int i = _sceneObjects.Count - 1; i >= 0; i--)
+            {
+                if (_sceneObjects[i])
+                {
+                    Object.DestroyImmediate(_sceneObjects[i]);
+                }
+            }
+
+            for (int i = _assets.Count - 1; i >= 0; i--)
+            {
+                if (_assets[i])
+                {
+                    Object.DestroyImmediate(_assets[i]);
+                }
+            }
+
+            _sceneObjects.Clear();
+            _assets.Clear();
         }
 
         [Test]
@@ -59,8 +69,8 @@ namespace Cone.Grass.Tests
             area.transform.position = Vector3.up * 3f;
             using (var serialized = new SerializedObject(area))
             {
-                serialized.FindProperty("terrain").objectReferenceValue = null;
-                serialized.FindProperty("paintSurface").objectReferenceValue = null;
+                serialized.FindProperty("_terrain").objectReferenceValue = null;
+                serialized.FindProperty("_paintSurface").objectReferenceValue = null;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
@@ -88,8 +98,8 @@ namespace Cone.Grass.Tests
             Texture2D external = NewTexture();
             using (var serialized = new SerializedObject(area))
             {
-                serialized.FindProperty("densityTexture").objectReferenceValue = external;
-                serialized.FindProperty("densityAsset").objectReferenceValue = null;
+                serialized.FindProperty("_densityTexture").objectReferenceValue = external;
+                serialized.FindProperty("_densityAsset").objectReferenceValue = null;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
@@ -129,7 +139,9 @@ namespace Cone.Grass.Tests
             Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, changes) =>
             {
                 if (source == area)
+                {
                     regions.Add(region);
+                }
             };
             GrassPlacementArea.SourceChanged += handler;
             try
@@ -139,7 +151,7 @@ namespace Cone.Grass.Tests
                 // the second loses the complete ten-metre width to float precision.
                 area.transform.position = new Vector3(overflow ? 2e38f : 1e20f, 0f, 0f);
                 var serialized = new SerializedObject(area);
-                serialized.FindProperty("size").vector2Value = new Vector2(overflow ? 3e38f : 10f, 10f);
+                serialized.FindProperty("_size").vector2Value = new Vector2(overflow ? 3e38f : 10f, 10f);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
                 Assert.That(area.TryGetCaptureData(out _), Is.False);
@@ -157,7 +169,7 @@ namespace Cone.Grass.Tests
 
                 area.transform.position = Vector3.zero;
                 serialized.Update();
-                serialized.FindProperty("size").vector2Value = new Vector2(10f, 10f);
+                serialized.FindProperty("_size").vector2Value = new Vector2(10f, 10f);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
                 Assert.That(restored.WorldBounds, Is.EqualTo(original.WorldBounds));
@@ -179,7 +191,7 @@ namespace Cone.Grass.Tests
         {
             Terrain terrain = NewTerrain(new Vector3(-50f, 7f, 120f), new Vector3(200f, 35f, 100f));
             var layer = new TerrainLayer { tileSize = new Vector2(10f * xSign, 20f * ySign), tileOffset = new Vector2(2f, -4f) };
-            assets.Add(layer);
+            _assets.Add(layer);
             terrain.terrainData.terrainLayers = new[] { layer };
             GrassPlacementArea area = NewArea();
             area.transform.position = new Vector3(900f, 40f, -1000f);
@@ -238,7 +250,7 @@ namespace Cone.Grass.Tests
             Assert.That(data.DensityTexture, Is.SameAs(texture));
 
             var cubemap = new Cubemap(16, TextureFormat.RGBA32, false);
-            assets.Add(cubemap);
+            _assets.Add(cubemap);
             area.ConfigureTexture(terrain, cubemap);
             Assert.That(area.TryGetCaptureData(out _), Is.False);
 
@@ -251,12 +263,15 @@ namespace Cone.Grass.Tests
         public void AlphaOnlyExternalDensityStaysEmptyUntilAUsableRedFormatReplacesIt(bool reinitialize)
         {
             if (!SystemInfo.SupportsTextureFormat(TextureFormat.Alpha8) || !SystemInfo.SupportsTextureFormat(TextureFormat.R8))
+            {
                 Assert.Ignore("This Editor must support constructing both Alpha8 and R8 textures for the format transition.");
+            }
+
             GrassPlacementArea area = NewArea();
             ConfigureLocal(area, new Vector2(10f, 10f));
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
             var texture = new Texture2D(16, 16, TextureFormat.Alpha8, false, true);
-            assets.Add(texture);
+            _assets.Add(texture);
             texture.LoadRawTextureData(new byte[256]);
             texture.Apply(false, false);
             BindLocalTexture(area, texture);
@@ -309,7 +324,10 @@ namespace Cone.Grass.Tests
         {
             // Unity validates descriptor support even when GPU storage is not created.
             if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Render))
+            {
                 Assert.Ignore("This Editor cannot construct a RenderTexture descriptor for " + format + ".");
+            }
+
             var descriptor = new RenderTextureDescriptor(16, 16)
             {
                 graphicsFormat = format,
@@ -317,7 +335,7 @@ namespace Cone.Grass.Tests
                 msaaSamples = 1
             };
             var texture = new RenderTexture(descriptor);
-            assets.Add(texture);
+            _assets.Add(texture);
             Assert.That(texture.graphicsFormat, Is.EqualTo(format));
             Assert.That(texture.IsCreated(), Is.False);
             Assert.That(GrassPlacementDrawData.SupportsDensityFormat(texture), Is.EqualTo(supported));
@@ -328,9 +346,12 @@ namespace Cone.Grass.Tests
         public void DepthOnlyTextureCannotSupplyDensity()
         {
             if (!SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.Depth))
+            {
                 Assert.Ignore("This Editor must support constructing depth RenderTextures.");
+            }
+
             var texture = new RenderTexture(16, 16, 16, RenderTextureFormat.Depth);
-            assets.Add(texture);
+            _assets.Add(texture);
             Assert.That(GrassPlacementDrawData.SupportsDensityFormat(texture), Is.False);
             Assert.That(texture.IsCreated(), Is.False);
         }
@@ -428,7 +449,10 @@ namespace Cone.Grass.Tests
         {
             RequireRenderTextureDevice();
             if (SystemInfo.supportsMultisampledTextures == 0)
+            {
                 Assert.Ignore("Sampling-view transitions require multisampled texture storage.");
+            }
+
             var descriptor = new RenderTextureDescriptor(16, 16)
             {
                 graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
@@ -438,27 +462,36 @@ namespace Cone.Grass.Tests
                 sRGB = false
             };
             if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != 4)
+            {
                 Assert.Ignore("The active graphics device must support the requested 4x MSAA texture.");
+            }
 
             descriptor.bindMS = false;
             GrassPlacementArea area = NewArea();
             ConfigureLocal(area, new Vector2(10f, 10f));
             var texture = new RenderTexture(descriptor);
-            assets.Add(texture);
+            _assets.Add(texture);
             Assert.That(texture.Create(), Is.True);
             Assert.That(texture.antiAliasing, Is.EqualTo(4));
             Assert.That(texture.bindTextureMS, Is.False);
             if (densitySource)
+            {
                 BindLocalTexture(area, texture);
+            }
             else
+            {
                 area.SetGroundColorTexture(texture, false);
+            }
+
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
             Bounds query = original.WorldBounds;
             var changes = new List<GrassPlacementChange>();
             Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, region, change) =>
             {
                 if (source == area)
+                {
                     changes.Add(change);
+                }
             };
             GrassPlacementArea.SourceChanged += handler;
             try
@@ -495,16 +528,24 @@ namespace Cone.Grass.Tests
                     {
                         Assert.That(area.DensityTexture, Is.SameAs(texture));
                         if (hasCapture)
+                        {
                             Assert.That(captured.DensityTexture, Is.SameAs(texture));
+                        }
+
                         Assert.That(area.DensityRevision, Is.GreaterThan(densityRevision));
                     }
                     else
                     {
                         Assert.That(area.GroundColorTexture, Is.SameAs(texture));
                         if (configuration.Reject)
+                        {
                             Assert.That(captured.GroundColorTexture, Is.Null);
+                        }
                         else
+                        {
                             Assert.That(captured.GroundColorTexture, Is.SameAs(texture));
+                        }
+
                         Assert.That(area.DensityRevision, Is.EqualTo(densityRevision));
                     }
                     Assert.That(area.GroundColorRevision, Is.GreaterThan(groundRevision));
@@ -537,7 +578,7 @@ namespace Cone.Grass.Tests
             Texture2D external = NewTexture();
             BindLocalTexture(area, external);
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("densityAsset").objectReferenceValue = density;
+            serialized.FindProperty("_densityAsset").objectReferenceValue = density;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
             Assert.That(original.DensityTexture, Is.SameAs(density.Texture));
@@ -549,7 +590,7 @@ namespace Cone.Grass.Tests
             uint revision = area.DensityRevision;
 
             serialized.Update();
-            serialized.FindProperty("densityAsset").objectReferenceValue = null;
+            serialized.FindProperty("_densityAsset").objectReferenceValue = null;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData restored), Is.True);
             Assert.That(restored.DensityTexture, Is.SameAs(external));
@@ -607,9 +648,14 @@ namespace Cone.Grass.Tests
 
             GrassDensityAsset replacement = NewDensity();
             if (disable)
+            {
                 area.enabled = false;
+            }
             else
+            {
                 area.SetDensityAsset(replacement, false);
+            }
+
             uint revision = area.SourceRevision;
             // NotifyChanged only touches managed fields/events. Its wrapper can outlive
             // the native asset, but no detached area should still receive this event.
@@ -640,7 +686,7 @@ namespace Cone.Grass.Tests
             GrassDensityAsset density = NewDensity();
             density.Fill(1f);
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("densityAsset").objectReferenceValue = density;
+            serialized.FindProperty("_densityAsset").objectReferenceValue = density;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData original), Is.True);
             Assert.That(original.DensityAsset, Is.SameAs(density));
@@ -709,7 +755,7 @@ namespace Cone.Grass.Tests
             GrassPlacementArea area = NewArea();
             ConfigureLocal(area, new Vector2(20f, 40f));
             var density = ScriptableObject.CreateInstance<GrassDensityAsset>();
-            assets.Add(density);
+            _assets.Add(density);
             density.Resize(64, 64, false);
             area.SetDensityAsset(density, false);
             Assert.That(area.TryGetCaptureData(out _), Is.False);
@@ -784,7 +830,7 @@ namespace Cone.Grass.Tests
             };
             Assert.That(snapshot.IntersectsCoverage(query), Is.False);
             var cubemap = new Cubemap(16, TextureFormat.RGBA32, false);
-            assets.Add(cubemap);
+            _assets.Add(cubemap);
             snapshot.DensityTexture = cubemap;
             Assert.That(snapshot.IntersectsCoverage(query), Is.False);
             Texture2D unreadable = NewTexture();
@@ -802,12 +848,12 @@ namespace Cone.Grass.Tests
             GrassPlacementArea area = NewArea();
             ConfigureLocal(area, new Vector2(4f, 80f));
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)shape;
+            serialized.FindProperty("_shape").enumValueIndex = (int)shape;
             if (shape == GrassPlacementShape.Texture)
             {
                 Texture2D texture = NewTexture();
                 texture.Apply(false, true);
-                serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+                serialized.FindProperty("_densityTexture").objectReferenceValue = texture;
             }
             serialized.ApplyModifiedPropertiesWithoutUndo();
             area.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
@@ -979,10 +1025,16 @@ namespace Cone.Grass.Tests
             GrassPlacementArea area = NewGroundSamplerArea(out _, out _);
             bool captured = true;
             for (int index = 0; index < 8; index++)
+            {
                 captured &= area.TryGetCaptureData(out _);
+            }
+
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int index = 0; index < 32; index++)
+            {
                 captured &= area.TryGetCaptureData(out _);
+            }
+
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.That(captured, Is.True);
@@ -1047,14 +1099,16 @@ namespace Cone.Grass.Tests
             Action<GrassPlacementArea, Bounds, GrassPlacementChange> handler = (source, bounds, changes) =>
             {
                 if (source == area)
+                {
                     reported = bounds;
+                }
             };
             GrassPlacementArea.SourceChanged += handler;
             try
             {
                 density.Paint(new Vector2(8.5f / 64f, 48.5f / 64f), Vector2.one * (0.25f / 64f), 1f, 1f, true);
                 var serialized = new SerializedObject(area);
-                serialized.FindProperty("groundTint").colorValue = Color.green;
+                serialized.FindProperty("_groundTint").colorValue = Color.green;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 Assert.That(area.TryGetCaptureData(out _), Is.True);
                 Assert.That(reported.size.x, Is.EqualTo(64f));
@@ -1100,8 +1154,8 @@ namespace Cone.Grass.Tests
             Texture2D texture = NewTexture();
             texture.Apply(false, true);
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Texture;
-            serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+            serialized.FindProperty("_shape").enumValueIndex = (int)GrassPlacementShape.Texture;
+            serialized.FindProperty("_densityTexture").objectReferenceValue = texture;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             area.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
             Rect originalCrop = new Rect(0.48f, 0.05f, 0.04f, 0.9f);
@@ -1137,7 +1191,7 @@ namespace Cone.Grass.Tests
             ConfigureLocal(area, new Vector2(10f, 20f), terrain);
             area.transform.position = new Vector3(-20f, 5f, 135f);
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("density").floatValue = 0.1f;
+            serialized.FindProperty("_density").floatValue = 0.1f;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Texture2D albedo = NewTexture();
             area.SetGroundColorTexture(albedo, true, 0.75f);
@@ -1194,7 +1248,7 @@ namespace Cone.Grass.Tests
             Assert.That(density.Revision, Is.EqualTo(revision));
 
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("paintSurface").objectReferenceValue = null;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = null;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(area.TryGetCaptureData(out _), Is.True,
                 "Explicitly clearing the binding restores the supported generic-surface mode.");
@@ -1227,11 +1281,11 @@ namespace Cone.Grass.Tests
             ConfigureLocal(area, new Vector2(10f, 10f));
             Collider parent = NewMeshSurface(area);
             var child = new GameObject("Explicit child collider");
-            sceneObjects.Add(child);
+            _sceneObjects.Add(child);
             child.transform.SetParent(parent.transform, false);
             BoxCollider surface = child.AddComponent<BoxCollider>();
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = surface;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             GrassDensityAsset density = NewDensity();
             density.Fill(1f);
@@ -1241,9 +1295,14 @@ namespace Cone.Grass.Tests
             uint sourceRevision = area.SourceRevision, densityRevision = density.Revision;
 
             if (forceOff)
+            {
                 renderer.forceRenderingOff = true;
+            }
             else
+            {
                 renderer.enabled = false;
+            }
+
             Assert.That(area.TryGetCaptureData(out _), Is.False);
             Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
             Assert.That(area.Paint(Vector3.zero, 2f, 1f, 1f, true), Is.False);
@@ -1283,19 +1342,29 @@ namespace Cone.Grass.Tests
             if (indexless)
             {
                 unavailable = new Mesh { vertices = new[] { Vector3.zero, Vector3.right, Vector3.forward } };
-                assets.Add(unavailable);
+                _assets.Add(unavailable);
             }
             if (skinned)
+            {
                 skinnedRenderer.sharedMesh = unavailable;
+            }
             else
+            {
                 filter.sharedMesh = unavailable;
+            }
+
             Assert.That(area.TryGetCaptureData(out _), Is.False);
             Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.False);
 
             if (skinned)
+            {
                 skinnedRenderer.sharedMesh = originalMesh;
+            }
             else
+            {
                 filter.sharedMesh = originalMesh;
+            }
+
             Assert.That(area.TryGetCaptureData(out _), Is.True);
             Assert.That(area.IntersectsCoverage(original.WorldBounds), Is.True);
         }
@@ -1329,7 +1398,7 @@ namespace Cone.Grass.Tests
                 vertices = new[] { Vector3.zero, Vector3.right, Vector3.forward },
                 subMeshCount = 2
             };
-            assets.Add(mesh);
+            _assets.Add(mesh);
             mesh.SetIndices(Array.Empty<int>(), MeshTopology.Triangles, 0);
             mesh.SetIndices(new[] { 0, 1, 2 }, MeshTopology.Triangles, 1);
             surface.GetComponent<MeshFilter>().sharedMesh = mesh;
@@ -1376,12 +1445,12 @@ namespace Cone.Grass.Tests
             ConfigureLocal(area, new Vector2(10f, 10f));
             Collider parentSurface = NewMeshSurface(area);
             var child = new GameObject("Grass child surface collider");
-            sceneObjects.Add(child);
+            _sceneObjects.Add(child);
             child.transform.SetParent(parentSurface.transform, false);
             BoxCollider surface = child.AddComponent<BoxCollider>();
             surface.enabled = colliderEnabled;
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = surface;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData data), Is.True,
@@ -1418,11 +1487,18 @@ namespace Cone.Grass.Tests
             AssertSurfaceObservation(area, () =>
             {
                 if (changedSource == "collider")
+                {
                     collider.sharedMesh = replacement;
+                }
                 else if (skinned)
+                {
                     skinned.sharedMesh = replacement;
+                }
                 else
+                {
                     filter.sharedMesh = replacement;
+                }
+
                 Physics.SyncTransforms();
                 Assert.That(collider.bounds, Is.EqualTo(colliderBounds));
                 Assert.That(observedRenderer.bounds, Is.EqualTo(rendererBounds));
@@ -1523,7 +1599,9 @@ namespace Cone.Grass.Tests
                 try
                 {
                     if (support && originalScene.IsValid() && originalScene.isLoaded && support.scene != originalScene)
+                    {
                         SceneManager.MoveGameObjectToScene(support, originalScene);
+                    }
                 }
                 catch (Exception error) { cleanupFailures.Add(error); }
                 try { fixture.Dispose(); }
@@ -1531,7 +1609,10 @@ namespace Cone.Grass.Tests
                 if (cleanupFailures.Count > 0)
                 {
                     if (bodyFailure != null)
+                    {
                         cleanupFailures.Insert(0, bodyFailure);
+                    }
+
                     throw new AggregateException("Supporting-scene body/owned cleanup failures retained.", cleanupFailures);
                 }
             }
@@ -1544,11 +1625,17 @@ namespace Cone.Grass.Tests
             NewObservedMeshSupport(area, out _, out _, out _);
             bool captured = true;
             for (int index = 0; index < 8; index++)
+            {
                 captured &= area.TryGetCaptureData(out _);
+            }
+
             uint revision = area.SourceRevision;
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int index = 0; index < 32; index++)
+            {
                 captured &= area.TryGetCaptureData(out _);
+            }
+
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.That(captured, Is.True);
@@ -1586,7 +1673,10 @@ namespace Cone.Grass.Tests
             finally
             {
                 if (surface && surface.gameObject.scene == preview)
+                {
                     SceneManager.MoveGameObjectToScene(surface.gameObject, originalScene);
+                }
+
                 EditorSceneManager.ClosePreviewScene(preview);
             }
         }
@@ -1621,7 +1711,10 @@ namespace Cone.Grass.Tests
             finally
             {
                 if (terrain && terrain.gameObject.scene == preview)
+                {
                     SceneManager.MoveGameObjectToScene(terrain.gameObject, originalScene);
+                }
+
                 EditorSceneManager.ClosePreviewScene(preview);
             }
         }
@@ -1648,8 +1741,11 @@ namespace Cone.Grass.Tests
             Assert.That(ReadDensitySamples(density), Is.EqualTo(ReadDensitySamples(expected)),
                 "Dabs outside the map must not turn a continuous crossing into widely separated painted islands.");
             for (int x = 0; x < density.Width; x++)
+            {
                 Assert.That(density.Sample(new Vector2((x + 0.5f) / density.Width, 32.5f / density.Height)),
                     Is.EqualTo(1f), "The complete crossing must retain its painted center strip.");
+            }
+
             Assert.That(GetEditorField(editor, "lastDab"), Is.EqualTo(last),
                 "Continuation must start at the actual cursor endpoint outside the map.");
         }
@@ -1761,9 +1857,14 @@ namespace Cone.Grass.Tests
             SetEditorField(editor, "hasLastDab", true);
 
             if (clearAsset)
+            {
                 area.SetDensityAsset(null, false);
+            }
             else
+            {
                 ConfigureLocal(area, new Vector2(10f, 10f));
+            }
+
             InvokeEditor(editor, "OnSceneGUI");
 
             Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
@@ -1789,8 +1890,8 @@ namespace Cone.Grass.Tests
             Assert.That(BrushPoint(editor, area, ray, out _), Is.False);
 
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("terrain").objectReferenceValue = null;
-            serialized.FindProperty("paintSurface").objectReferenceValue = null;
+            serialized.FindProperty("_terrain").objectReferenceValue = null;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = null;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(BrushPoint(editor, area, ray, out Vector3 planePoint), Is.True);
             Assert.That(planePoint.y, Is.EqualTo(area.transform.position.y).Within(0.00001f));
@@ -1824,7 +1925,10 @@ namespace Cone.Grass.Tests
                 catch (Exception cleanupError)
                 {
                     if (bodyFailure != null)
+                    {
                         throw new AggregateException("Saved-scene body/owned cleanup failures retained.", bodyFailure, cleanupError);
+                    }
+
                     throw;
                 }
             }
@@ -1836,17 +1940,20 @@ namespace Cone.Grass.Tests
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
                 !SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGBHalf) ||
                 !SystemInfo.SupportsTextureFormat(TextureFormat.RGBAHalf))
+            {
                 Assert.Ignore("Ground-capture validation requires a graphics device with half-float texture support.");
+            }
+
             Shader shader = Shader.Find("Hidden/InfiniteGrass/Placement");
             Assert.That(shader, Is.Not.Null);
             var material = new Material(shader);
-            assets.Add(material);
+            _assets.Add(material);
             int pass = material.FindPass("PlacementGroundColor");
             Assert.That(pass, Is.GreaterThanOrEqualTo(0));
             ShaderUtil.CompilePass(material, pass, true);
             Assert.That(ShaderUtil.ShaderHasError(shader), Is.False);
             var albedo = new Texture2D(2, 2, TextureFormat.RGBAHalf, false, true);
-            assets.Add(albedo);
+            _assets.Add(albedo);
             var color = new Color(0.2f, 0.4f, 0.6f, 1f);
             albedo.SetPixels(new[] { color, color, color, color });
             albedo.Apply(false, false);
@@ -1856,7 +1963,7 @@ namespace Cone.Grass.Tests
                     new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f) },
                 triangles = new[] { 0, 2, 1, 2, 3, 1 }
             };
-            assets.Add(quad);
+            _assets.Add(quad);
             Matrix4x4 projection = Matrix4x4.zero;
             projection.SetRow(0, new Vector4(2f, 0f, 0f, 0f));
             projection.SetRow(1, new Vector4(0f, 0f, 2f, 0f));
@@ -1918,23 +2025,23 @@ namespace Cone.Grass.Tests
         {
             GrassDensityAsset value = ScriptableObject.CreateInstance<GrassDensityAsset>();
             value.Resize(64, 64, false);
-            assets.Add(value);
+            _assets.Add(value);
             return value;
         }
 
         private GrassPlacementArea NewArea()
         {
             var gameObject = new GameObject("Grass placement test");
-            sceneObjects.Add(gameObject);
+            _sceneObjects.Add(gameObject);
             return gameObject.AddComponent<GrassPlacementArea>();
         }
 
         private Terrain NewTerrain(Vector3 origin, Vector3 size)
         {
             var data = new TerrainData { heightmapResolution = 33, size = size };
-            assets.Add(data);
+            _assets.Add(data);
             GameObject gameObject = Terrain.CreateTerrainGameObject(data);
-            sceneObjects.Add(gameObject);
+            _sceneObjects.Add(gameObject);
             gameObject.transform.position = origin;
             return gameObject.GetComponent<Terrain>();
         }
@@ -1951,7 +2058,7 @@ namespace Cone.Grass.Tests
                 diffuse.mipMapBias = 0f;
                 diffuse.anisoLevel = 1;
                 layers[index] = new TerrainLayer { diffuseTexture = diffuse, tileSize = Vector2.one };
-                assets.Add(layers[index]);
+                _assets.Add(layers[index]);
             }
             terrain.terrainData.terrainLayers = layers;
             GrassPlacementArea area = NewArea();
@@ -1963,22 +2070,22 @@ namespace Cone.Grass.Tests
         private Texture2D NewTexture()
         {
             var texture = new Texture2D(16, 16, TextureFormat.R8, false, true);
-            assets.Add(texture);
+            _assets.Add(texture);
             return texture;
         }
 
         private RenderTexture NewRenderTexture()
         {
             var texture = new RenderTexture(16, 16, 0, RenderTextureFormat.ARGB32);
-            assets.Add(texture);
+            _assets.Add(texture);
             return texture;
         }
 
         private static void BindLocalTexture(GrassPlacementArea area, Texture texture)
         {
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Texture;
-            serialized.FindProperty("densityTexture").objectReferenceValue = texture;
+            serialized.FindProperty("_shape").enumValueIndex = (int)GrassPlacementShape.Texture;
+            serialized.FindProperty("_densityTexture").objectReferenceValue = texture;
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
@@ -1986,17 +2093,19 @@ namespace Cone.Grass.Tests
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null ||
                 !SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGB32))
+            {
                 Assert.Ignore("RenderTexture loss/recreation checks require an Editor graphics device.");
+            }
         }
 
         private Collider NewMeshSurface(GrassPlacementArea area)
         {
             GameObject gameObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            sceneObjects.Add(gameObject);
+            _sceneObjects.Add(gameObject);
             gameObject.transform.localScale = new Vector3(20f, 1f, 20f);
             Collider surface = gameObject.GetComponent<Collider>();
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("paintSurface").objectReferenceValue = surface;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = surface;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             return surface;
         }
@@ -2006,18 +2115,18 @@ namespace Cone.Grass.Tests
         {
             ConfigureLocal(area, new Vector2(4f, 4f));
             var parent = new GameObject("Separate observed grass renderer");
-            sceneObjects.Add(parent);
+            _sceneObjects.Add(parent);
             filter = parent.AddComponent<MeshFilter>();
             filter.sharedMesh = NewSteppedSupportMesh(false);
             renderer = parent.AddComponent<MeshRenderer>();
             renderer.sharedMaterials = new Material[1];
             var child = new GameObject("Explicit observed child collider");
-            sceneObjects.Add(child);
+            _sceneObjects.Add(child);
             child.transform.SetParent(parent.transform, false);
             collider = child.AddComponent<MeshCollider>();
             collider.sharedMesh = filter.sharedMesh;
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("paintSurface").objectReferenceValue = collider;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = collider;
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
@@ -2042,7 +2151,7 @@ namespace Cone.Grass.Tests
                 indices[index + 5] = vertex + 3;
             }
             var mesh = new Mesh { name = "Same-bounds stepped grass support", vertices = vertices, triangles = indices };
-            assets.Add(mesh);
+            _assets.Add(mesh);
             mesh.RecalculateBounds();
             return mesh;
         }
@@ -2089,17 +2198,17 @@ namespace Cone.Grass.Tests
         private static void ConfigureLocal(GrassPlacementArea area, Vector2 size, Terrain terrain = null)
         {
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Box;
-            serialized.FindProperty("size").vector2Value = size;
-            serialized.FindProperty("terrain").objectReferenceValue = terrain;
-            serialized.FindProperty("useTerrainBounds").boolValue = false;
+            serialized.FindProperty("_shape").enumValueIndex = (int)GrassPlacementShape.Box;
+            serialized.FindProperty("_size").vector2Value = size;
+            serialized.FindProperty("_terrain").objectReferenceValue = terrain;
+            serialized.FindProperty("_useTerrainBounds").boolValue = false;
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private UnityEditor.Editor NewPlacementEditor(GrassPlacementArea area)
         {
             UnityEditor.Editor editor = UnityEditor.Editor.CreateEditor(area);
-            assets.Add(editor);
+            _assets.Add(editor);
             Assert.That(editor.GetType().Name, Is.EqualTo("GrassPlacementAreaEditor"));
             return editor;
         }
@@ -2125,9 +2234,14 @@ namespace Cone.Grass.Tests
         {
             var samples = new byte[density.Width * density.Height];
             for (int y = 0; y < density.Height; y++)
+            {
                 for (int x = 0; x < density.Width; x++)
+                {
                     samples[y * density.Width + x] = (byte)Mathf.RoundToInt(density.Sample(
                         new Vector2((x + 0.5f) / density.Width, (y + 0.5f) / density.Height)) * 255f);
+                }
+            }
+
             return samples;
         }
 

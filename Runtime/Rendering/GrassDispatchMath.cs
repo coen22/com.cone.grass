@@ -18,12 +18,17 @@ namespace Cone.Grass
         {
             range = default;
             if (!Finite(spacing) || spacing <= 0f)
+            {
                 return false;
+            }
+
             Vector3 min = bounds.min;
             Vector3 max = bounds.max;
             if (!Finite(min.x) || !Finite(min.z) || !Finite(max.x) || !Finite(max.z) ||
                 min.x >= max.x || min.z >= max.z)
+            {
                 return false;
+            }
 
             double x0 = Math.Ceiling((double)min.x / spacing - 0.5);
             double z0 = Math.Ceiling((double)min.z / spacing - 0.5);
@@ -32,13 +37,17 @@ namespace Cone.Grass
             if (x0 < -MaximumCellCoordinate || z0 < -MaximumCellCoordinate ||
                 x1 > MaximumCellCoordinate || z1 > MaximumCellCoordinate ||
                 x1 <= x0 || z1 <= z0)
+            {
                 return false;
+            }
 
             int firstX = (int)x0, firstZ = (int)z0;
             int endX = (int)x1, endZ = (int)z1;
             if (!ExpandForFloatRounding(min.x, max.x, spacing, ref firstX, ref endX) ||
                 !ExpandForFloatRounding(min.z, max.z, spacing, ref firstZ, ref endZ))
+            {
                 return false;
+            }
 
             range = new GrassGridRange(firstX, firstZ, endX - firstX, endZ - firstZ);
             return true;
@@ -55,13 +64,17 @@ namespace Cone.Grass
             {
                 first--;
                 if (first < -MaximumCellCoordinate)
+                {
                     return false;
+                }
             }
             while (CandidateEndpoint(end, spacing, false) <= max)
             {
                 end++;
                 if (end > MaximumCellCoordinate)
+                {
                     return false;
+                }
             }
             return true;
         }
@@ -89,11 +102,15 @@ namespace Cone.Grass
                 range.Width <= 0 || range.Height <= 0 ||
                 range.MinX < -MaximumCellCoordinate || range.MinZ < -MaximumCellCoordinate ||
                 endX > MaximumCellCoordinate || endZ > MaximumCellCoordinate)
+            {
                 return false;
+            }
 
             if (!TryGetCandidateAxis(range.MinX, (int)endX - 1, spacing, margin, out float centerX, out float extentX) ||
                 !TryGetCandidateAxis(range.MinZ, (int)endZ - 1, spacing, margin, out float centerZ, out float extentZ))
+            {
                 return false;
+            }
 
             bounds.center = new Vector3(centerX, 0f, centerZ);
             // Setting extents avoids an unnecessary size = extent * 2 overflow.
@@ -114,7 +131,9 @@ namespace Cone.Grass
             center = extent = 0f;
             if (minimum < -float.MaxValue || maximum > float.MaxValue ||
                 double.IsNaN(minimum) || double.IsNaN(maximum))
+            {
                 return false;
+            }
 
             float lower = RoundOutward(minimum, false);
             float upper = RoundOutward(maximum, true);
@@ -124,7 +143,10 @@ namespace Cone.Grass
             // A range crossing zero can lose a tiny endpoint even in the double
             // midpoint/distance arithmetic. Check the actual Bounds representation.
             if (center - extent > lower || center + extent < upper)
+            {
                 extent = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(extent) + 1);
+            }
+
             return Finite(center - extent) && Finite(center + extent) &&
                 center - extent <= lower && center + extent >= upper;
         }
@@ -133,9 +155,15 @@ namespace Cone.Grass
         {
             float rounded = (float)value;
             if (upper ? (double)rounded >= value : (double)rounded <= value)
+            {
                 return rounded;
+            }
+
             if (rounded == 0f)
+            {
                 return upper ? float.Epsilon : -float.Epsilon;
+            }
+
             int bits = BitConverter.SingleToInt32Bits(rounded);
             bits += (rounded > 0f) == upper ? 1 : -1;
             return BitConverter.Int32BitsToSingle(bits);
@@ -144,7 +172,10 @@ namespace Cone.Grass
         public static int FloorDivide(int value, int divisor)
         {
             if (divisor <= 0)
+            {
                 throw new ArgumentOutOfRangeException(nameof(divisor));
+            }
+
             return value >= 0 ? value / divisor : (int)(((long)value - divisor + 1L) / divisor);
         }
 
@@ -155,9 +186,14 @@ namespace Cone.Grass
         public static Bounds ExpandXZ(Bounds bounds, float margin)
         {
             if (!Finite(margin) || margin < 0f || margin > float.MaxValue * 0.5f)
+            {
                 throw new ArgumentOutOfRangeException(nameof(margin));
+            }
+
             if (margin == 0f)
+            {
                 return bounds;
+            }
 
             Vector3 minimum = bounds.min, maximum = bounds.max;
             if (minimum.x <= maximum.x && minimum.z <= maximum.z &&
@@ -187,7 +223,10 @@ namespace Cone.Grass
             Vector3 maximum = new Vector3(Mathf.Min(a.max.x, b.max.x), 0f, Mathf.Min(a.max.z, b.max.z));
             intersection = default;
             if (minimum.x >= maximum.x || minimum.z >= maximum.z)
+            {
                 return false;
+            }
+
             if (TryGetOutwardAxis(minimum.x, maximum.x, out float centerX, out float extentX) &&
                 TryGetOutwardAxis(minimum.z, maximum.z, out float centerZ, out float extentZ))
             {
@@ -209,17 +248,26 @@ namespace Cone.Grass
         {
             clipped = default;
             if (tileSize <= 0)
+            {
                 throw new ArgumentOutOfRangeException(nameof(tileSize));
+            }
+
             long boundsMaxX = (long)bounds.MinX + bounds.Width;
             long boundsMaxZ = (long)bounds.MinZ + bounds.Height;
             if (bounds.Width <= 0 || bounds.Height <= 0 || boundsMaxX > int.MaxValue || boundsMaxZ > int.MaxValue)
+            {
                 return false;
+            }
+
             long minX = Math.Max(bounds.MinX, (long)tileX * tileSize);
             long minZ = Math.Max(bounds.MinZ, (long)tileZ * tileSize);
             long maxX = Math.Min(boundsMaxX, ((long)tileX + 1L) * tileSize);
             long maxZ = Math.Min(boundsMaxZ, ((long)tileZ + 1L) * tileSize);
             if (minX >= maxX || minZ >= maxZ)
+            {
                 return false;
+            }
+
             clipped = new GrassGridRange((int)minX, (int)minZ, (int)(maxX - minX), (int)(maxZ - minZ));
             return true;
         }
@@ -229,10 +277,16 @@ namespace Cone.Grass
         {
             updated = current;
             if (current < 0 || limit < 0 || current > limit || width < 0 || height < 0)
+            {
                 return false;
+            }
+
             long count = (long)width * height;
             if (count > limit - current)
+            {
                 return false;
+            }
+
             updated = current + count;
             return true;
         }
@@ -240,7 +294,10 @@ namespace Cone.Grass
         public static int ThreadGroupCount(int cells)
         {
             if (cells < 0 || cells > MaximumDispatchCells)
+            {
                 throw new ArgumentOutOfRangeException(nameof(cells));
+            }
+
             return (cells + 7) / 8;
         }
 

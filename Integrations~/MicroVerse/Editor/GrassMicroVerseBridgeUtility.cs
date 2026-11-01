@@ -1,8 +1,8 @@
-using Cone.Grass.Editor;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using Cone.Grass.Editor;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -61,47 +61,55 @@ namespace Cone.Grass.MicroVerse
             public int OutputDirtyCount;
         }
 
-        private static readonly Dictionary<string, MaskAssets> masks =
+        private static readonly Dictionary<string, MaskAssets> s_masks =
             new Dictionary<string, MaskAssets>(StringComparer.Ordinal);
-        private static readonly Dictionary<string, int> importRevisions =
+        private static readonly Dictionary<string, int> s_importRevisions =
             new Dictionary<string, int>(StringComparer.Ordinal);
-        private static readonly Dictionary<GrassMicroVerseBridge, ObservedInputs> observed =
+        private static readonly Dictionary<GrassMicroVerseBridge, ObservedInputs> s_observed =
             new Dictionary<GrassMicroVerseBridge, ObservedInputs>();
-        private static readonly Dictionary<GrassMicroVerseBridge, GroundBakeState> groundBakes =
+        private static readonly Dictionary<GrassMicroVerseBridge, GroundBakeState> s_groundBakes =
             new Dictionary<GrassMicroVerseBridge, GroundBakeState>();
-        private static readonly HashSet<GrassMicroVerseBridge> activeRefreshes =
+        private static readonly HashSet<GrassMicroVerseBridge> s_activeRefreshes =
             new HashSet<GrassMicroVerseBridge>();
-        private static readonly List<string> unusedMaskPaths = new List<string>();
-        private static readonly HashSet<ScriptableObject> liveMaskTargets = new HashSet<ScriptableObject>();
-        private static readonly List<GrassMicroVerseBridge> unusedBridges = new List<GrassMicroVerseBridge>();
-        private static readonly HashSet<string> usedImportPaths = new HashSet<string>(StringComparer.Ordinal);
-        private static readonly List<string> unusedImportPaths = new List<string>();
-        private static int assetRevision;
+        private static readonly List<string> s_unusedMaskPaths = new List<string>();
+        private static readonly HashSet<ScriptableObject> s_liveMaskTargets = new HashSet<ScriptableObject>();
+        private static readonly List<GrassMicroVerseBridge> s_unusedBridges = new List<GrassMicroVerseBridge>();
+        private static readonly HashSet<string> s_usedImportPaths = new HashSet<string>(StringComparer.Ordinal);
+        private static readonly List<string> s_unusedImportPaths = new List<string>();
+        private static int s_assetRevision;
 
         /// <summary>Returns the cached list; callers must not modify the array.</summary>
         public static Texture2D[] GetTextureSubAssets(GrassMicroVerseBridge bridge, bool forceRediscover = false)
         {
             if (!bridge || !bridge.MaskTarget)
+            {
                 return Array.Empty<Texture2D>();
+            }
 
             string path = AssetDatabase.GetAssetPath(bridge.MaskTarget);
             if (string.IsNullOrEmpty(path))
+            {
                 return Array.Empty<Texture2D>();
+            }
 
             int dirtyCount = EditorUtility.GetDirtyCount(bridge.MaskTarget);
             // This queries Unity's cached asset dependency hash, not texture pixels.
             Hash128 dependency = AssetDatabase.GetAssetDependencyHash(path);
-            if (!forceRediscover && masks.TryGetValue(path, out MaskAssets existing) &&
+            if (!forceRediscover && s_masks.TryGetValue(path, out MaskAssets existing) &&
                 existing.Target == bridge.MaskTarget && existing.DirtyCount == dirtyCount &&
                 existing.Dependency == dependency && AllAlive(existing.Textures))
+            {
                 return existing.Textures;
+            }
 
             PruneUnusedMaskCaches();
             var textures = new List<Texture2D>();
             foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
             {
                 if (asset is Texture2D texture && AssetDatabase.IsSubAsset(texture))
+                {
                     textures.Add(texture);
+                }
             }
             textures.Sort((left, right) => string.CompareOrdinal(left.name, right.name));
             var entry = new MaskAssets
@@ -111,42 +119,50 @@ namespace Cone.Grass.MicroVerse
                 Dependency = dependency,
                 Textures = textures.ToArray()
             };
-            masks[path] = entry;
-            if (!importRevisions.ContainsKey(path))
-                importRevisions.Add(path, 0);
+            s_masks[path] = entry;
+            if (!s_importRevisions.ContainsKey(path))
+            {
+                s_importRevisions.Add(path, 0);
+            }
+
             return entry.Textures;
         }
 
         public static void InvalidateAssetPath(string path)
         {
             if (string.IsNullOrEmpty(path))
+            {
                 return;
-            masks.Remove(path);
-            if (importRevisions.TryGetValue(path, out int revision))
-                importRevisions[path] = unchecked(revision + 1);
+            }
+
+            s_masks.Remove(path);
+            if (s_importRevisions.TryGetValue(path, out int revision))
+            {
+                s_importRevisions[path] = unchecked(revision + 1);
+            }
             // A save can change a persisted dependency hash without changing the
             // producer's in-memory update counter. Recheck the saved bake key.
-            assetRevision = unchecked(assetRevision + 1);
+            s_assetRevision = unchecked(s_assetRevision + 1);
         }
 
         public static void ClearCaches()
         {
-            masks.Clear();
-            observed.Clear();
-            groundBakes.Clear();
-            importRevisions.Clear();
-            unusedMaskPaths.Clear();
-            liveMaskTargets.Clear();
-            unusedBridges.Clear();
-            usedImportPaths.Clear();
-            unusedImportPaths.Clear();
-            assetRevision = 0;
+            s_masks.Clear();
+            s_observed.Clear();
+            s_groundBakes.Clear();
+            s_importRevisions.Clear();
+            s_unusedMaskPaths.Clear();
+            s_liveMaskTargets.Clear();
+            s_unusedBridges.Clear();
+            s_usedImportPaths.Clear();
+            s_unusedImportPaths.Clear();
+            s_assetRevision = 0;
         }
 
         public static void Forget(GrassMicroVerseBridge bridge)
         {
-            observed.Remove(bridge);
-            groundBakes.Remove(bridge);
+            s_observed.Remove(bridge);
+            s_groundBakes.Remove(bridge);
             PruneUnusedMaskCaches();
         }
 
@@ -156,34 +172,65 @@ namespace Cone.Grass.MicroVerse
         /// </summary>
         public static void PruneInactiveCaches()
         {
-            unusedBridges.Clear();
-            foreach (GrassMicroVerseBridge bridge in observed.Keys)
-                if (!OwnsLiveCache(bridge)) unusedBridges.Add(bridge);
-            foreach (GrassMicroVerseBridge bridge in groundBakes.Keys)
-                if (!OwnsLiveCache(bridge) && !observed.ContainsKey(bridge)) unusedBridges.Add(bridge);
-            foreach (GrassMicroVerseBridge bridge in unusedBridges)
+            s_unusedBridges.Clear();
+            foreach (GrassMicroVerseBridge bridge in s_observed.Keys)
             {
-                observed.Remove(bridge);
-                groundBakes.Remove(bridge);
+                if (!OwnsLiveCache(bridge))
+                {
+                    s_unusedBridges.Add(bridge);
+                }
             }
-            unusedBridges.Clear();
+
+            foreach (GrassMicroVerseBridge bridge in s_groundBakes.Keys)
+            {
+                if (!OwnsLiveCache(bridge) && !s_observed.ContainsKey(bridge))
+                {
+                    s_unusedBridges.Add(bridge);
+                }
+            }
+
+            foreach (GrassMicroVerseBridge bridge in s_unusedBridges)
+            {
+                s_observed.Remove(bridge);
+                s_groundBakes.Remove(bridge);
+            }
+            s_unusedBridges.Clear();
             PruneUnusedMaskCaches();
 
-            usedImportPaths.Clear();
-            foreach (string path in masks.Keys)
-                usedImportPaths.Add(path);
-            foreach (ObservedInputs inputs in observed.Values)
+            s_usedImportPaths.Clear();
+            foreach (string path in s_masks.Keys)
             {
-                if (!string.IsNullOrEmpty(inputs.Density.AssetPath)) usedImportPaths.Add(inputs.Density.AssetPath);
-                if (!string.IsNullOrEmpty(inputs.GroundColor.AssetPath)) usedImportPaths.Add(inputs.GroundColor.AssetPath);
+                s_usedImportPaths.Add(path);
             }
-            unusedImportPaths.Clear();
-            foreach (string path in importRevisions.Keys)
-                if (!usedImportPaths.Contains(path)) unusedImportPaths.Add(path);
-            foreach (string path in unusedImportPaths)
-                importRevisions.Remove(path);
-            unusedImportPaths.Clear();
-            usedImportPaths.Clear();
+
+            foreach (ObservedInputs inputs in s_observed.Values)
+            {
+                if (!string.IsNullOrEmpty(inputs.Density.AssetPath))
+                {
+                    s_usedImportPaths.Add(inputs.Density.AssetPath);
+                }
+
+                if (!string.IsNullOrEmpty(inputs.GroundColor.AssetPath))
+                {
+                    s_usedImportPaths.Add(inputs.GroundColor.AssetPath);
+                }
+            }
+            s_unusedImportPaths.Clear();
+            foreach (string path in s_importRevisions.Keys)
+            {
+                if (!s_usedImportPaths.Contains(path))
+                {
+                    s_unusedImportPaths.Add(path);
+                }
+            }
+
+            foreach (string path in s_unusedImportPaths)
+            {
+                s_importRevisions.Remove(path);
+            }
+
+            s_unusedImportPaths.Clear();
+            s_usedImportPaths.Clear();
         }
 
         private static bool OwnsLiveCache(GrassMicroVerseBridge bridge) =>
@@ -192,22 +239,30 @@ namespace Cone.Grass.MicroVerse
 
         internal static void PruneUnusedMaskCaches()
         {
-            liveMaskTargets.Clear();
+            s_liveMaskTargets.Clear();
             foreach (GrassMicroVerseBridge bridge in GrassMicroVerseBridge.ActiveBridges)
-                if (OwnsLiveCache(bridge) && bridge.MaskTarget) liveMaskTargets.Add(bridge.MaskTarget);
-            unusedMaskPaths.Clear();
-            foreach (KeyValuePair<string, MaskAssets> entry in masks)
             {
-                if (!liveMaskTargets.Contains(entry.Value.Target))
-                    unusedMaskPaths.Add(entry.Key);
+                if (OwnsLiveCache(bridge) && bridge.MaskTarget)
+                {
+                    s_liveMaskTargets.Add(bridge.MaskTarget);
+                }
             }
-            foreach (string path in unusedMaskPaths)
+
+            s_unusedMaskPaths.Clear();
+            foreach (KeyValuePair<string, MaskAssets> entry in s_masks)
             {
-                masks.Remove(path);
-                importRevisions.Remove(path);
+                if (!s_liveMaskTargets.Contains(entry.Value.Target))
+                {
+                    s_unusedMaskPaths.Add(entry.Key);
+                }
             }
-            unusedMaskPaths.Clear();
-            liveMaskTargets.Clear();
+            foreach (string path in s_unusedMaskPaths)
+            {
+                s_masks.Remove(path);
+                s_importRevisions.Remove(path);
+            }
+            s_unusedMaskPaths.Clear();
+            s_liveMaskTargets.Clear();
         }
 
         public static bool TryResolve(GrassMicroVerseBridge bridge, out Texture2D texture,
@@ -236,7 +291,10 @@ namespace Cone.Grass.MicroVerse
                 // Exact, user-selected names only. Subasset order and partial terrain
                 // names do not establish which tile a generated texture belongs to.
                 if (!candidate || !string.Equals(candidate.name, bridge.TextureSubAssetName, StringComparison.Ordinal))
+                {
                     continue;
+                }
+
                 texture = candidate;
                 matches++;
             }
@@ -285,9 +343,11 @@ namespace Cone.Grass.MicroVerse
             bool markSceneDirty = true, bool forceInvalidate = true, bool forceGroundBake = false)
         {
             if (!bridge || !bridge.PlacementArea)
+            {
                 return false;
+            }
 
-            if (!activeRefreshes.Add(bridge))
+            if (!s_activeRefreshes.Add(bridge))
             {
                 bridge.SetRefreshResult(false,
                     "This bridge is already refreshing. Queue another refresh after the current callback finishes.");
@@ -309,7 +369,7 @@ namespace Cone.Grass.MicroVerse
             }
             finally
             {
-                activeRefreshes.Remove(bridge);
+                s_activeRefreshes.Remove(bridge);
             }
         }
 
@@ -327,7 +387,9 @@ namespace Cone.Grass.MicroVerse
                 // Commit its current explicit mapping, never the pre-callback wrapper.
                 // Unchanged polls do not cross this boundary or rediscover twice.
                 if (valid && baked)
+                {
                     valid = TryResolve(bridge, out density, out message, true);
+                }
             }
 
             // A synchronous bake observer can delete the authoring object. Its
@@ -335,7 +397,10 @@ namespace Cone.Grass.MicroVerse
             if (!bridge || !bridge.PlacementArea)
             {
                 if (bridge)
+                {
                     bridge.SetRefreshResult(false, message);
+                }
+
                 return false;
             }
 
@@ -348,7 +413,10 @@ namespace Cone.Grass.MicroVerse
             if (bindingChanged)
             {
                 if (recordUndo)
+                {
                     Undo.RecordObject(area, "Refresh MicroVerse grass mask");
+                }
+
                 area.ConfigureTexture(bridge.Terrain, desiredDensity, desiredLayer, desiredColor);
                 area.ConfigureGroundLayer(desiredLayer, strength);
                 area.SetGroundColorTexture(desiredColor, true, strength);
@@ -360,15 +428,24 @@ namespace Cone.Grass.MicroVerse
                 Density = Observe(desiredDensity),
                 GroundColor = Observe(desiredColor ? desiredColor : desiredLayer ? desiredLayer.diffuseTexture : null)
             };
-            bool known = observed.TryGetValue(bridge, out ObservedInputs previous);
+            bool known = s_observed.TryGetValue(bridge, out ObservedInputs previous);
             if (forceInvalidate || !known || !current.Density.Equals(previous.Density))
+            {
                 area.MarkCoverageDirty();
+            }
+
             if (forceGroundBake || !known || !current.GroundColor.Equals(previous.GroundColor))
+            {
                 area.MarkGroundColorDirty();
-            observed[bridge] = current;
+            }
+
+            s_observed[bridge] = current;
 
             if (markSceneDirty && bindingChanged)
+            {
                 MarkAuthoringObjectDirty(area);
+            }
+
             bridge.SetRefreshResult(valid, valid && bridge.BakeTerrainGroundColor
                 ? $"Bound {density.name}; terrain ground albedo is baked at {bridge.GroundBakeResolution} x {bridge.GroundBakeResolution}."
                 : message);
@@ -382,11 +459,16 @@ namespace Cone.Grass.MicroVerse
         public static bool TryValidateForBuild(GrassMicroVerseBridge bridge, out string message)
         {
             if (!TryResolve(bridge, out Texture2D density, out message, true))
+            {
                 return false;
+            }
+
             if (!IsSaved(bridge.MaskTarget, out message) || !IsSaved(density, out message) ||
                 !IsSaved(bridge.Terrain.terrainData, out message) ||
                 (bridge.GroundLayer && !IsSaved(bridge.GroundLayer, out message)))
+            {
                 return false;
+            }
 
             Texture2D groundColor = bridge.GroundColorOverride;
             if (bridge.BakeTerrainGroundColor)
@@ -399,7 +481,10 @@ namespace Cone.Grass.MicroVerse
                 }
                 if (!TryGetSavedGroundSourceKey(bridge, out string sourceKey, out message) ||
                     !GroundSourcesAreSaved(bridge, out message))
+                {
                     return false;
+                }
+
                 if (bridge.GroundBakeSourceKey != sourceKey ||
                     AssetDatabase.GetAssetPath(groundColor) != bridge.GroundBakeAssetPath ||
                     bridge.GroundBakeOutputKey != AssetDatabase.GetAssetDependencyHash(bridge.GroundBakeAssetPath).ToString() ||
@@ -410,12 +495,16 @@ namespace Cone.Grass.MicroVerse
                 }
             }
             else if (groundColor && !IsSaved(groundColor, out message))
+            {
                 return false;
+            }
             else if (!groundColor && bridge.GroundLayer && bridge.GroundLayer.diffuseTexture)
             {
                 if (!IsSaved(bridge.GroundLayer.diffuseTexture, out message) ||
                     !GroundLayerSamplerIsSaved(bridge, out message))
+                {
                     return false;
+                }
             }
 
             float strength = GroundStrength(bridge, bridge.GroundLayer, groundColor);
@@ -453,9 +542,11 @@ namespace Cone.Grass.MicroVerse
             }
             if (!TerrainGrassAlbedoBaker.TryGetSourceSignature(bridge.Terrain, bridge.GroundBakeResolution,
                 out Hash128 signature, out message))
+            {
                 return false;
+            }
 
-            bool known = groundBakes.TryGetValue(bridge, out GroundBakeState previous);
+            bool known = s_groundBakes.TryGetValue(bridge, out GroundBakeState previous);
             bool sourcesSaved = GroundSourcesAreSaved(bridge, out _);
             string outputKey = texture ? AssetDatabase.GetAssetDependencyHash(path).ToString() : string.Empty;
             // The dependency hash describes the saved asset. An output can retain
@@ -469,18 +560,25 @@ namespace Cone.Grass.MicroVerse
             if (!forceBake && known && texture && previous.AssetPath == path &&
                 previous.SourceSignature == signature && previous.SavedKey == bridge.GroundBakeSourceKey &&
                 bridge.GroundBakeOutputKey == outputKey && !outputChanged &&
-                previous.AssetRevision == assetRevision &&
+                previous.AssetRevision == s_assetRevision &&
                 previous.SourcesSaved == sourcesSaved &&
                 path == bridge.GroundBakeAssetPath && texture.width == bridge.GroundBakeResolution &&
                 texture.height == bridge.GroundBakeResolution)
+            {
                 return true;
+            }
+
             if (!TryGetSavedGroundSourceKey(bridge, out string sourceKey, out message))
+            {
                 return false;
+            }
             // A live GPU bake can preview dirty source assets, but their previous
             // disk hash cannot certify the new image for a later editor session or
             // build. Keep an invalid durable key until the sources have been saved.
             if (!sourcesSaved)
+            {
                 sourceKey = string.Empty;
+            }
 
             bool sourceChanged = known && previous.SourceSignature != signature;
             bool needsBake = forceBake || !texture || sourceChanged || bridge.GroundBakeSourceKey != sourceKey ||
@@ -500,7 +598,10 @@ namespace Cone.Grass.MicroVerse
                 }
                 if (!TerrainGrassAlbedoBaker.TryBake(sourceTerrain, resolution,
                     path, out texture, out message))
+                {
                     return false;
+                }
+
                 baked = true;
                 if (!bridge || !bridge.PlacementArea)
                 {
@@ -532,20 +633,30 @@ namespace Cone.Grass.MicroVerse
                 bridge.GroundBakeSourceKey != sourceKey || bridge.GroundBakeOutputKey != outputKey)
             {
                 if (recordUndo)
+                {
                     Undo.RecordObject(bridge, "Update MicroVerse ground-albedo binding");
+                }
+
                 bridge.SetBakedGroundColor(texture, path, sourceKey, outputKey);
                 if (markSceneDirty)
+                {
                     MarkAuthoringObjectDirty(bridge);
+                }
             }
             // Keep the signature of the inputs that produced this image. Saving the
             // output and notifying Baked subscribers can also edit source assets;
             // adopting their later signature would certify those edits without ever
             // baking them. The next poll must observe that change and bake again.
-            groundBakes[bridge] = new GroundBakeState
+            s_groundBakes[bridge] = new GroundBakeState
             {
-                SourceSignature = signature, AssetPath = path, SavedKey = sourceKey, AssetRevision = assetRevision,
-                SourcesSaved = sourcesSaved, OutputEntity = texture.GetEntityId(),
-                OutputUpdateCount = texture.updateCount, OutputDirtyCount = EditorUtility.GetDirtyCount(texture)
+                SourceSignature = signature,
+                AssetPath = path,
+                SavedKey = sourceKey,
+                AssetRevision = s_assetRevision,
+                SourcesSaved = sourcesSaved,
+                OutputEntity = texture.GetEntityId(),
+                OutputUpdateCount = texture.updateCount,
+                OutputDirtyCount = EditorUtility.GetDirtyCount(texture)
             };
             message = null;
             return true;
@@ -560,10 +671,16 @@ namespace Cone.Grass.MicroVerse
                 texture.format != TextureFormat.RGBAHalf || GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat) ||
                 texture.filterMode != FilterMode.Trilinear || texture.wrapModeU != TextureWrapMode.Clamp ||
                 texture.wrapModeV != TextureWrapMode.Clamp || texture.anisoLevel != 1 || texture.mipMapBias != 0f)
+            {
                 return false;
+            }
+
             int mipCount = 1;
             for (int size = resolution; size > 1; size >>= 1)
+            {
                 mipCount++;
+            }
+
             return texture.mipmapCount == mipCount;
         }
 
@@ -572,7 +689,9 @@ namespace Cone.Grass.MicroVerse
         {
             key = null;
             if (!TerrainGrassAlbedoBaker.TryGetSourceSignature(bridge.Terrain, bridge.GroundBakeResolution, out _, out message))
+            {
                 return false;
+            }
 
             TerrainData data = bridge.Terrain.terrainData;
             Material material = GetTerrainMaterial(bridge.Terrain);
@@ -586,7 +705,10 @@ namespace Cone.Grass.MicroVerse
                 !AppendSavedAsset(state, material, out message) ||
                 !AppendSavedAsset(state, material.shader, out message) ||
                 !AppendSavedAsset(state, Shader.Find(TerrainGrassAlbedoBaker.BakeShaderName), out message))
+            {
                 return false;
+            }
+
             state.Append(material.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT") ? '1' : '0').Append('|');
             AppendFloat(state, material.GetFloat("_HeightTransition"));
             foreach (TerrainLayer layer in data.terrainLayers)
@@ -594,7 +716,10 @@ namespace Cone.Grass.MicroVerse
                 if (!AppendSavedAsset(state, layer, out message) ||
                     !AppendSavedAsset(state, layer.diffuseTexture, out message) ||
                     !AppendSavedAsset(state, layer.maskMapTexture, out message))
+                {
                     return false;
+                }
+
                 AppendFloat(state, layer.tileSize.x); AppendFloat(state, layer.tileSize.y);
                 AppendFloat(state, layer.tileOffset.x); AppendFloat(state, layer.tileOffset.y);
                 AppendVector(state, layer.diffuseRemapMin); AppendVector(state, layer.diffuseRemapMax);
@@ -629,16 +754,27 @@ namespace Cone.Grass.MicroVerse
         {
             TerrainData data = bridge.Terrain.terrainData;
             if (!IsSaved(data, out message) || !IsSaved(GetTerrainMaterial(bridge.Terrain), out message))
+            {
                 return false;
+            }
+
             foreach (TerrainLayer layer in data.terrainLayers)
             {
                 if (!IsSaved(layer, out message) ||
                     (layer.diffuseTexture && !IsSaved(layer.diffuseTexture, out message)) ||
                     (layer.maskMapTexture && !IsSaved(layer.maskMapTexture, out message)))
+                {
                     return false;
+                }
             }
             for (int i = 0; i < data.alphamapTextureCount; i++)
-                if (!IsSaved(data.GetAlphamapTexture(i), out message)) return false;
+            {
+                if (!IsSaved(data.GetAlphamapTexture(i), out message))
+                {
+                    return false;
+                }
+            }
+
             message = null;
             return true;
         }
@@ -652,11 +788,17 @@ namespace Cone.Grass.MicroVerse
             for (int index = 0; index < layers.Length; index++)
             {
                 if (layers[index] != bridge.GroundLayer)
+                {
                     continue;
+                }
+
                 TerrainLayer samplerLayer = layers[index / 4 * 4];
                 if (samplerLayer && (!IsSaved(samplerLayer, out message) ||
                     (samplerLayer.diffuseTexture && !IsSaved(samplerLayer.diffuseTexture, out message))))
+                {
                     return false;
+                }
+
                 break;
             }
             // A missing group-first layer/diffuse uses Unity's built-in gray sampler.
@@ -686,7 +828,10 @@ namespace Cone.Grass.MicroVerse
             // asset. A detached/replaced reference must not hide the configured
             // recovery path or be reused as a completed saved bake.
             if (TerrainGrassAlbedoBaker.TryGetOutputAssetPath(texture, out string path))
+            {
                 return path;
+            }
+
             texture = null;
             return CanonicalAssetPath(bridge.GroundBakeAssetPath);
         }
@@ -695,7 +840,10 @@ namespace Cone.Grass.MicroVerse
         {
             string normalized = (path ?? string.Empty).Replace('\\', '/');
             if (string.IsNullOrEmpty(normalized))
+            {
                 return normalized;
+            }
+
             string guid = AssetDatabase.AssetPathToGUID(normalized, AssetPathToGUIDOptions.OnlyExistingAssets);
             return string.IsNullOrEmpty(guid) ? normalized : AssetDatabase.GUIDToAssetPath(guid);
         }
@@ -719,10 +867,20 @@ namespace Cone.Grass.MicroVerse
             {
                 Scene scene = SceneManager.GetSceneAt(index);
                 if (!scene.isLoaded || EditorSceneManager.IsPreviewScene(scene))
+                {
                     continue;
+                }
+
                 foreach (GameObject root in scene.GetRootGameObjects())
+                {
                     foreach (GrassMicroVerseBridge other in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
-                        if (ConflictsWithGroundOutput(bridge, other, path)) return true;
+                    {
+                        if (ConflictsWithGroundOutput(bridge, other, path))
+                        {
+                            return true;
+                        }
+                    }
+                }
             }
             return false;
         }
@@ -754,16 +912,27 @@ namespace Cone.Grass.MicroVerse
         private static TextureState Observe(Texture texture)
         {
             if (!texture)
+            {
                 return default;
+            }
+
             string path = AssetDatabase.GetAssetPath(texture);
             int revision = 0;
-            if (!string.IsNullOrEmpty(path) && !importRevisions.TryGetValue(path, out revision))
-                importRevisions.Add(path, 0);
+            if (!string.IsNullOrEmpty(path) && !s_importRevisions.TryGetValue(path, out revision))
+            {
+                s_importRevisions.Add(path, 0);
+            }
+
             return new TextureState
             {
-                Entity = texture.GetEntityId(), AssetPath = path, Width = texture.width, Height = texture.height,
-                DirtyCount = EditorUtility.GetDirtyCount(texture), ImportRevision = revision,
-                UpdateCount = texture.updateCount, Format = (int)texture.graphicsFormat,
+                Entity = texture.GetEntityId(),
+                AssetPath = path,
+                Width = texture.width,
+                Height = texture.height,
+                DirtyCount = EditorUtility.GetDirtyCount(texture),
+                ImportRevision = revision,
+                UpdateCount = texture.updateCount,
+                Format = (int)texture.graphicsFormat,
                 Dependency = string.IsNullOrEmpty(path) ? default : AssetDatabase.GetAssetDependencyHash(path)
             };
         }
@@ -771,14 +940,26 @@ namespace Cone.Grass.MicroVerse
         private static bool AllAlive(Texture2D[] textures)
         {
             foreach (Texture2D texture in textures)
-                if (!texture) return false;
+            {
+                if (!texture)
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
 
         private static bool HasTerrainLayer(Terrain terrain, TerrainLayer layer)
         {
             foreach (TerrainLayer candidate in terrain.terrainData.terrainLayers)
-                if (candidate == layer) return true;
+            {
+                if (candidate == layer)
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
@@ -788,7 +969,9 @@ namespace Cone.Grass.MicroVerse
             PrefabUtility.RecordPrefabInstancePropertyModifications(component);
             if (component.gameObject.scene.IsValid() && component.gameObject.scene.isLoaded &&
                 !EditorSceneManager.IsPreviewScene(component.gameObject.scene))
+            {
                 EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+            }
         }
     }
 }

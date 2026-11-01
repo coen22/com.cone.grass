@@ -73,7 +73,7 @@ namespace Cone.Grass.Tests
             Mesh[] rebuilt = null;
             try
             {
-                settings.grassMeshSubdivision = 5;
+                settings.GrassMeshSubdivision = 5;
                 original = settings.GetLodMeshes();
                 Assert.That(original.Length, Is.EqualTo(3));
                 Assert.That(original[0].vertexCount, Is.EqualTo(14));
@@ -84,13 +84,15 @@ namespace Cone.Grass.Tests
                 Assert.That(settings.GetLodMeshes(), Is.SameAs(original));
                 Assert.That(settings.GetGrassMeshCache(), Is.SameAs(original[0]));
 
-                settings.grassMeshSubdivision = 3;
+                settings.GrassMeshSubdivision = 3;
                 rebuilt = settings.GetLodMeshes();
                 Assert.That(rebuilt[0].vertexCount, Is.EqualTo(10));
                 Assert.That(rebuilt[1].vertexCount, Is.EqualTo(8));
                 Assert.That(rebuilt[2].vertexCount, Is.EqualTo(4));
                 foreach (Mesh oldMesh in original)
+                {
                     Assert.That(oldMesh == null, Is.True, "An obsolete native mesh must be destroyed when quality changes.");
+                }
             }
             finally
             {
@@ -104,10 +106,17 @@ namespace Cone.Grass.Tests
         private static void DestroyRemaining(Mesh[] meshes)
         {
             if (meshes == null)
+            {
                 return;
+            }
+
             foreach (Mesh mesh in meshes)
+            {
                 if (mesh)
+                {
                     Object.DestroyImmediate(mesh);
+                }
+            }
         }
     }
 }

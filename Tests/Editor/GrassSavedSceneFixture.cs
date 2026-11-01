@@ -12,15 +12,15 @@ namespace Cone.Grass.Tests
     internal sealed class GrassSavedSceneFixture : IDisposable
     {
         private const string TemplateGuid = "c0293ca4b83f495b84033719ef793631";
-        private readonly Scene priorActive;
-        private readonly PriorScene[] priorScenes;
-        private readonly SceneSetup[] priorSetup;
-        private readonly string templatePath;
-        private readonly Hash128 templateHash;
-        private readonly string copyPath;
-        private readonly string targetCopyPath;
-        private string copyGuid, targetCopyGuid;
-        private bool copied, targetCopied;
+        private readonly Scene _priorActive;
+        private readonly PriorScene[] _priorScenes;
+        private readonly SceneSetup[] _priorSetup;
+        private readonly string _templatePath;
+        private readonly Hash128 _templateHash;
+        private readonly string _copyPath;
+        private readonly string _targetCopyPath;
+        private readonly string _copyGuid, _targetCopyGuid;
+        private bool _copied, _targetCopied;
         public Scene Source { get; private set; }
         public Scene Target { get; private set; }
 
@@ -42,47 +42,50 @@ namespace Cone.Grass.Tests
         public GrassSavedSceneFixture(bool includeTarget = false)
         {
             Assert.That(EditorApplication.isPlaying, Is.False, "Acquire: this scene control retains its Edit-only domain.");
-            priorActive = SceneManager.GetActiveScene();
-            priorSetup = EditorSceneManager.GetSceneManagerSetup();
-            priorScenes = new PriorScene[SceneManager.sceneCount];
-            for (int i = 0; i < priorScenes.Length; i++)
-                priorScenes[i] = new PriorScene(SceneManager.GetSceneAt(i));
-            templatePath = AssetDatabase.GUIDToAssetPath(TemplateGuid);
-            Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(templatePath), Is.Not.Null,
-                $"Acquire template '{templatePath}' from GUID {TemplateGuid}.");
-            Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False,
-                $"Acquire template '{templatePath}': never take ownership of a scene already present in the user's hierarchy.");
-            templateHash = AssetDatabase.GetAssetDependencyHash(templatePath);
-            copyPath = NewCopyPath();
-            targetCopyPath = includeTarget ? NewCopyPath() : null;
+            _priorActive = SceneManager.GetActiveScene();
+            _priorSetup = EditorSceneManager.GetSceneManagerSetup();
+            _priorScenes = new PriorScene[SceneManager.sceneCount];
+            for (int i = 0; i < _priorScenes.Length; i++)
+            {
+                _priorScenes[i] = new PriorScene(SceneManager.GetSceneAt(i));
+            }
+
+            _templatePath = AssetDatabase.GUIDToAssetPath(TemplateGuid);
+            Assert.That(AssetDatabase.LoadAssetAtPath<SceneAsset>(_templatePath), Is.Not.Null,
+                $"Acquire template '{_templatePath}' from GUID {TemplateGuid}.");
+            Assert.That(SceneManager.GetSceneByPath(_templatePath).IsValid(), Is.False,
+                $"Acquire template '{_templatePath}': never take ownership of a scene already present in the user's hierarchy.");
+            _templateHash = AssetDatabase.GetAssetDependencyHash(_templatePath);
+            _copyPath = NewCopyPath();
+            _targetCopyPath = includeTarget ? NewCopyPath() : null;
             try
             {
-                copyGuid = CopyTemplate(copyPath, ref copied);
-                Source = OpenOwnedScene(copyPath);
-                AssertEmptyNormalScene(Source, copyPath);
+                _copyGuid = CopyTemplate(_copyPath, ref _copied);
+                Source = OpenOwnedScene(_copyPath);
+                AssertEmptyNormalScene(Source, _copyPath);
                 if (includeTarget)
                 {
                     // Git/registry packages are read-only: even opening their scene
                     // template is rejected by Unity. Both loaded scenes must be
                     // independent writable copies; the package asset is only read.
-                    targetCopyGuid = CopyTemplate(targetCopyPath, ref targetCopied);
-                    Assert.That(targetCopyGuid, Is.Not.EqualTo(copyGuid),
+                    _targetCopyGuid = CopyTemplate(_targetCopyPath, ref _targetCopied);
+                    Assert.That(_targetCopyGuid, Is.Not.EqualTo(_copyGuid),
                         "Acquire target: source and target must own distinct asset identities.");
-                    Target = OpenOwnedScene(targetCopyPath);
-                    AssertEmptyNormalScene(Target, targetCopyPath);
-                    Assert.That(Source, Is.Not.EqualTo(Target), $"Acquire '{copyPath}': source and target copies must be distinct.");
+                    Target = OpenOwnedScene(_targetCopyPath);
+                    AssertEmptyNormalScene(Target, _targetCopyPath);
+                    Assert.That(Source, Is.Not.EqualTo(Target), $"Acquire '{_copyPath}': source and target copies must be distinct.");
                 }
-                Assert.That(SceneManager.sceneCount, Is.EqualTo(priorScenes.Length + (includeTarget ? 2 : 1)),
-                    $"Acquire '{copyPath}': only the requested owned scenes may be added.");
-                Assert.That(During($"Activate source '{copyPath}'", () => SceneManager.SetActiveScene(Source)), Is.True,
-                    $"Activate source '{copyPath}': SetActiveScene must succeed.");
-                Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(Source), $"Activate source '{copyPath}': verify actual active scene.");
+                Assert.That(SceneManager.sceneCount, Is.EqualTo(_priorScenes.Length + (includeTarget ? 2 : 1)),
+                    $"Acquire '{_copyPath}': only the requested owned scenes may be added.");
+                Assert.That(During($"Activate source '{_copyPath}'", () => SceneManager.SetActiveScene(Source)), Is.True,
+                    $"Activate source '{_copyPath}': SetActiveScene must succeed.");
+                Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(Source), $"Activate source '{_copyPath}': verify actual active scene.");
             }
             catch (Exception bodyError)
             {
                 try { Dispose(); }
                 catch (Exception cleanupError)
-                { throw new AggregateException($"Scene acquisition/owned cleanup failures retained for '{copyPath}'.", bodyError, cleanupError); }
+                { throw new AggregateException($"Scene acquisition/owned cleanup failures retained for '{_copyPath}'.", bodyError, cleanupError); }
                 throw;
             }
         }
@@ -104,7 +107,7 @@ namespace Cone.Grass.Tests
             Assert.That(path.StartsWith("Assets/", StringComparison.Ordinal), Is.True,
                 $"Acquire copy '{path}': only writable project assets may be created.");
             Assert.That(ExistingAssetGuid(path), Is.Empty, $"Acquire copy '{path}': path must be unused.");
-            owned = During($"Copy template '{templatePath}' to '{path}'", () => AssetDatabase.CopyAsset(templatePath, path));
+            owned = During($"Copy template '{_templatePath}' to '{path}'", () => AssetDatabase.CopyAsset(_templatePath, path));
             Assert.That(owned, Is.True, $"Acquire copy '{path}': only a successfully created unique copy is owned for cleanup.");
             string guid = ExistingAssetGuid(path);
             Assert.That(string.IsNullOrEmpty(guid), Is.False, $"Acquire copy '{path}': record its actual asset identity.");
@@ -123,10 +126,10 @@ namespace Cone.Grass.Tests
 
         private Scene OpenOwnedScene(string path)
         {
-            bool isSource = copied && path == copyPath;
-            bool isTarget = targetCopied && path == targetCopyPath;
+            bool isSource = _copied && path == _copyPath;
+            bool isTarget = _targetCopied && path == _targetCopyPath;
             Assert.That(isSource || isTarget, Is.True, $"Open '{path}': require a successfully acquired fixture copy.");
-            AssertOwnedAsset(path, isSource ? copyGuid : targetCopyGuid);
+            AssertOwnedAsset(path, isSource ? _copyGuid : _targetCopyGuid);
             Assert.That(SceneManager.GetSceneByPath(path).IsValid(), Is.False,
                 $"Open '{path}': never take ownership of an already loaded or uncertain scene.");
             Scene opened = During($"Open owned scene '{path}' additively", () => EditorSceneManager.OpenScene(path, OpenSceneMode.Additive));
@@ -134,8 +137,11 @@ namespace Cone.Grass.Tests
             // scene. Leave any unproven partial acquisition for diagnosis.
             Assert.That(opened.IsValid(), Is.True, $"Open '{path}': returned scene must be valid.");
             Assert.That(opened.path, Is.EqualTo(path), $"Open '{path}': returned scene must match the requested asset.");
-            foreach (PriorScene previous in priorScenes)
+            foreach (PriorScene previous in _priorScenes)
+            {
                 Assert.That(opened, Is.Not.EqualTo(previous.Scene), $"Open '{path}': must not acquire prior scene '{previous.Path}' ({previous.Name}).");
+            }
+
             return opened;
         }
 
@@ -150,34 +156,37 @@ namespace Cone.Grass.Tests
 
         public void RestorePriorActive()
         {
-            Assert.That(priorActive.IsValid() && priorActive.isLoaded, Is.True,
-                $"Restore active scene for '{copyPath}': the prior scene must remain valid and loaded.");
-            if (SceneManager.GetActiveScene() != priorActive)
-                Assert.That(During($"Restore active scene '{priorActive.path}'", () => SceneManager.SetActiveScene(priorActive)), Is.True,
-                    $"Restore active scene '{priorActive.path}': SetActiveScene must succeed.");
-            Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(priorActive),
-                $"Restore active scene '{priorActive.path}': verify actual active scene even when no switch was needed.");
+            Assert.That(_priorActive.IsValid() && _priorActive.isLoaded, Is.True,
+                $"Restore active scene for '{_copyPath}': the prior scene must remain valid and loaded.");
+            if (SceneManager.GetActiveScene() != _priorActive)
+            {
+                Assert.That(During($"Restore active scene '{_priorActive.path}'", () => SceneManager.SetActiveScene(_priorActive)), Is.True,
+                    $"Restore active scene '{_priorActive.path}': SetActiveScene must succeed.");
+            }
+
+            Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(_priorActive),
+                $"Restore active scene '{_priorActive.path}': verify actual active scene even when no switch was needed.");
         }
 
         public void SaveAndCloseSource()
         {
-            Assert.That(copied && Source.IsValid() && Source.isLoaded, Is.True,
-                $"Save source '{copyPath}': require a successfully copied, valid loaded source.");
-            Assert.That(Source.path, Is.EqualTo(copyPath), $"Save source '{copyPath}': only the fixture-owned copy may be saved.");
-            AssertOwnedAsset(copyPath, copyGuid);
+            Assert.That(_copied && Source.IsValid() && Source.isLoaded, Is.True,
+                $"Save source '{_copyPath}': require a successfully copied, valid loaded source.");
+            Assert.That(Source.path, Is.EqualTo(_copyPath), $"Save source '{_copyPath}': only the fixture-owned copy may be saved.");
+            AssertOwnedAsset(_copyPath, _copyGuid);
             RestorePriorActive();
-            Assert.That(During($"Save source '{copyPath}'", () => EditorSceneManager.SaveScene(Source, copyPath)), Is.True,
-                $"Save source '{copyPath}': SaveScene must succeed.");
+            Assert.That(During($"Save source '{_copyPath}'", () => EditorSceneManager.SaveScene(Source, _copyPath)), Is.True,
+                $"Save source '{_copyPath}': SaveScene must succeed.");
             CloseSource();
         }
 
         public Scene ReopenSource()
         {
-            Assert.That(copied, Is.True, $"Reopen source '{copyPath}': the fixture must own the copied asset.");
-            Assert.That(Source.IsValid(), Is.False, $"Reopen source '{copyPath}': close the previous source first.");
-            Assert.That(SceneManager.GetSceneByPath(copyPath).IsValid(), Is.False,
-                $"Reopen source '{copyPath}': do not take ownership of an already loaded or uncertain scene.");
-            Source = OpenOwnedScene(copyPath);
+            Assert.That(_copied, Is.True, $"Reopen source '{_copyPath}': the fixture must own the copied asset.");
+            Assert.That(Source.IsValid(), Is.False, $"Reopen source '{_copyPath}': close the previous source first.");
+            Assert.That(SceneManager.GetSceneByPath(_copyPath).IsValid(), Is.False,
+                $"Reopen source '{_copyPath}': do not take ownership of an already loaded or uncertain scene.");
+            Source = OpenOwnedScene(_copyPath);
             return Source;
         }
 
@@ -185,14 +194,14 @@ namespace Cone.Grass.Tests
         {
             if (Source.IsValid())
             {
-                Assert.That(Source.path, Is.EqualTo(copyPath), $"Close source '{copyPath}': verify owned path before closing.");
+                Assert.That(Source.path, Is.EqualTo(_copyPath), $"Close source '{_copyPath}': verify owned path before closing.");
                 RestorePriorActive();
-                Assert.That(During($"Close source '{copyPath}'", () => EditorSceneManager.CloseScene(Source, true)), Is.True,
-                    $"Close source '{copyPath}': CloseScene must succeed.");
+                Assert.That(During($"Close source '{_copyPath}'", () => EditorSceneManager.CloseScene(Source, true)), Is.True,
+                    $"Close source '{_copyPath}': CloseScene must succeed.");
                 Source = default;
             }
-            Assert.That(SceneManager.GetSceneByPath(copyPath).IsValid(), Is.False,
-                $"Close source '{copyPath}': no loaded or uncertain copy may remain.");
+            Assert.That(SceneManager.GetSceneByPath(_copyPath).IsValid(), Is.False,
+                $"Close source '{_copyPath}': no loaded or uncertain copy may remain.");
         }
 
         public Scene SaveAndReopenSource()
@@ -204,12 +213,18 @@ namespace Cone.Grass.Tests
         private static void DeleteOwnedCopy(string path, string guid, ref bool owned)
         {
             if (path == null)
+            {
                 return;
+            }
+
             bool remainingCopyScene = SceneManager.GetSceneByPath(path).IsValid();
             Assert.That(remainingCopyScene, Is.False,
                 $"Delete owned copy '{path}': an uncertain or still loaded copy is retained for diagnosis, not deleted.");
             if (!owned)
+            {
                 return;
+            }
+
             AssertOwnedAsset(path, guid);
             Assert.That(AssetDatabase.DeleteAsset(path), Is.True, $"Delete owned copy '{path}': DeleteAsset must succeed.");
             owned = false;
@@ -220,33 +235,33 @@ namespace Cone.Grass.Tests
         {
             var failures = new List<Exception>();
             Attempt(failures, "Restore prior active scene", RestorePriorActive);
-            Attempt(failures, $"Close target copy '{targetCopyPath}'", () =>
+            Attempt(failures, $"Close target copy '{_targetCopyPath}'", () =>
             {
                 if (Target.IsValid())
                 {
-                    Assert.That(Target.path, Is.EqualTo(targetCopyPath), $"Close target '{targetCopyPath}': verify owned path.");
-                    Assert.That(EditorSceneManager.CloseScene(Target, true), Is.True, $"Close target '{targetCopyPath}': CloseScene must succeed.");
+                    Assert.That(Target.path, Is.EqualTo(_targetCopyPath), $"Close target '{_targetCopyPath}': verify owned path.");
+                    Assert.That(EditorSceneManager.CloseScene(Target, true), Is.True, $"Close target '{_targetCopyPath}': CloseScene must succeed.");
                     Target = default;
                 }
             });
-            Attempt(failures, $"Close source '{copyPath}'", CloseSource);
-            Attempt(failures, $"Delete owned target copy '{targetCopyPath}'", () => DeleteOwnedCopy(targetCopyPath, targetCopyGuid, ref targetCopied));
-            Attempt(failures, $"Delete owned source copy '{copyPath}'", () => DeleteOwnedCopy(copyPath, copyGuid, ref copied));
-            Attempt(failures, $"Verify readonly template '{templatePath}'", () =>
+            Attempt(failures, $"Close source '{_copyPath}'", CloseSource);
+            Attempt(failures, $"Delete owned target copy '{_targetCopyPath}'", () => DeleteOwnedCopy(_targetCopyPath, _targetCopyGuid, ref _targetCopied));
+            Attempt(failures, $"Delete owned source copy '{_copyPath}'", () => DeleteOwnedCopy(_copyPath, _copyGuid, ref _copied));
+            Attempt(failures, $"Verify readonly template '{_templatePath}'", () =>
             {
-                Assert.That(SceneManager.GetSceneByPath(templatePath).IsValid(), Is.False, $"Verify template '{templatePath}': the template must never be opened.");
-                Assert.That(AssetDatabase.GetAssetDependencyHash(templatePath), Is.EqualTo(templateHash),
-                    $"Verify template '{templatePath}': copying it must never save or rewrite its package asset.");
+                Assert.That(SceneManager.GetSceneByPath(_templatePath).IsValid(), Is.False, $"Verify template '{_templatePath}': the template must never be opened.");
+                Assert.That(AssetDatabase.GetAssetDependencyHash(_templatePath), Is.EqualTo(_templateHash),
+                    $"Verify template '{_templatePath}': copying it must never save or rewrite its package asset.");
             });
             Attempt(failures, "Verify prior active scene and scene count", () =>
             {
-                Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(priorActive), "Verify prior setup: active scene must be unchanged.");
-                Assert.That(SceneManager.sceneCount, Is.EqualTo(priorScenes.Length), "Verify prior setup: scene count must be unchanged.");
+                Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(_priorActive), "Verify prior setup: active scene must be unchanged.");
+                Assert.That(SceneManager.sceneCount, Is.EqualTo(_priorScenes.Length), "Verify prior setup: scene count must be unchanged.");
             });
-            for (int i = 0; i < priorScenes.Length; i++)
+            for (int i = 0; i < _priorScenes.Length; i++)
             {
                 int index = i;
-                PriorScene previous = priorScenes[i];
+                PriorScene previous = _priorScenes[i];
                 string phase = $"Verify prior scene {index} '{previous.Path}' ({previous.Name})";
                 Attempt(failures, phase, () =>
                 {
@@ -257,23 +272,27 @@ namespace Cone.Grass.Tests
                     Assert.That(current.isLoaded, Is.EqualTo(previous.Loaded), phase + ": loaded state.");
                     Assert.That(current.isDirty, Is.EqualTo(previous.Dirty), phase + ": dirty state.");
                     if (current.isLoaded)
+                    {
                         Assert.That(current.GetRootGameObjects(), Is.EqualTo(previous.Roots), phase + ": root objects/order.");
+                    }
                 });
             }
             Attempt(failures, "Verify prior scene-manager setup", () =>
             {
                 SceneSetup[] after = EditorSceneManager.GetSceneManagerSetup();
-                Assert.That(after.Length, Is.EqualTo(priorSetup.Length), "Verify scene-manager setup: entry count.");
+                Assert.That(after.Length, Is.EqualTo(_priorSetup.Length), "Verify scene-manager setup: entry count.");
                 for (int i = 0; i < after.Length; i++)
                 {
-                    string phase = $"Verify scene-manager entry {i} '{priorSetup[i].path}'";
-                    Assert.That(after[i].path, Is.EqualTo(priorSetup[i].path), phase + ": path/order.");
-                    Assert.That(after[i].isLoaded, Is.EqualTo(priorSetup[i].isLoaded), phase + ": loaded state.");
-                    Assert.That(after[i].isActive, Is.EqualTo(priorSetup[i].isActive), phase + ": active state.");
+                    string phase = $"Verify scene-manager entry {i} '{_priorSetup[i].path}'";
+                    Assert.That(after[i].path, Is.EqualTo(_priorSetup[i].path), phase + ": path/order.");
+                    Assert.That(after[i].isLoaded, Is.EqualTo(_priorSetup[i].isLoaded), phase + ": loaded state.");
+                    Assert.That(after[i].isActive, Is.EqualTo(_priorSetup[i].isActive), phase + ": active state.");
                 }
             });
             if (failures.Count > 0)
-                throw new AggregateException($"Owned-scene cleanup/state checks failed for '{copyPath}'; uncertain artifacts retained.", failures);
+            {
+                throw new AggregateException($"Owned-scene cleanup/state checks failed for '{_copyPath}'; uncertain artifacts retained.", failures);
+            }
         }
 
         private static T During<T>(string phase, Func<T> operation)

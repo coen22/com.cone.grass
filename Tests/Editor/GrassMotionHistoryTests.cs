@@ -31,12 +31,16 @@ namespace Cone.Grass.Tests
             {
                 float z = x * 0.375f + 2f;
                 if ((Seed(x, z) & 0xff00000fu) == 0u)
+                {
                     candidates.Add(new Vector4(x, candidates.Count + 0.25f, z, 0.6f));
+                }
             }
             Vector4[] roots = candidates.ToArray();
             Vector4[] queries = { roots[4], roots[2], roots[0], roots[3], roots[1], roots[5] };
             for (int i = 0; i < queries.Length; i++)
+            {
                 queries[i].y += 17f; // A moving surface retains its old world height.
+            }
 
             RunGpuHistory(roots, new uint[] { 99, 2, 1, 97 },
                 new[] { 0, 2, 4, 0 }, new[] { 2, 2, 2, 0 }, new[] { 6, 3, 1, 0 }, queries,
@@ -87,7 +91,9 @@ namespace Cone.Grass.Tests
             {
                 float z = x * 0.25f + 1f;
                 if ((Seed(x, z) & 511u) == 0u)
+                {
                     candidates.Add(new Vector4(x, candidates.Count, z, 1f));
+                }
             }
             Vector4 duplicate = candidates[0];
             duplicate.y += 1000f;
@@ -162,15 +168,20 @@ namespace Cone.Grass.Tests
                     var actual = new Vector4[queries.Count];
                     resultBuffer.GetData(actual);
                     for (int i = 0; i < actual.Length; i++)
+                    {
                         Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
                             "Motion must follow the previous triangulated surface at a fragment, even when the current LOD has fewer vertices.");
+                    }
                 }
                 AssertPlanarMotionAcrossLods(shader, buffers);
             }
             finally
             {
                 foreach (GraphicsBuffer buffer in buffers)
+                {
                     buffer.Dispose();
+                }
+
                 UnityEngine.Object.DestroyImmediate(mesh);
             }
         }
@@ -180,7 +191,9 @@ namespace Cone.Grass.Tests
             // Same-pose planar surfaces must stay still even when their mesh LOD changes.
             // Different cap pairs additionally exercise the explicit material remapping.
             foreach (Vector2 tips in new[] { Vector2.zero, new Vector2(.4f, .4f), new Vector2(0f, .4f), new Vector2(.4f, 0f) })
+            {
                 foreach (int currentLod in new[] { 0, 2, 5 })
+                {
                     foreach (int previousLod in new[] { 0, 2, 5 })
                     {
                         Mesh current = InfiniteGrassRenderer.CreateBladeMesh(currentLod);
@@ -197,7 +210,11 @@ namespace Cone.Grass.Tests
                                     shape[corner] = new Vector2((v.x - .5f) * Mathf.Lerp(1f, tips.x, v.y), v.y);
                                     world[corner] = new Vector3(shape[corner].x, v.y, 0f);
                                 }
-                                if (Vector3.Cross(world[1] - world[0], world[2] - world[0]).sqrMagnitude < 1e-12f) continue;
+                                if (Vector3.Cross(world[1] - world[0], world[2] - world[0]).sqrMagnitude < 1e-12f)
+                                {
+                                    continue;
+                                }
+
                                 foreach (Vector3 weights in new[] { new Vector3(.1f, .8f, .1f), new Vector3(.2f, .2f, .6f) })
                                 {
                                     Vector2 point = shape[0] * weights.x + shape[1] * weights.y + shape[2] * weights.z;
@@ -207,8 +224,14 @@ namespace Cone.Grass.Tests
                                     queries.Add(new Vector4(point.x, point.y, lower, upper));
                                     edges.Add(new Vector3(0f, lower, 0f)); edges.Add(new Vector3(.5f * Mathf.Lerp(1f, tips.y, lower), 0f, 0f));
                                     edges.Add(new Vector3(0f, upper, 0f)); edges.Add(new Vector3(.5f * Mathf.Lerp(1f, tips.y, upper), 0f, 0f));
-                                    if (tips.x == tips.y) expected.Add(currentWorld);
-                                    else expected.Add(new Vector3(point.x * Mathf.Lerp(1f, tips.y, point.y) / Mathf.Lerp(1f, tips.x, point.y), point.y, 0f));
+                                    if (tips.x == tips.y)
+                                    {
+                                        expected.Add(currentWorld);
+                                    }
+                                    else
+                                    {
+                                        expected.Add(new Vector3(point.x * Mathf.Lerp(1f, tips.y, point.y) / Mathf.Lerp(1f, tips.x, point.y), point.y, 0f));
+                                    }
                                 }
                             }
                         }
@@ -219,9 +242,14 @@ namespace Cone.Grass.Tests
                         shader.SetInt("_TrapezoidCoordinates", 1); shader.SetFloat("_CurrentTipRatio", tips.x); shader.SetFloat("_PreviousTipRatio", tips.y);
                         shader.SetInt("_QueryCount", queries.Count); shader.SetBuffer(kernel, "_Queries", query); shader.SetBuffer(kernel, "_Edges", edge); shader.SetBuffer(kernel, "_Results", result);
                         shader.Dispatch(kernel, (queries.Count + 63) / 64, 1, 1); var actual = new Vector4[queries.Count]; result.GetData(actual);
-                        for (int i = 0; i < actual.Length; i++) Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
+                        for (int i = 0; i < actual.Length; i++)
+                        {
+                            Assert.That(Vector3.Distance(actual[i], expected[i]), Is.LessThan(0.00001f),
                             "An unchanged planar capped/pointed blade cannot gain velocity from a LOD switch; changed caps must map the same material across fraction.");
+                        }
                     }
+                }
+            }
         }
 
         private static Vector3 TestRowCenter(float height)
@@ -244,12 +272,18 @@ namespace Cone.Grass.Tests
                 Vector2 a = uv[ia], b = uv[ib], c = uv[ic];
                 float denominator = Cross(b - a, c - a);
                 // Pointed/A2C tips collapse the extra cap triangle; it has no surface.
-                if (Mathf.Abs(denominator) <= 0.00000001f) continue;
+                if (Mathf.Abs(denominator) <= 0.00000001f)
+                {
+                    continue;
+                }
+
                 float wb = Cross(point - a, c - a) / denominator;
                 float wc = Cross(b - a, point - a) / denominator;
                 float wa = 1f - wb - wc;
                 if (Mathf.Min(wa, Mathf.Min(wb, wc)) >= -0.00001f)
+                {
                     return positions[ia] * wa + positions[ib] * wb + positions[ic] * wc;
+                }
             }
             throw new InvalidOperationException("Test point was outside the generated blade mesh.");
         }
@@ -316,7 +350,10 @@ namespace Cone.Grass.Tests
                 // immutable snapshot must remain valid independently of that buffer.
                 var nextRoots = (Vector4[])roots.Clone();
                 for (int i = 0; i < nextRoots.Length; i++)
+                {
                     nextRoots[i].y += 100f;
+                }
+
                 positions.SetData(nextRoots);
 
                 GraphicsBuffer queryBuffer = Allocate(buffers, queries.Length, 16);
@@ -343,7 +380,9 @@ namespace Cone.Grass.Tests
             finally
             {
                 foreach (GraphicsBuffer buffer in buffers)
+                {
                     buffer.Dispose();
+                }
             }
         }
 
@@ -376,7 +415,9 @@ namespace Cone.Grass.Tests
         {
             if (!SystemInfo.supportsComputeShaders || !SystemInfo.supportsIndirectArgumentsBuffer ||
                 SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
                 Assert.Ignore("This GPU integration test requires a compute-capable graphics device; it is not a CPU simulation.");
+            }
         }
     }
 }

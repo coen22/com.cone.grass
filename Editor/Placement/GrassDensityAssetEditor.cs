@@ -6,14 +6,14 @@ namespace Cone.Grass.Editor
     [CustomEditor(typeof(GrassDensityAsset))]
     internal sealed class GrassDensityAssetEditor : UnityEditor.Editor
     {
-        private int mapWidth;
-        private int mapHeight;
+        private int _mapWidth;
+        private int _mapHeight;
 
         private void OnEnable()
         {
             GrassDensityAsset asset = (GrassDensityAsset)target;
-            mapWidth = asset.Width;
-            mapHeight = asset.Height;
+            _mapWidth = asset.Width;
+            _mapHeight = asset.Height;
             Undo.undoRedoPerformed += OnUndoRedo;
         }
 
@@ -23,14 +23,14 @@ namespace Cone.Grass.Editor
         {
             GrassDensityAsset asset = (GrassDensityAsset)target;
             EditorGUILayout.HelpBox("Linear positive density: black removes grass, full red-channel coverage allows the configured density. Use a Placement Area's Scene Brush to paint this asset.", MessageType.Info);
-            mapWidth = Mathf.Clamp(EditorGUILayout.IntField("Width", mapWidth), GrassDensityAsset.MinimumResolution, GrassDensityAsset.MaximumResolution);
-            mapHeight = Mathf.Clamp(EditorGUILayout.IntField("Height", mapHeight), GrassDensityAsset.MinimumResolution, GrassDensityAsset.MaximumResolution);
-            using (new EditorGUI.DisabledScope(mapWidth == asset.Width && mapHeight == asset.Height))
+            _mapWidth = Mathf.Clamp(EditorGUILayout.IntField("Width", _mapWidth), GrassDensityAsset.MinimumResolution, GrassDensityAsset.MaximumResolution);
+            _mapHeight = Mathf.Clamp(EditorGUILayout.IntField("Height", _mapHeight), GrassDensityAsset.MinimumResolution, GrassDensityAsset.MaximumResolution);
+            using (new EditorGUI.DisabledScope(_mapWidth == asset.Width && _mapHeight == asset.Height))
             {
                 if (GUILayout.Button("Resize and preserve coverage"))
                 {
                     Undo.RegisterCompleteObjectUndo(asset, "Resize grass density map");
-                    asset.Resize(mapWidth, mapHeight);
+                    asset.Resize(_mapWidth, _mapHeight);
                     SaveChange(asset);
                 }
             }
@@ -58,11 +58,14 @@ namespace Cone.Grass.Editor
         private void OnUndoRedo()
         {
             if (!target)
+            {
                 return;
+            }
+
             GrassDensityAsset asset = (GrassDensityAsset)target;
             asset.NotifyChanged();
-            mapWidth = asset.Width;
-            mapHeight = asset.Height;
+            _mapWidth = asset.Width;
+            _mapHeight = asset.Height;
             Repaint();
             EditorApplication.QueuePlayerLoopUpdate();
             SceneView.RepaintAll();

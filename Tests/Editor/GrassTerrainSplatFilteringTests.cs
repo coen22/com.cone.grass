@@ -56,8 +56,15 @@ namespace Cone.Grass.Tests
             }
             finally
             {
-                if (normal) Object.DestroyImmediate(normal);
-                if (diffuse) Object.DestroyImmediate(diffuse);
+                if (normal)
+                {
+                    Object.DestroyImmediate(normal);
+                }
+
+                if (diffuse)
+                {
+                    Object.DestroyImmediate(diffuse);
+                }
             }
         }
 

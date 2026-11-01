@@ -55,7 +55,7 @@ namespace Cone.Grass.Tests
                 typeof(object).GetMethod(nameof(ToString)), typeof(object), null, "foreign")), Is.False);
             Assert.That(Admitted(known, Leaf(typeof(GrassBatchRunReloadGuardTests), nameof(UnauditedHelper), "unknown")), Is.False);
             Assert.That(Admitted(new GrassBatchRunReloadGuard.SelectedLeaf(
-                known.Method, typeof(GrassBatchRunReloadGuardTests), null, "forged fixture")), Is.False);
+                known._method, typeof(GrassBatchRunReloadGuardTests), null, "forged fixture")), Is.False);
             Assert.That(GrassBatchRunReloadGuard.IsReloadSafeSelection(new[] { known }, _ => "Assets/copied.asmdef", true, true), Is.False);
             Assert.That(GrassBatchRunReloadGuard.IsReloadSafeSelection(new[] { known }, OwnedPath, false, true), Is.False);
             Assert.That(GrassBatchRunReloadGuard.IsReloadSafeSelection(new[] { known }, OwnedPath, true, false), Is.False);
@@ -70,31 +70,31 @@ namespace Cone.Grass.Tests
             var first = Leaf(typeof(GrassContactRenderingTests),
                 nameof(GrassContactRenderingTests.VisibleSurfacesCastContactsWhenGrassParticipates), "first",
                 false, GrassContactRenderingTests.ContactLayout.SceneToGrass);
-            var second = Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "second",
+            var second = Leaf(typeof(GrassContactRenderingTests), first._method.Name, "second",
                 true, GrassContactRenderingTests.ContactLayout.SceneToGrass);
             Assert.That(Admitted(first, second), Is.True);
             Assert.That(Admitted(first, first), Is.False, "Repeated unique node identity must not disguise a malformed tree.");
-            Assert.That(Admitted(first, Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "renamed duplicate",
+            Assert.That(Admitted(first, Leaf(typeof(GrassContactRenderingTests), first._method.Name, "renamed duplicate",
                 false, GrassContactRenderingTests.ContactLayout.SceneToGrass)), Is.False);
-            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "wrong enum",
+            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first._method.Name, "wrong enum",
                 false, (int)GrassContactRenderingTests.ContactLayout.SceneToGrass)), Is.False);
-            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "missing", false)), Is.False);
-            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "null", false, null)), Is.False);
-            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first.Method.Name, "null bool",
+            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first._method.Name, "missing", false)), Is.False);
+            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first._method.Name, "null", false, null)), Is.False);
+            Assert.That(Admitted(Leaf(typeof(GrassContactRenderingTests), first._method.Name, "null bool",
                 null, GrassContactRenderingTests.ContactLayout.SceneToGrass)), Is.False);
             Assert.That(Admitted(Leaf(typeof(GrassDispatchMathTests), nameof(GrassDispatchMathTests.InvalidSpacingDoesNotProduceDispatch),
                 "float", float.NaN)), Is.True, "Authored invalid-number cases remain selectable.");
             Assert.That(Admitted(Leaf(typeof(GrassDispatchMathTests), nameof(GrassDispatchMathTests.InvalidSpacingDoesNotProduceDispatch),
                 "double mismatch", double.NaN)), Is.False);
-            const string modifierMethod = nameof(GrassRendererLifecycleTests.ModifierPassLookupPreservesNamesAndTagsWithoutSteadyStateAllocations);
-            var color = Leaf(typeof(GrassRendererLifecycleTests), modifierMethod, "authored null color",
+            const string ModifierMethod = nameof(GrassRendererLifecycleTests.ModifierPassLookupPreservesNamesAndTagsWithoutSteadyStateAllocations);
+            var color = Leaf(typeof(GrassRendererLifecycleTests), ModifierMethod, "authored null color",
                 "InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", null);
-            var slope = Leaf(typeof(GrassRendererLifecycleTests), modifierMethod, "authored null slope",
+            var slope = Leaf(typeof(GrassRendererLifecycleTests), ModifierMethod, "authored null slope",
                 "InfiniteGrass/Modifiers/GrassMaskShader", "GrassSlope", null);
             Assert.That(Admitted(color, slope), Is.True, "Both existing null-string modifier cases must remain selectable.");
             Assert.That(Admitted(color,
-                Leaf(typeof(GrassRendererLifecycleTests), modifierMethod, "empty tag", "InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", ""),
-                Leaf(typeof(GrassRendererLifecycleTests), modifierMethod, "literal null tag", "InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", "null")), Is.True,
+                Leaf(typeof(GrassRendererLifecycleTests), ModifierMethod, "empty tag", "InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", ""),
+                Leaf(typeof(GrassRendererLifecycleTests), ModifierMethod, "literal null tag", "InfiniteGrass/Modifiers/GrassMaskShader", "GrassColor", "null")), Is.True,
                 "Null, empty and literal null strings have different case identities.");
         }
 
@@ -164,16 +164,23 @@ namespace Cone.Grass.Tests
         {
             int found = 0;
             foreach (Type type in typeof(GrassBatchRunReloadGuardTests).Assembly.GetTypes())
-            foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             {
-                if (!method.CustomAttributes.Any(attribute =>
-                    attribute.AttributeType.FullName == "NUnit.Framework.TestAttribute" ||
-                    attribute.AttributeType.FullName == "NUnit.Framework.TestCaseAttribute" ||
-                    attribute.AttributeType.FullName == "UnityEngine.TestTools.UnityTestAttribute")) continue;
-                found++;
-                Assert.That(GrassBatchRunReloadInventory.Methods.Contains(GrassBatchRunReloadGuard.MethodKey(method)), Is.True,
-                    "Audit this method and its setup/teardown for C# reload waits before adding it to the fixed inventory: " + method);
+                foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (!method.CustomAttributes.Any(attribute =>
+                        attribute.AttributeType.FullName == "NUnit.Framework.TestAttribute" ||
+                        attribute.AttributeType.FullName == "NUnit.Framework.TestCaseAttribute" ||
+                        attribute.AttributeType.FullName == "UnityEngine.TestTools.UnityTestAttribute"))
+                    {
+                        continue;
+                    }
+
+                    found++;
+                    Assert.That(GrassBatchRunReloadInventory.s_methods.Contains(GrassBatchRunReloadGuard.MethodKey(method)), Is.True,
+                        "Audit this method and its setup/teardown for C# reload waits before adding it to the fixed inventory: " + method);
+                }
             }
+
             Assert.That(found, Is.GreaterThan(270), "A copied or partial assembly is not the audited suite.");
         }
     }

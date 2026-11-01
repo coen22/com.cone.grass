@@ -5,6 +5,7 @@ using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass
 {
@@ -13,7 +14,7 @@ namespace Cone.Grass
     /// Record after the color draw in a pass requesting Depth | Motion, so URP has
     /// already populated its motion/depth targets. No CPU position readback is used.
     /// The renderer feature owns and records this history; configure it through
-    /// <see cref="InfiniteGrassRenderer.motionVectors"/>.
+    /// <see cref="InfiniteGrassRenderer.MotionVectors"/>.
     /// </summary>
     public sealed class GrassMotionVectors : IDisposable
     {
@@ -31,16 +32,17 @@ namespace Cone.Grass
             Off
         }
 
-        /// <summary>Motion-vector settings, serialized on <see cref="InfiniteGrassRenderer.motionVectors"/>.</summary>
+        /// <summary>Motion-vector settings, serialized on <see cref="InfiniteGrassRenderer.MotionVectors"/>.</summary>
         [Serializable]
         public sealed class Settings
         {
+            [Tooltip("Optional motion history. Auto supplies grass motion for temporal AA and object motion blur on single-sample cameras. Always also supports custom motion consumers."), SerializeField, FormerlySerializedAs("mode")]
+            private Mode _mode = Mode.Off;
             /// <summary>
             /// Optional motion history. Auto supplies grass motion for temporal AA and object motion blur on single-sample
             /// cameras. Always also supports custom motion consumers.
             /// </summary>
-            [Tooltip("Optional motion history. Auto supplies grass motion for temporal AA and object motion blur on single-sample cameras. Always also supports custom motion consumers.")]
-            public Mode mode = Mode.Off;
+            public Mode Mode { get => _mode; set => _mode = value; }
         }
 
         private static class Id
@@ -85,21 +87,21 @@ namespace Cone.Grass
             public static readonly int Padding = Shader.PropertyToID("_TextureUpdateThreshold");
         }
 
-        private readonly Dictionary<Camera, CameraHistory> cameras = new Dictionary<Camera, CameraHistory>();
-        private ComputeShader historyShader;
-        private Material copyMaterial;
-        private int clearKernel;
-        private int buildKernel;
-        private int captureKernel;
-        private int storeKernel;
-        private bool warnedResources;
-        private bool warnedCapacity;
-        private bool warnedSnapshotFormat;
-        private bool disposed;
-        private bool unormSnapshotsSupported;
-        private bool srgbSnapshotsSupported;
-        private bool rg32SnapshotsSupported;
-        private bool rgba32SnapshotsSupported;
+        private readonly Dictionary<Camera, CameraHistory> _cameras = new Dictionary<Camera, CameraHistory>();
+        private ComputeShader _historyShader;
+        private Material _copyMaterial;
+        private int _clearKernel;
+        private int _buildKernel;
+        private int _captureKernel;
+        private int _storeKernel;
+        private bool _warnedResources;
+        private bool _warnedCapacity;
+        private bool _warnedSnapshotFormat;
+        private bool _disposed;
+        private bool _unormSnapshotsSupported;
+        private bool _srgbSnapshotsSupported;
+        private bool _rg32SnapshotsSupported;
+        private bool _rgba32SnapshotsSupported;
 
         /// <summary>Only the renderer feature creates this history.</summary>
         internal GrassMotionVectors()
@@ -113,17 +115,28 @@ namespace Cone.Grass
         internal static bool IsRequested(Camera camera, bool postProcessEnabled,
             AntialiasingMode antialiasing, int msaaSamples, Settings settings)
         {
-            if (!camera || settings == null || settings.mode == Mode.Off || camera.stereoEnabled ||
+            if (!camera || settings == null || settings.Mode == Mode.Off || camera.stereoEnabled ||
                 !camera.TryGetComponent(out UniversalAdditionalCameraData additional) ||
                 additional.renderType != CameraRenderType.Base || !(additional.scriptableRenderer is UniversalRenderer))
+            {
                 return false;
-            if (settings.mode == Mode.Always)
+            }
+
+            if (settings.Mode == Mode.Always)
+            {
                 return true;
+            }
+
             if (!postProcessEnabled || msaaSamples > 1)
+            {
                 return false;
+            }
+
             if (antialiasing == AntialiasingMode.TemporalAntiAliasing && !camera.allowDynamicResolution &&
                 (additional.cameraStack == null || additional.cameraStack.Count == 0))
+            {
                 return true;
+            }
 
             MotionBlur blur = VolumeManager.instance.stack.GetComponent<MotionBlur>();
             return blur != null && blur.IsActive() && blur.mode.value == MotionBlurMode.CameraAndObjects;
@@ -138,7 +151,10 @@ namespace Cone.Grass
         internal static int HistoryTableSize(int rootCapacity)
         {
             if (rootCapacity < 1 || rootCapacity > 16000000)
+            {
                 throw new ArgumentOutOfRangeException(nameof(rootCapacity));
+            }
+
             return Mathf.NextPowerOfTwo(rootCapacity * 2);
         }
 
@@ -149,7 +165,7 @@ namespace Cone.Grass
         /// </summary>
         internal bool PrepareCamera(Camera camera, Material bladeMaterial)
         {
-            if (disposed || !camera || !bladeMaterial || bladeMaterial.FindPass("GrassMotionVectors") < 0 ||
+            if (_disposed || !camera || !bladeMaterial || bladeMaterial.FindPass("GrassMotionVectors") < 0 ||
                 !EnsureResources())
             {
                 Release(camera);
@@ -172,7 +188,7 @@ namespace Cone.Grass
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
             UniversalResourceData resources = frameData.Get<UniversalResourceData>();
             Camera camera = cameraData.camera;
-            if (disposed || !camera || camera.stereoEnabled || !resources.motionVectorColor.IsValid() ||
+            if (_disposed || !camera || camera.stereoEnabled || !resources.motionVectorColor.IsValid() ||
                 !resources.motionVectorDepth.IsValid() || positions == null || counts == null || arguments == null ||
                 !positionsHandle.IsValid() || !countsHandle.IsValid() || !argumentsHandle.IsValid() ||
                 !bladeMaterial || lodMeshes == null || lodMeshes.Length != 3 || drawProperties == null || drawProperties.Length != 3 ||
@@ -183,14 +199,19 @@ namespace Cone.Grass
                 return;
             }
             for (int lod = 0; lod < 3; lod++)
+            {
                 if (!lodMeshes[lod] || drawProperties[lod] == null)
                 {
                     Release(camera);
                     return;
                 }
+            }
 
             if (!PrepareCamera(camera, bladeMaterial))
+            {
                 return;
+            }
+
             int shaderPass = bladeMaterial.FindPass("GrassMotionVectors");
             Texture slope = drawProperties[0].GetTexture(Id.Slope);
             Texture wind = drawProperties[0].GetTexture(Id.Wind);
@@ -201,21 +222,26 @@ namespace Cone.Grass
             }
             if (!TryGetSnapshotFormats(camera, slope, wind, out GraphicsFormat slopeFormat,
                     out GraphicsFormat windFormat))
+            {
                 return;
+            }
 
-            if (!cameras.TryGetValue(camera, out CameraHistory history))
+            if (!_cameras.TryGetValue(camera, out CameraHistory history))
             {
                 history = new CameraHistory();
-                cameras.Add(camera, history);
+                _cameras.Add(camera, history);
             }
             int capacity = lodCapacities[0] + lodCapacities[1] + lodCapacities[2];
             if (capacity < 1 || capacity > 16000000 ||
                 (long)capacity * 16 > SystemInfo.maxGraphicsBufferSize ||
                 (long)HistoryTableSize(capacity) * 4 > SystemInfo.maxGraphicsBufferSize)
             {
-                if (!warnedCapacity)
+                if (!_warnedCapacity)
+                {
                     Debug.LogWarning("Grass motion history exceeds this device's maximum graphics-buffer size. Reduce Max Blade Count to enable grass motion vectors.");
-                warnedCapacity = true;
+                }
+
+                _warnedCapacity = true;
                 Release(camera);
                 return;
             }
@@ -242,13 +268,18 @@ namespace Cone.Grass
             TextureHandle previousWind = graph.ImportTexture(previousSnapshot.Wind);
 
             if (newFrame && valid)
+            {
                 RecordHashBuild(graph, history, previousSnapshot, rootsHandle, keysHandle, dispatchHandle);
+            }
 
             int headPass = heads.FindPass("GrassHeadMotionVectors");
             for (int lod = 0; lod < 3 + GrassHeadDraws.Queues; lod++)
             {
                 if (lod >= 3 && (headPass < 0 || !heads.Draws(lod - 3)))
+                {
                     continue;
+                }
+
                 MaterialPropertyBlock properties = lod < 3 ? drawProperties[lod] : heads.Properties[lod - 3];
                 properties.SetInteger(Id.ExplicitTime, 1);
                 properties.SetFloat(Id.Time, current.WindMotion.w);
@@ -277,33 +308,48 @@ namespace Cone.Grass
                 builder.UseTexture(previousSlope, AccessFlags.Read);
                 builder.UseTexture(previousWind, AccessFlags.Read);
                 for (int i = 0; i < vertexTextureHandles.Length; i++)
+                {
                     if (vertexTextureHandles[i].IsValid())
+                    {
                         builder.UseTexture(vertexTextureHandles[i], AccessFlags.Read);
+                    }
+                }
+
                 builder.SetRenderAttachment(resources.motionVectorColor, 0, AccessFlags.ReadWrite);
                 builder.SetRenderAttachmentDepth(resources.motionVectorDepth, AccessFlags.ReadWrite);
                 builder.SetRenderFunc(static (MotionPass data, RasterGraphContext context) =>
                 {
                     for (int lod = 0; lod < 3; lod++)
+                    {
                         context.cmd.DrawMeshInstancedIndirect(data.Meshes[lod], 0, data.Material, data.ShaderPass,
                             data.Arguments, lod * GraphicsBuffer.IndirectDrawIndexedArgs.size, data.Properties[lod]);
+                    }
+
                     for (int queue = 0; data.HeadPass >= 0 && queue < GrassHeadDraws.Queues; queue++)
+                    {
                         if (data.Heads.Draws(queue))
+                        {
                             context.cmd.DrawMeshInstancedIndirect(data.Heads.Meshes[queue], 0, data.Heads.Material,
                                 data.HeadPass, data.Arguments, GrassHeadDraws.ArgumentOffset(queue), data.Heads.Properties[queue]);
+                        }
+                    }
                 });
             }
 
             if (!newFrame)
+            {
                 return;
+            }
+
             RecordSnapshot(graph, vertexTextureHandles[2], graph.ImportTexture(destination.Slope), slope,
                 slopeFormat, "Grass Store Interaction History");
             RecordSnapshot(graph, vertexTextureHandles[4], graph.ImportTexture(destination.Wind), wind,
                 windFormat, "Grass Store Wind History");
             using (IComputeRenderGraphBuilder builder = graph.AddComputePass<HistoryPass>("Grass Store Root History", out HistoryPass pass))
             {
-                pass.Shader = historyShader;
-                pass.CaptureKernel = captureKernel;
-                pass.StoreKernel = storeKernel;
+                pass.Shader = _historyShader;
+                pass.CaptureKernel = _captureKernel;
+                pass.StoreKernel = _storeKernel;
                 pass.Positions = positions;
                 pass.Counts = counts;
                 pass.Roots = destination.Roots;
@@ -371,9 +417,9 @@ namespace Cone.Grass
         {
             using (IComputeRenderGraphBuilder builder = graph.AddComputePass<HashPass>("Grass Index Previous Roots", out HashPass pass))
             {
-                pass.Shader = historyShader;
-                pass.ClearKernel = clearKernel;
-                pass.BuildKernel = buildKernel;
+                pass.Shader = _historyShader;
+                pass.ClearKernel = _clearKernel;
+                pass.BuildKernel = _buildKernel;
                 pass.Roots = snapshot.Roots;
                 pass.Counts = snapshot.Counts;
                 pass.Keys = history.Keys;
@@ -441,7 +487,7 @@ namespace Cone.Grass
             using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<SnapshotPass>(name, out SnapshotPass pass))
             {
                 pass.Source = source;
-                pass.Material = copyMaterial;
+                pass.Material = _copyMaterial;
                 builder.UseTexture(source, AccessFlags.Read);
                 builder.SetRenderAttachment(destination, 0, AccessFlags.WriteAll);
                 builder.AllowPassCulling(false);
@@ -457,28 +503,34 @@ namespace Cone.Grass
 
         private bool EnsureResources()
         {
-            if (historyShader && copyMaterial)
-                return true;
-            historyShader = Resources.Load<ComputeShader>("InfiniteGrassMotionHistory");
-            Shader shader = Resources.Load<Shader>("InfiniteGrassMotionCopy");
-            unormSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm);
-            srgbSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB);
-            rg32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat);
-            rgba32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat);
-            if (!historyShader || !shader || !shader.isSupported || !historyShader.HasKernel("ClearHistory") ||
-                !historyShader.HasKernel("BuildHistory") || !historyShader.HasKernel("CaptureCounts") || !historyShader.HasKernel("StoreRoots") ||
-                !(unormSnapshotsSupported || srgbSnapshotsSupported || rg32SnapshotsSupported || rgba32SnapshotsSupported))
+            if (_historyShader && _copyMaterial)
             {
-                if (!warnedResources)
+                return true;
+            }
+
+            _historyShader = Resources.Load<ComputeShader>("InfiniteGrassMotionHistory");
+            Shader shader = Resources.Load<Shader>("InfiniteGrassMotionCopy");
+            _unormSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_UNorm);
+            _srgbSnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R8G8B8A8_SRGB);
+            _rg32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32_SFloat);
+            _rgba32SnapshotsSupported = SupportsSnapshotFormat(GraphicsFormat.R32G32B32A32_SFloat);
+            if (!_historyShader || !shader || !shader.isSupported || !_historyShader.HasKernel("ClearHistory") ||
+                !_historyShader.HasKernel("BuildHistory") || !_historyShader.HasKernel("CaptureCounts") || !_historyShader.HasKernel("StoreRoots") ||
+                !(_unormSnapshotsSupported || _srgbSnapshotsSupported || _rg32SnapshotsSupported || _rgba32SnapshotsSupported))
+            {
+                if (!_warnedResources)
+                {
                     Debug.LogWarning("Grass motion vectors require the InfiniteGrassMotionHistory compute shader, InfiniteGrassMotionCopy shader, and renderable snapshot textures supporting linear sampling.");
-                warnedResources = true;
+                }
+
+                _warnedResources = true;
                 return false;
             }
-            clearKernel = historyShader.FindKernel("ClearHistory");
-            buildKernel = historyShader.FindKernel("BuildHistory");
-            captureKernel = historyShader.FindKernel("CaptureCounts");
-            storeKernel = historyShader.FindKernel("StoreRoots");
-            copyMaterial = CoreUtils.CreateEngineMaterial(shader);
+            _clearKernel = _historyShader.FindKernel("ClearHistory");
+            _buildKernel = _historyShader.FindKernel("BuildHistory");
+            _captureKernel = _historyShader.FindKernel("CaptureCounts");
+            _storeKernel = _historyShader.FindKernel("StoreRoots");
+            _copyMaterial = CoreUtils.CreateEngineMaterial(shader);
             return true;
         }
 
@@ -491,18 +543,30 @@ namespace Cone.Grass
             out GraphicsFormat slopeFormat, out GraphicsFormat windFormat)
         {
             slopeFormat = SelectSnapshotFormat(slope.graphicsFormat, false,
-                unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported, srgbSnapshotsSupported);
+                _unormSnapshotsSupported, _rg32SnapshotsSupported, _rgba32SnapshotsSupported, _srgbSnapshotsSupported);
             windFormat = SelectSnapshotFormat(wind.graphicsFormat, true,
-                unormSnapshotsSupported, rg32SnapshotsSupported, rgba32SnapshotsSupported, srgbSnapshotsSupported);
+                _unormSnapshotsSupported, _rg32SnapshotsSupported, _rgba32SnapshotsSupported, _srgbSnapshotsSupported);
             if (slopeFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(slope, SystemInfo.copyTextureSupport))
+            {
                 slopeFormat = GraphicsFormat.None;
+            }
+
             if (windFormat == GraphicsFormat.R8G8B8A8_SRGB && !CanCopyEncodedSnapshot(wind, SystemInfo.copyTextureSupport))
+            {
                 windFormat = GraphicsFormat.None;
+            }
+
             if (slopeFormat != GraphicsFormat.None && windFormat != GraphicsFormat.None)
+            {
                 return true;
-            if (!warnedSnapshotFormat)
+            }
+
+            if (!_warnedSnapshotFormat)
+            {
                 Debug.LogWarning("Grass motion history cannot preserve these deformation textures on this device. It requires matching RGBA8 UNorm or sRGB, or 32-bit floating-point snapshot formats supporting rendering and linear sampling. RGBA8 sRGB additionally requires an exact texture copy from a single-sample source.");
-            warnedSnapshotFormat = true;
+            }
+
+            _warnedSnapshotFormat = true;
             Release(camera);
             return false;
         }
@@ -515,49 +579,75 @@ namespace Cone.Grass
             // Half storage changes even ordinary 8-bit UNorm values and creates
             // motion on stationary blades. Wind needs only its two sampled channels.
             if (sourceFormat == GraphicsFormat.R8G8B8A8_SRGB)
+            {
                 return srgbSupported ? GraphicsFormat.R8G8B8A8_SRGB : GraphicsFormat.None;
+            }
+
             if (sourceFormat == GraphicsFormat.R8G8B8A8_UNorm && unormSupported)
+            {
                 return GraphicsFormat.R8G8B8A8_UNorm;
+            }
+
             if (wind && rg32Supported)
+            {
                 return GraphicsFormat.R32G32_SFloat;
+            }
+
             return rgba32Supported ? GraphicsFormat.R32G32B32A32_SFloat : GraphicsFormat.None;
         }
 
         private static bool CanCopyEncodedSnapshot(Texture source, CopyTextureSupport support)
         {
             if (!source || source.dimension != TextureDimension.Tex2D || (support & CopyTextureSupport.Basic) == 0)
+            {
                 return false;
+            }
+
             if (source is RenderTexture rendered)
+            {
                 return rendered.IsCreated() && rendered.antiAliasing == 1;
+            }
+
             return source is Texture2D && (support & CopyTextureSupport.TextureToRT) != 0;
         }
 
         internal void ResetHistory(Camera camera)
         {
-            if (camera && cameras.TryGetValue(camera, out CameraHistory history))
+            if (camera && _cameras.TryGetValue(camera, out CameraHistory history))
+            {
                 history.ResetHistory();
+            }
         }
 
         internal void Release(Camera camera)
         {
-            if (ReferenceEquals(camera, null) || !cameras.TryGetValue(camera, out CameraHistory history))
+            if (ReferenceEquals(camera, null) || !_cameras.TryGetValue(camera, out CameraHistory history))
+            {
                 return;
+            }
+
             history.Dispose();
-            cameras.Remove(camera);
+            _cameras.Remove(camera);
         }
 
         /// <summary>Releases every camera's history and the shared helper resources. Safe to call repeatedly.</summary>
         public void Dispose()
         {
-            if (disposed)
+            if (_disposed)
+            {
                 return;
-            disposed = true;
-            foreach (CameraHistory history in cameras.Values)
+            }
+
+            _disposed = true;
+            foreach (CameraHistory history in _cameras.Values)
+            {
                 history.Dispose();
-            cameras.Clear();
-            CoreUtils.Destroy(copyMaterial);
-            copyMaterial = null;
-            historyShader = null;
+            }
+
+            _cameras.Clear();
+            CoreUtils.Destroy(_copyMaterial);
+            _copyMaterial = null;
+            _historyShader = null;
         }
 
         private struct FrameState
@@ -601,10 +691,16 @@ namespace Cone.Grass
             private static Vector4 MainLightPosition(UniversalLightData lightData)
             {
                 if (lightData == null || lightData.mainLightIndex < 0 || lightData.mainLightIndex >= lightData.visibleLights.Length)
+                {
                     return new Vector4(0f, 0f, 1f, 0f);
+                }
+
                 VisibleLight light = lightData.visibleLights[lightData.mainLightIndex];
                 if (light.lightType != LightType.Directional)
+                {
                     return light.localToWorldMatrix.GetColumn(3);
+                }
+
                 Vector4 direction = -light.localToWorldMatrix.GetColumn(2);
                 return new Vector4(direction.x, direction.y, direction.z, 0f);
             }
@@ -650,9 +746,15 @@ namespace Cone.Grass
                     changed = true;
                 }
                 for (int i = 0; i < Snapshots.Length; i++)
+                {
                     changed |= Snapshots[i].EnsureAllocation(capacity, slope, wind, slopeFormat, windFormat);
+                }
+
                 if (changed)
+                {
                     ResetHistory();
+                }
+
                 return changed;
             }
 
@@ -662,7 +764,9 @@ namespace Cone.Grass
                 LatestIndex = 0;
                 PreviousValid = false;
                 foreach (RootSnapshot snapshot in Snapshots)
+                {
                     snapshot.FrameNumber = -1;
+                }
             }
 
             public void Dispose()
@@ -670,7 +774,10 @@ namespace Cone.Grass
                 Keys?.Dispose();
                 DispatchArguments?.Dispose();
                 foreach (RootSnapshot snapshot in Snapshots)
+                {
                     snapshot.Dispose();
+                }
+
                 Keys = null;
                 DispatchArguments = null;
             }
@@ -804,7 +911,9 @@ namespace Cone.Grass
                 Array.Copy(offsets, Offsets, Offsets.Length);
                 Array.Copy(capacities, Capacities, Capacities.Length);
                 for (int lod = 0; lod < 3; lod++)
+                {
                     Rows[lod] = (meshes[lod].vertexCount - 1) / 2;
+                }
             }
         }
 

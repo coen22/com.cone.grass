@@ -36,10 +36,18 @@ namespace Cone.Grass
         public int FindPass(string name)
         {
             if (!Material)
+            {
                 return -1;
+            }
+
             for (int queue = 0; queue < Queues; queue++)
+            {
                 if (Draws(queue))
+                {
                     return Material.FindPass(name);
+                }
+            }
+
             return -1;
         }
 

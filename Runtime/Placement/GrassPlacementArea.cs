@@ -4,6 +4,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass
 {
@@ -107,13 +108,21 @@ namespace Cone.Grass
             Vector3 sourceMin = sourceBounds.min, sourceMax = sourceBounds.max;
             if (sourceMax.x < queryMin.x || sourceMin.x > queryMax.x ||
                 sourceMax.z < queryMin.z || sourceMin.z > queryMax.z)
+            {
                 return false;
+            }
+
             if (shape == GrassPlacementShape.Texture)
             {
                 if (GrassPlacementArea.HasAssignedReference(densityAsset) && !densityAsset)
+                {
                     return false;
+                }
+
                 if (!densityAsset && !IsReadyDensityTexture(densityTexture))
+                {
                     return false;
+                }
             }
 
             Vector3 a = worldToMask.MultiplyPoint3x4(new Vector3(queryMin.x, 0f, queryMin.z));
@@ -125,7 +134,10 @@ namespace Cone.Grass
             float yMin = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
             float yMax = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
             if (shape == GrassPlacementShape.Texture && densityAsset)
+            {
                 return densityAsset.HasCoverageIn(Rect.MinMaxRect(xMin, yMin, xMax, yMax));
+            }
+
             if (shape == GrassPlacementShape.Circle)
             {
                 // The transformed query's bounding rectangle contains its full footprint.
@@ -159,7 +171,10 @@ namespace Cone.Grass
         public static bool SupportsDensityFormat(Texture texture)
         {
             if (!texture || (texture is Texture2D image && image.format == TextureFormat.Alpha8))
+            {
                 return false;
+            }
+
             GraphicsFormat format = texture.graphicsFormat;
             return format != GraphicsFormat.None && !GraphicsFormatUtility.IsAlphaOnlyFormat(format) &&
                 !GraphicsFormatUtility.IsIntegerFormat(format) && !GraphicsFormatUtility.IsDepthStencilFormat(format);
@@ -177,102 +192,104 @@ namespace Cone.Grass
     public sealed class GrassPlacementArea : MonoBehaviour
     {
         [Header("Coverage")]
-        [SerializeField] private GrassPlacementShape shape = GrassPlacementShape.Circle;
-        [SerializeField, Range(0f, 1f)] private float density = 1f;
+        [SerializeField, FormerlySerializedAs("shape")] private GrassPlacementShape _shape = GrassPlacementShape.Circle;
+        [SerializeField, Range(0f, 1f), FormerlySerializedAs("density")] private float _density = 1f;
         [Tooltip("Fraction of the shape radius used to soften the edge. Use zero for a generated mask with its own falloff.")]
-        [SerializeField, Range(0f, 1f)] private float edgeFalloff = 0.15f;
+        [SerializeField, Range(0f, 1f), FormerlySerializedAs("edgeFalloff")] private float _edgeFalloff = 0.15f;
         [Tooltip("World-space width and length before the object's X/Z scale. Rotation around Y is supported.")]
-        [SerializeField] private Vector2 size = new Vector2(10f, 10f);
+        [SerializeField, FormerlySerializedAs("size")] private Vector2 _size = new Vector2(10f, 10f);
 
         [Header("Surface and mapping")]
         [Tooltip("Explicit supporting terrain. Assigning this does not enable grass outside the area.")]
-        [SerializeField] private Terrain terrain;
+        [SerializeField, FormerlySerializedAs("terrain")] private Terrain _terrain;
         [Tooltip("Map the texture over this terrain's complete XZ extent. Object position, scale and rotation are then ignored.")]
-        [SerializeField] private bool useTerrainBounds;
+        [SerializeField, FormerlySerializedAs("useTerrainBounds")] private bool _useTerrainBounds;
         [Tooltip("Optional mesh surface and Scene brush collider. Its visible Renderer, or a parent Renderer, needs geometry and at least one material slot.")]
-        [SerializeField] private Collider paintSurface;
+        [SerializeField, FormerlySerializedAs("paintSurface")] private readonly Collider _paintSurface;
 
         [Header("Texture coverage")]
         [Tooltip("Optional paintable asset. Takes precedence over Density Texture. Black contains no grass.")]
-        [SerializeField] private GrassDensityAsset densityAsset;
+        [SerializeField, FormerlySerializedAs("densityAsset")] private GrassDensityAsset _densityAsset;
         [Tooltip("Linear positive density in red: black is empty, white is full. No CPU readability is required.")]
-        [SerializeField] private Texture densityTexture;
+        [SerializeField, FormerlySerializedAs("densityTexture")] private Texture _densityTexture;
         [Tooltip("Optional bounds of a generated texture's coverage, in its original UVs. This crops the draw without stretching the mask.")]
-        [SerializeField] private Rect textureCoverageBounds = new Rect(0f, 0f, 1f, 1f);
+        [SerializeField, FormerlySerializedAs("textureCoverageBounds")] private Rect _textureCoverageBounds = new Rect(0f, 0f, 1f, 1f);
 
         [Header("Ground color matching")]
         [Tooltip("The grass TerrainLayer painted beneath this area. Its texture tiling is preserved.")]
-        [SerializeField] private TerrainLayer groundLayer;
+        [SerializeField, FormerlySerializedAs("groundLayer")] private TerrainLayer _groundLayer;
         [Tooltip("Optional color map. Overrides the repeated TerrainLayer color; its mapping can follow the whole Terrain independently of the density spot.")]
-        [SerializeField] private Texture groundColorTexture;
-        [SerializeField] private bool groundColorUsesTerrainBounds;
-        [SerializeField] private Color groundTint = Color.white;
-        [SerializeField, Range(0f, 1f)] private float groundColorStrength;
+        [SerializeField, FormerlySerializedAs("groundColorTexture")] private Texture _groundColorTexture;
+        [SerializeField, FormerlySerializedAs("groundColorUsesTerrainBounds")] private bool _groundColorUsesTerrainBounds;
+        [SerializeField, FormerlySerializedAs("groundTint")] private Color _groundTint = Color.white;
+        [SerializeField, Range(0f, 1f), FormerlySerializedAs("groundColorStrength")] private float _groundColorStrength;
 
         [Header("Plant kinds")]
         [Tooltip("Reweight the renderer's Variant Profile here. Off grows the profile's own mix.")]
-        [SerializeField] private bool overrideVariantWeights;
+        [SerializeField, FormerlySerializedAs("overrideVariantWeights")] private bool _overrideVariantWeights;
         [Tooltip("Per kind, in the profile's order: a multiplier of its weight from 0 (none here) to 1. Overlapping areas take each kind's largest.")]
-        [SerializeField] private float[] variantWeights = DefaultVariantWeights();
+        [SerializeField, FormerlySerializedAs("variantWeights")] private float[] _variantWeights = DefaultVariantWeights();
 
-        private static readonly List<GrassPlacementArea> activeAreas = new List<GrassPlacementArea>();
-        private static int revision = 1;
-        private static int registryGeneration = 1;
-        private int registeredGeneration;
-        private bool registered;
-        private int sourceRevision = 1, densityRevision = 1, groundColorRevision = 1, surfaceRevision = 1;
-        private readonly object pendingLock = new object();
-        private GrassDensityAsset observedAsset;
-        private readonly List<Material> supportingMaterials = new List<Material>();
-        private TerrainData groundSamplerTerrainData;
-        private TerrainLayer groundSamplerSelectedLayer, groundSamplerFirstLayer;
-        private TerrainLayer[] groundSamplerLayers;
-        private bool groundSamplerHasGroup;
-        private int groundSamplerLayerCount, groundSamplerTopologyHash;
-        private int groundSamplerRefreshRequested = 1;
+        private static readonly List<GrassPlacementArea> s_activeAreas = new List<GrassPlacementArea>();
+        private static int s_revision = 1;
+        private static int s_registryGeneration = 1;
+        private int _registeredGeneration;
+        private bool _registered;
+        private int _sourceRevision = 1, _densityRevision = 1, _groundColorRevision = 1, _surfaceRevision = 1;
+        private readonly object _pendingLock = new object();
+        private GrassDensityAsset _observedAsset;
+        private readonly List<Material> _supportingMaterials = new List<Material>();
+        private TerrainData _groundSamplerTerrainData;
+        private TerrainLayer _groundSamplerSelectedLayer, _groundSamplerFirstLayer;
+        private TerrainLayer[] _groundSamplerLayers;
+        private bool _groundSamplerHasGroup;
+        private int _groundSamplerLayerCount, _groundSamplerTopologyHash;
+        private int _groundSamplerRefreshRequested = 1;
 #if UNITY_EDITOR
-        private int groundSamplerEditorDirtyCount;
+        private int _groundSamplerEditorDirtyCount;
 #endif
-        private Matrix4x4 previousFrame;
-        private Bounds previousFrameBounds, previousBounds;
-        private int previousDensityHash, previousDensityConfigurationHash, previousGroundHash, previousSurfaceHash, previousMappingHash;
-        private bool hadFrame, hadCoverage, observedState;
-        private GrassPlacementChange pendingChanges;
-        private bool pendingFullRegion;
-        private RectInt pendingPixels;
+        private Matrix4x4 _previousFrame;
+        private Bounds _previousFrameBounds, _previousBounds;
+        private int _previousDensityHash, _previousDensityConfigurationHash, _previousGroundHash, _previousSurfaceHash, _previousMappingHash;
+        private bool _hadFrame, _hadCoverage, _observedState;
+        private GrassPlacementChange _pendingChanges;
+        private bool _pendingFullRegion;
+        private RectInt _pendingPixels;
 
         /// <summary>The enabled areas in loaded scenes.</summary>
-        public static IReadOnlyList<GrassPlacementArea> ActiveAreas => activeAreas;
+        public static IReadOnlyList<GrassPlacementArea> ActiveAreas => s_activeAreas;
         /// <summary>Advances whenever any area registers, unregisters or changes a source.</summary>
-        public static uint Revision => unchecked((uint)Volatile.Read(ref revision));
+        public static uint Revision => unchecked((uint)Volatile.Read(ref s_revision));
         /// <summary>Raised with the world region whose coverage, colour or surface changed.</summary>
         public static event Action<Bounds> CoverageChanged;
         /// <summary>A source changed in a world-space region; density changes also affect ground alpha.</summary>
         public static event Action<GrassPlacementArea, Bounds, GrassPlacementChange> SourceChanged;
 
         /// <summary>Advances on every change to this area's sources.</summary>
-        public uint SourceRevision => unchecked((uint)Volatile.Read(ref sourceRevision));
+        public uint SourceRevision => unchecked((uint)Volatile.Read(ref _sourceRevision));
         /// <summary>Advances when this area's coverage or density changes.</summary>
-        public uint DensityRevision => unchecked((uint)Volatile.Read(ref densityRevision));
+        public uint DensityRevision => unchecked((uint)Volatile.Read(ref _densityRevision));
         /// <summary>Advances when this area's ground colour or plant-kind weights change.</summary>
-        public uint GroundColorRevision => unchecked((uint)Volatile.Read(ref groundColorRevision));
+        public uint GroundColorRevision => unchecked((uint)Volatile.Read(ref _groundColorRevision));
         /// <summary>Advances when this area's supporting surface changes.</summary>
-        public uint SurfaceRevision => unchecked((uint)Volatile.Read(ref surfaceRevision));
+        public uint SurfaceRevision => unchecked((uint)Volatile.Read(ref _surfaceRevision));
 
         /// <summary>The coverage shape.</summary>
-        public GrassPlacementShape Shape => shape;
+        public GrassPlacementShape Shape => _shape;
         /// <summary>The explicit supporting terrain, or null.</summary>
-        public Terrain Terrain => terrain;
+        public Terrain Terrain => _terrain;
         /// <summary>Whether a terrain binding exists, including an assigned object that has been destroyed.</summary>
-        public bool HasAssignedTerrain => HasAssignedReference(terrain);
+        public bool HasAssignedTerrain => HasAssignedReference(_terrain);
         /// <summary>Whether a mesh binding exists, including an assigned object that has been destroyed.</summary>
-        public bool HasAssignedPaintSurface => HasAssignedReference(paintSurface);
-        private bool HasAssignedDensityAsset => HasAssignedReference(densityAsset);
+        public bool HasAssignedPaintSurface => HasAssignedReference(_paintSurface);
+        private bool HasAssignedDensityAsset => HasAssignedReference(_densityAsset);
 
         internal static bool HasAssignedReference(UnityEngine.Object value)
         {
             if (ReferenceEquals(value, null))
+            {
                 return false;
+            }
 #if UNITY_EDITOR
             // Unset Editor fields can have zero-ID placeholders. Destroyed
             // assigned objects retain their IDs here and still require validation.
@@ -286,11 +303,11 @@ namespace Cone.Grass
         /// <summary>
         /// Whether texture coverage spans the terrain's complete XZ extent instead of the object's frame.
         /// </summary>
-        public bool UsesTerrainBounds => useTerrainBounds;
+        public bool UsesTerrainBounds => _useTerrainBounds;
         /// <summary>The optional mesh surface and Scene brush collider, or null.</summary>
-        public Collider PaintSurface => paintSurface;
+        public Collider PaintSurface => _paintSurface;
         /// <summary>The paintable density asset, or null; it takes precedence over the density texture.</summary>
-        public GrassDensityAsset DensityAsset => densityAsset;
+        public GrassDensityAsset DensityAsset => _densityAsset;
         /// <summary>
         /// The density texture used for texture coverage: the density asset's texture when one is assigned, otherwise
         /// the external texture.
@@ -300,29 +317,32 @@ namespace Cone.Grass
             get
             {
                 if (HasAssignedDensityAsset)
-                    return densityAsset ? densityAsset.Texture : null;
-                return densityTexture;
+                {
+                    return _densityAsset ? _densityAsset.Texture : null;
+                }
+
+                return _densityTexture;
             }
         }
         /// <summary>The grass terrain layer painted beneath this area, or null.</summary>
-        public TerrainLayer GroundLayer => groundLayer;
+        public TerrainLayer GroundLayer => _groundLayer;
         /// <summary>The optional ground colour map, or null.</summary>
-        public Texture GroundColorTexture => groundColorTexture;
+        public Texture GroundColorTexture => _groundColorTexture;
         /// <summary>Whether the ground colour map spans the terrain rather than the area.</summary>
-        public bool GroundColorUsesTerrainBounds => groundColorUsesTerrainBounds;
+        public bool GroundColorUsesTerrainBounds => _groundColorUsesTerrainBounds;
         /// <summary>The cropped coverage of an external density texture, in its original UVs.</summary>
-        public Rect TextureCoverageBounds => textureCoverageBounds;
+        public Rect TextureCoverageBounds => _textureCoverageBounds;
         /// <summary>Tint applied to the matched ground colour.</summary>
-        public Color GroundTint => groundTint;
+        public Color GroundTint => _groundTint;
         /// <summary>How strongly the matched ground colour applies, from 0 to 1.</summary>
-        public float GroundColorStrength => groundColorStrength;
+        public float GroundColorStrength => _groundColorStrength;
         /// <summary>Whether this area reweights the renderer's plant kinds.</summary>
-        public bool OverridesVariantWeights => overrideVariantWeights;
+        public bool OverridesVariantWeights => _overrideVariantWeights;
 
         /// <summary>The multiplier this area applies to a kind's weight; one without an override.</summary>
         /// <param name="kind">The kind's index in the profile.</param>
-        public float GetVariantWeight(int kind) => overrideVariantWeights && variantWeights != null &&
-            kind >= 0 && kind < variantWeights.Length ? Mathf.Clamp01(FiniteOr(variantWeights[kind], 1f)) : 1f;
+        public float GetVariantWeight(int kind) => _overrideVariantWeights && _variantWeights != null &&
+            kind >= 0 && kind < _variantWeights.Length ? Mathf.Clamp01(FiniteOr(_variantWeights[kind], 1f)) : 1f;
 
         /// <summary>Reweights the renderer's kinds inside this area, in the profile's order; missing entries keep one.</summary>
         /// <param name="weights">Multipliers from 0 to 1, per kind in the profile's order.</param>
@@ -330,22 +350,33 @@ namespace Cone.Grass
         {
             var next = DefaultVariantWeights();
             for (int k = 0; weights != null && k < Mathf.Min(weights.Length, next.Length); k++)
+            {
                 next[k] = Mathf.Clamp01(FiniteOr(weights[k], 1f));
-            bool changed = !overrideVariantWeights;
+            }
+
+            bool changed = !_overrideVariantWeights;
             for (int k = 0; !changed && k < next.Length; k++)
-                changed = variantWeights == null || k >= variantWeights.Length || variantWeights[k] != next[k];
-            overrideVariantWeights = true;
-            variantWeights = next;
+            {
+                changed = _variantWeights == null || k >= _variantWeights.Length || _variantWeights[k] != next[k];
+            }
+
+            _overrideVariantWeights = true;
+            _variantWeights = next;
             if (changed)
+            {
                 Invalidate(GrassPlacementChange.GroundColor);
+            }
         }
 
         /// <summary>Grows the profile's own mix here again.</summary>
         public void ClearVariantWeights()
         {
-            if (!overrideVariantWeights)
+            if (!_overrideVariantWeights)
+            {
                 return;
-            overrideVariantWeights = false;
+            }
+
+            _overrideVariantWeights = false;
             Invalidate(GrassPlacementChange.GroundColor);
         }
 
@@ -357,11 +388,11 @@ namespace Cone.Grass
             second = new Vector4(GetVariantWeight(4), GetVariantWeight(5), GetVariantWeight(6), GetVariantWeight(7));
         }
         /// <summary>Coverage density, from 0 to 1.</summary>
-        public float Density => density;
+        public float Density => _density;
         /// <summary>Fraction of the shape radius used to soften the edge.</summary>
-        public float EdgeFalloff => edgeFalloff;
+        public float EdgeFalloff => _edgeFalloff;
         /// <summary>World-space width and length before the object's X/Z scale.</summary>
-        public Vector2 Size => size;
+        public Vector2 Size => _size;
         /// <summary>World bounds of the area's frame; an empty box at the object when the frame is unusable.</summary>
         public Bounds WorldBounds => TryGetFrame(out _, out _, out Bounds bounds) ? bounds : new Bounds(transform.position, Vector3.zero);
         /// <summary>Maps world positions to mask UV in x and z; identity when the frame is unusable.</summary>
@@ -377,24 +408,33 @@ namespace Cone.Grass
             TerrainLayer matchingGroundLayer = null, Texture matchingGroundColor = null)
         {
             GrassPlacementChange changes = GrassPlacementChange.None;
-            if (terrain != supportingTerrain || !useTerrainBounds)
+            if (_terrain != supportingTerrain || !_useTerrainBounds)
+            {
                 changes |= GrassPlacementChange.All;
-            if (shape != GrassPlacementShape.Texture || HasAssignedDensityAsset || densityTexture != coverage || edgeFalloff != 0f)
+            }
+
+            if (_shape != GrassPlacementShape.Texture || HasAssignedDensityAsset || _densityTexture != coverage || _edgeFalloff != 0f)
+            {
                 changes |= GrassPlacementChange.Density;
+            }
+
             float strength = matchingGroundLayer || matchingGroundColor ? 1f : 0f;
-            if (groundLayer != matchingGroundLayer || groundColorTexture != matchingGroundColor ||
-                groundColorStrength != strength || !groundColorUsesTerrainBounds)
+            if (_groundLayer != matchingGroundLayer || _groundColorTexture != matchingGroundColor ||
+                _groundColorStrength != strength || !_groundColorUsesTerrainBounds)
+            {
                 changes |= GrassPlacementChange.GroundColor;
-            terrain = supportingTerrain;
-            useTerrainBounds = true;
-            shape = GrassPlacementShape.Texture;
-            densityAsset = null;
-            densityTexture = coverage;
-            groundLayer = matchingGroundLayer;
-            groundColorTexture = matchingGroundColor;
-            groundColorUsesTerrainBounds = true;
-            groundColorStrength = strength;
-            edgeFalloff = 0f;
+            }
+
+            _terrain = supportingTerrain;
+            _useTerrainBounds = true;
+            _shape = GrassPlacementShape.Texture;
+            _densityAsset = null;
+            _densityTexture = coverage;
+            _groundLayer = matchingGroundLayer;
+            _groundColorTexture = matchingGroundColor;
+            _groundColorUsesTerrainBounds = true;
+            _groundColorStrength = strength;
+            _edgeFalloff = 0f;
             SynchronizeAssetSubscription();
             Invalidate(changes);
         }
@@ -405,10 +445,13 @@ namespace Cone.Grass
         public void ConfigureGroundLayer(TerrainLayer layer, float strength = 1f)
         {
             strength = Mathf.Clamp01(FiniteOr(strength, 0f));
-            if (groundLayer == layer && groundColorStrength == strength)
+            if (_groundLayer == layer && _groundColorStrength == strength)
+            {
                 return;
-            groundLayer = layer;
-            groundColorStrength = strength;
+            }
+
+            _groundLayer = layer;
+            _groundColorStrength = strength;
             Invalidate(GrassPlacementChange.GroundColor);
         }
 
@@ -419,10 +462,13 @@ namespace Cone.Grass
         {
             tint = SanitizeColor(tint);
             strength = Mathf.Clamp01(FiniteOr(strength, 0f));
-            if (groundTint == tint && groundColorStrength == strength)
+            if (_groundTint == tint && _groundColorStrength == strength)
+            {
                 return;
-            groundTint = tint;
-            groundColorStrength = strength;
+            }
+
+            _groundTint = tint;
+            _groundColorStrength = strength;
             Invalidate(GrassPlacementChange.GroundColor);
         }
 
@@ -433,11 +479,14 @@ namespace Cone.Grass
         public void SetGroundColorTexture(Texture texture, bool terrainAligned, float strength = 1f)
         {
             strength = Mathf.Clamp01(FiniteOr(strength, 0f));
-            if (groundColorTexture == texture && groundColorUsesTerrainBounds == terrainAligned && groundColorStrength == strength)
+            if (_groundColorTexture == texture && _groundColorUsesTerrainBounds == terrainAligned && _groundColorStrength == strength)
+            {
                 return;
-            groundColorTexture = texture;
-            groundColorUsesTerrainBounds = terrainAligned;
-            groundColorStrength = strength;
+            }
+
+            _groundColorTexture = texture;
+            _groundColorUsesTerrainBounds = terrainAligned;
+            _groundColorStrength = strength;
             Invalidate(GrassPlacementChange.GroundColor);
         }
 
@@ -445,9 +494,12 @@ namespace Cone.Grass
         public void SetTextureCoverageBounds(Rect uvBounds)
         {
             uvBounds = SanitizeRect(uvBounds);
-            if (textureCoverageBounds == uvBounds)
+            if (_textureCoverageBounds == uvBounds)
+            {
                 return;
-            textureCoverageBounds = uvBounds;
+            }
+
+            _textureCoverageBounds = uvBounds;
             MarkCoverageDirty();
         }
 
@@ -459,15 +511,18 @@ namespace Cone.Grass
         /// <param name="fitTerrain">Whether the asset spans the terrain's complete XZ extent.</param>
         public void SetDensityAsset(GrassDensityAsset asset, bool fitTerrain)
         {
-            bool mappingChanged = useTerrainBounds != fitTerrain;
-            if (ReferenceEquals(densityAsset, asset) && ReferenceEquals(densityTexture, null) &&
-                shape == GrassPlacementShape.Texture && !mappingChanged && edgeFalloff == 0f)
+            bool mappingChanged = _useTerrainBounds != fitTerrain;
+            if (ReferenceEquals(_densityAsset, asset) && ReferenceEquals(_densityTexture, null) &&
+                _shape == GrassPlacementShape.Texture && !mappingChanged && _edgeFalloff == 0f)
+            {
                 return;
-            densityAsset = asset;
-            densityTexture = null;
-            shape = GrassPlacementShape.Texture;
-            useTerrainBounds = fitTerrain;
-            edgeFalloff = 0f;
+            }
+
+            _densityAsset = asset;
+            _densityTexture = null;
+            _shape = GrassPlacementShape.Texture;
+            _useTerrainBounds = fitTerrain;
+            _edgeFalloff = 0f;
             SynchronizeAssetSubscription();
             Invalidate(mappingChanged ? GrassPlacementChange.All : GrassPlacementChange.Density);
         }
@@ -479,54 +534,58 @@ namespace Cone.Grass
         {
             RefreshState();
             data = default;
-            if (!IsActiveSource() || density <= 0f ||
+            if (!IsActiveSource() || _density <= 0f ||
                 !TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out Bounds frameBounds) ||
                 !TryGetCoverageExtent(localToWorld, frameBounds, out Rect coverageUV, out Bounds bounds))
+            {
                 return false;
+            }
 
             Texture coverage = null;
-            if (shape == GrassPlacementShape.Texture)
+            if (_shape == GrassPlacementShape.Texture)
             {
                 coverage = DensityTexture;
                 if (!GrassPlacementDrawData.IsReadyDensityTexture(coverage))
+                {
                     return false;
+                }
             }
 
             Vector4 terrainRect = Vector4.zero;
-            if (terrain && terrain.terrainData)
+            if (_terrain && _terrain.terrainData)
             {
-                Vector3 position = terrain.transform.position;
-                Vector3 terrainSize = terrain.terrainData.size;
+                Vector3 position = _terrain.transform.position;
+                Vector3 terrainSize = _terrain.terrainData.size;
                 terrainRect = new Vector4(position.x, position.z, terrainSize.x, terrainSize.z);
             }
 
             GetVariantWeights(out Vector4 variantWeights0, out Vector4 variantWeights1);
             data = new GrassPlacementDrawData
             {
-                OverridesVariants = overrideVariantWeights,
+                OverridesVariants = _overrideVariantWeights,
                 VariantWeights0 = variantWeights0,
                 VariantWeights1 = variantWeights1,
                 LocalToWorld = CropFrame(localToWorld, coverageUV),
                 WorldToMask = worldToMask,
                 GroundWorldToMask = GetGroundWorldToMask(worldToMask),
                 WorldBounds = bounds,
-                Terrain = terrain,
+                Terrain = _terrain,
                 TerrainRect = terrainRect,
-                DensityAsset = densityAsset,
+                DensityAsset = _densityAsset,
                 DensityTexture = coverage,
                 CoverageUV = coverageUV,
-                Shape = shape,
-                Density = density,
-                EdgeFalloff = edgeFalloff,
-                GroundColorTexture = HasReadyGroundColorTexture() ? groundColorTexture : null,
-                GroundColorUsesTerrainBounds = groundColorUsesTerrainBounds,
-                GroundTint = groundTint,
-                GroundColorStrength = groundColorStrength,
-                GroundLayerTexture = groundLayer ? groundLayer.diffuseTexture : null,
+                Shape = _shape,
+                Density = _density,
+                EdgeFalloff = _edgeFalloff,
+                GroundColorTexture = HasReadyGroundColorTexture() ? _groundColorTexture : null,
+                GroundColorUsesTerrainBounds = _groundColorUsesTerrainBounds,
+                GroundTint = _groundTint,
+                GroundColorStrength = _groundColorStrength,
+                GroundLayerTexture = _groundLayer ? _groundLayer.diffuseTexture : null,
                 GroundLayerSamplerTexture = GetGroundLayerSamplerTexture(),
                 GroundLayerUV = GetGroundLayerUV(),
-                GroundLayerRemapMin = groundLayer ? groundLayer.diffuseRemapMin : Vector4.zero,
-                GroundLayerRemapMax = groundLayer ? groundLayer.diffuseRemapMax : Vector4.one
+                GroundLayerRemapMin = _groundLayer ? _groundLayer.diffuseRemapMin : Vector4.zero,
+                GroundLayerRemapMax = _groundLayer ? _groundLayer.diffuseRemapMax : Vector4.one
             };
             return true;
         }
@@ -538,14 +597,17 @@ namespace Cone.Grass
         /// </summary>
         public bool IntersectsCoverage(Bounds worldBounds)
         {
-            if (!IsActiveSource() || density <= 0f ||
+            if (!IsActiveSource() || _density <= 0f ||
                 !TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out Bounds frameBounds) ||
                 frameBounds.max.x < worldBounds.min.x || frameBounds.min.x > worldBounds.max.x ||
                 frameBounds.max.z < worldBounds.min.z || frameBounds.min.z > worldBounds.max.z ||
                 !TryGetCoverageExtent(localToWorld, frameBounds, out Rect coverageUV, out Bounds ownBounds))
+            {
                 return false;
+            }
+
             return GrassPlacementDrawData.IntersectsCoverage(worldBounds, ownBounds, worldToMask,
-                shape, densityAsset, densityTexture, coverageUV);
+                _shape, _densityAsset, _densityTexture, coverageUV);
         }
 
         // Interaction ownership needs the same cropped extent as capture without
@@ -553,7 +615,7 @@ namespace Cone.Grass
         internal bool TryGetCoverageWorldBounds(out Bounds bounds)
         {
             bounds = default;
-            return IsActiveSource() && density > 0f &&
+            return IsActiveSource() && _density > 0f &&
                 TryGetFrame(out Matrix4x4 frame, out _, out Bounds frameBounds) &&
                 TryGetCoverageExtent(frame, frameBounds, out _, out bounds);
         }
@@ -569,20 +631,23 @@ namespace Cone.Grass
         /// <returns>Whether any texel changed; false without a density asset or texture coverage.</returns>
         public bool Paint(Vector3 worldPosition, float radius, float strength, float hardness, bool erase)
         {
-            if (!densityAsset || shape != GrassPlacementShape.Texture || radius <= 0f ||
+            if (!_densityAsset || _shape != GrassPlacementShape.Texture || radius <= 0f ||
                 !TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out _))
+            {
                 return false;
+            }
+
             Vector3 uv = worldToMask.MultiplyPoint3x4(worldPosition);
             float worldWidth = localToWorld.MultiplyVector(Vector3.right).magnitude;
             float worldDepth = localToWorld.MultiplyVector(Vector3.forward).magnitude;
-            return densityAsset.Paint(new Vector2(uv.x, uv.z),
+            return _densityAsset.Paint(new Vector2(uv.x, uv.z),
                 new Vector2(radius / worldWidth, radius / worldDepth), strength, hardness, erase);
         }
 
         /// <summary>Invalidate both old and new extents when a source moves or its GPU output changes.</summary>
         public void MarkDirty()
         {
-            Interlocked.Exchange(ref groundSamplerRefreshRequested, 1);
+            Interlocked.Exchange(ref _groundSamplerRefreshRequested, 1);
             Invalidate(GrassPlacementChange.All);
         }
 
@@ -592,7 +657,7 @@ namespace Cone.Grass
         /// <summary>Notify an albedo or terrain-layer order change without recapturing placement or supporting geometry.</summary>
         public void MarkGroundColorDirty()
         {
-            Interlocked.Exchange(ref groundSamplerRefreshRequested, 1);
+            Interlocked.Exchange(ref _groundSamplerRefreshRequested, 1);
             Invalidate(GrassPlacementChange.GroundColor);
         }
 
@@ -602,7 +667,10 @@ namespace Cone.Grass
         private void Invalidate(GrassPlacementChange changes)
         {
             if (changes == GrassPlacementChange.None)
+            {
                 return;
+            }
+
             QueueChanges(changes);
             RefreshState();
         }
@@ -611,13 +679,17 @@ namespace Cone.Grass
         {
             changes = IncludeDependentChanges(changes);
             BumpRevisions(changes);
-            lock (pendingLock)
+            lock (_pendingLock)
             {
-                pendingChanges |= changes;
+                _pendingChanges |= changes;
                 if (!pixels.HasValue)
-                    pendingFullRegion = true;
+                {
+                    _pendingFullRegion = true;
+                }
                 else
-                    pendingPixels = Union(pendingPixels, pixels.Value);
+                {
+                    _pendingPixels = Union(_pendingPixels, pixels.Value);
+                }
             }
         }
 
@@ -626,15 +698,26 @@ namespace Cone.Grass
         private void BumpRevisions(GrassPlacementChange changes)
         {
             if (changes == GrassPlacementChange.None)
+            {
                 return;
-            Interlocked.Increment(ref revision);
-            Interlocked.Increment(ref sourceRevision);
+            }
+
+            Interlocked.Increment(ref s_revision);
+            Interlocked.Increment(ref _sourceRevision);
             if ((changes & GrassPlacementChange.Density) != 0)
-                Interlocked.Increment(ref densityRevision);
+            {
+                Interlocked.Increment(ref _densityRevision);
+            }
+
             if ((changes & GrassPlacementChange.GroundColor) != 0)
-                Interlocked.Increment(ref groundColorRevision);
+            {
+                Interlocked.Increment(ref _groundColorRevision);
+            }
+
             if ((changes & GrassPlacementChange.Surface) != 0)
-                Interlocked.Increment(ref surfaceRevision);
+            {
+                Interlocked.Increment(ref _surfaceRevision);
+            }
         }
 
         private void OnEnable()
@@ -642,7 +725,10 @@ namespace Cone.Grass
             // During scene loading Unity enables objects before setting Scene.isLoaded.
             // Register here; actual captures wait for the scene to finish loading.
             if (!IsRegistryEligible())
+            {
                 return;
+            }
+
             Register();
             SynchronizeAssetSubscription();
             TerrainCallbacks.heightmapChanged -= OnTerrainHeightChanged;
@@ -654,55 +740,64 @@ namespace Cone.Grass
 
         private void OnDisable()
         {
-            activeAreas.Remove(this);
-            registered = false;
-            if (!ReferenceEquals(observedAsset, null))
-                observedAsset.RegionChanged -= OnAssetRegionChanged;
-            observedAsset = null;
-            supportingMaterials.Clear();
-            groundSamplerTerrainData = null;
-            groundSamplerSelectedLayer = groundSamplerFirstLayer = null;
-            groundSamplerLayers = null;
-            Interlocked.Exchange(ref groundSamplerRefreshRequested, 1);
+            s_activeAreas.Remove(this);
+            _registered = false;
+            if (!ReferenceEquals(_observedAsset, null))
+            {
+                _observedAsset.RegionChanged -= OnAssetRegionChanged;
+            }
+
+            _observedAsset = null;
+            _supportingMaterials.Clear();
+            _groundSamplerTerrainData = null;
+            _groundSamplerSelectedLayer = _groundSamplerFirstLayer = null;
+            _groundSamplerLayers = null;
+            Interlocked.Exchange(ref _groundSamplerRefreshRequested, 1);
             TerrainCallbacks.heightmapChanged -= OnTerrainHeightChanged;
             TerrainCallbacks.textureChanged -= OnTerrainTextureChanged;
             BumpRevisions(GrassPlacementChange.All);
-            if (hadCoverage)
+            if (_hadCoverage)
             {
-                CoverageChanged?.Invoke(previousBounds);
-                SourceChanged?.Invoke(this, previousBounds, GrassPlacementChange.All);
+                CoverageChanged?.Invoke(_previousBounds);
+                SourceChanged?.Invoke(this, _previousBounds, GrassPlacementChange.All);
             }
-            hadFrame = hadCoverage = observedState = false;
-            lock (pendingLock)
+            _hadFrame = _hadCoverage = _observedState = false;
+            lock (_pendingLock)
             {
-                pendingChanges = GrassPlacementChange.None;
-                pendingFullRegion = false;
-                pendingPixels = default;
+                _pendingChanges = GrassPlacementChange.None;
+                _pendingFullRegion = false;
+                _pendingPixels = default;
             }
         }
 
         private void OnValidate()
         {
-            size.x = Mathf.Max(0.01f, FiniteOr(size.x, 10f));
-            size.y = Mathf.Max(0.01f, FiniteOr(size.y, 10f));
-            density = Mathf.Clamp01(FiniteOr(density, 0f));
-            edgeFalloff = Mathf.Clamp01(FiniteOr(edgeFalloff, 0f));
-            groundColorStrength = Mathf.Clamp01(FiniteOr(groundColorStrength, 0f));
-            groundTint = SanitizeColor(groundTint);
-            textureCoverageBounds = SanitizeRect(textureCoverageBounds);
-            if (variantWeights == null || variantWeights.Length != GrassVariantSelection.MaximumKinds)
+            _size.x = Mathf.Max(0.01f, FiniteOr(_size.x, 10f));
+            _size.y = Mathf.Max(0.01f, FiniteOr(_size.y, 10f));
+            _density = Mathf.Clamp01(FiniteOr(_density, 0f));
+            _edgeFalloff = Mathf.Clamp01(FiniteOr(_edgeFalloff, 0f));
+            _groundColorStrength = Mathf.Clamp01(FiniteOr(_groundColorStrength, 0f));
+            _groundTint = SanitizeColor(_groundTint);
+            _textureCoverageBounds = SanitizeRect(_textureCoverageBounds);
+            if (_variantWeights == null || _variantWeights.Length != GrassVariantSelection.MaximumKinds)
             {
                 var weights = DefaultVariantWeights();
-                for (int k = 0; variantWeights != null && k < Mathf.Min(variantWeights.Length, weights.Length); k++)
-                    weights[k] = variantWeights[k];
-                variantWeights = weights;
+                for (int k = 0; _variantWeights != null && k < Mathf.Min(_variantWeights.Length, weights.Length); k++)
+                {
+                    weights[k] = _variantWeights[k];
+                }
+
+                _variantWeights = weights;
             }
-            for (int k = 0; k < variantWeights.Length; k++)
-                variantWeights[k] = Mathf.Clamp01(FiniteOr(variantWeights[k], 1f));
-            Interlocked.Exchange(ref groundSamplerRefreshRequested, 1);
+            for (int k = 0; k < _variantWeights.Length; k++)
+            {
+                _variantWeights[k] = Mathf.Clamp01(FiniteOr(_variantWeights[k], 1f));
+            }
+
+            Interlocked.Exchange(ref _groundSamplerRefreshRequested, 1);
             // OnValidate can run during loading. Defer object and transform access to the main loop.
             // State comparison there distinguishes a color edit from a geometry or density edit.
-            Interlocked.Increment(ref revision);
+            Interlocked.Increment(ref s_revision);
         }
 
         private void Update()
@@ -710,11 +805,14 @@ namespace Cone.Grass
             if (!IsRegistryEligible())
             {
                 // Moving an enabled object to a preview scene need not invoke OnDisable.
-                if (registered)
+                if (_registered)
+                {
                     OnDisable();
+                }
+
                 return;
             }
-            if (!registered || registeredGeneration != registryGeneration)
+            if (!_registered || _registeredGeneration != s_registryGeneration)
             {
                 OnEnable();
                 return;
@@ -726,19 +824,22 @@ namespace Cone.Grass
         {
             // Do not mutate the active-source list while a renderer may be iterating it.
             if (!IsActiveSource())
+            {
                 return;
+            }
+
             SynchronizeAssetSubscription();
             GrassPlacementChange changes;
             RectInt changedPixels;
             bool fullRegion;
-            lock (pendingLock)
+            lock (_pendingLock)
             {
-                changes = pendingChanges;
-                changedPixels = pendingPixels;
-                fullRegion = pendingFullRegion;
-                pendingChanges = GrassPlacementChange.None;
-                pendingPixels = default;
-                pendingFullRegion = false;
+                changes = _pendingChanges;
+                changedPixels = _pendingPixels;
+                fullRegion = _pendingFullRegion;
+                _pendingChanges = GrassPlacementChange.None;
+                _pendingPixels = default;
+                _pendingFullRegion = false;
             }
 
             // Do not clear transform.hasChanged: other systems can use that flag too.
@@ -750,51 +851,70 @@ namespace Cone.Grass
             int mappingHash = GetMappingStateHash();
             // A pending brush rectangle does not limit a simultaneous inspector/Undo edit to
             // density settings, source binding or ground color: those affect the complete source.
-            if (densityConfigurationHash != previousDensityConfigurationHash || groundHash != previousGroundHash)
+            if (densityConfigurationHash != _previousDensityConfigurationHash || groundHash != _previousGroundHash)
+            {
                 fullRegion = true;
-            bool mappingChanged = !observedState || validFrame != hadFrame || mappingHash != previousMappingHash ||
-                (validFrame && (frame != previousFrame || !SameXZ(frameBounds, previousFrameBounds)));
+            }
+
+            bool mappingChanged = !_observedState || validFrame != _hadFrame || mappingHash != _previousMappingHash ||
+                (validFrame && (frame != _previousFrame || !SameXZ(frameBounds, _previousFrameBounds)));
             GrassPlacementChange detected = mappingChanged ? GrassPlacementChange.All : GrassPlacementChange.None;
-            if (densityHash != previousDensityHash)
+            if (densityHash != _previousDensityHash)
+            {
                 detected |= GrassPlacementChange.Density;
-            if (groundHash != previousGroundHash)
+            }
+
+            if (groundHash != _previousGroundHash)
+            {
                 detected |= GrassPlacementChange.GroundColor;
-            if (surfaceHash != previousSurfaceHash || (validFrame && frameBounds != previousFrameBounds))
+            }
+
+            if (surfaceHash != _previousSurfaceHash || (validFrame && frameBounds != _previousFrameBounds))
+            {
                 detected |= GrassPlacementChange.Surface;
+            }
+
             detected = IncludeDependentChanges(detected);
             BumpRevisions(detected & ~changes);
             changes |= detected;
             if (changes == GrassPlacementChange.None)
+            {
                 return;
+            }
 
             Bounds bounds = default;
-            bool hasCoverage = validFrame && density > 0f &&
+            bool hasCoverage = validFrame && _density > 0f &&
                 TryGetCoverageExtent(frame, frameBounds, out _, out bounds);
             Bounds dirty = default;
             bool hasDirtyBounds = false;
-            if (!fullRegion && !mappingChanged && densityAsset && validFrame &&
+            if (!fullRegion && !mappingChanged && _densityAsset && validFrame &&
                 changedPixels.width > 0 && changedPixels.height > 0 &&
                 (changes & GrassPlacementChange.Surface) == 0)
             {
-                Rect uv = Rect.MinMaxRect(Mathf.Max(0f, (changedPixels.xMin - 0.5f) / densityAsset.Width),
-                    Mathf.Max(0f, (changedPixels.yMin - 0.5f) / densityAsset.Height),
-                    Mathf.Min(1f, (changedPixels.xMax + 0.5f) / densityAsset.Width),
-                    Mathf.Min(1f, (changedPixels.yMax + 0.5f) / densityAsset.Height));
+                Rect uv = Rect.MinMaxRect(Mathf.Max(0f, (changedPixels.xMin - 0.5f) / _densityAsset.Width),
+                    Mathf.Max(0f, (changedPixels.yMin - 0.5f) / _densityAsset.Height),
+                    Mathf.Min(1f, (changedPixels.xMax + 0.5f) / _densityAsset.Width),
+                    Mathf.Min(1f, (changedPixels.yMax + 0.5f) / _densityAsset.Height));
                 hasDirtyBounds = TryGetBoundsFromUV(frame, uv, frameBounds, out dirty);
             }
             else
             {
-                if (hadCoverage)
+                if (_hadCoverage)
                 {
-                    dirty = previousBounds;
+                    dirty = _previousBounds;
                     hasDirtyBounds = true;
                 }
                 if (hasCoverage)
                 {
                     if (hasDirtyBounds)
+                    {
                         dirty.Encapsulate(bounds);
+                    }
                     else
+                    {
                         dirty = bounds;
+                    }
+
                     hasDirtyBounds = true;
                 }
                 if (!hasDirtyBounds && validFrame && (changes & GrassPlacementChange.Surface) != 0)
@@ -804,17 +924,17 @@ namespace Cone.Grass
                 }
             }
 
-            previousFrame = frame;
-            previousFrameBounds = frameBounds;
-            previousBounds = bounds;
-            previousDensityHash = densityHash;
-            previousDensityConfigurationHash = densityConfigurationHash;
-            previousGroundHash = groundHash;
-            previousSurfaceHash = surfaceHash;
-            previousMappingHash = mappingHash;
-            hadFrame = validFrame;
-            hadCoverage = hasCoverage;
-            observedState = true;
+            _previousFrame = frame;
+            _previousFrameBounds = frameBounds;
+            _previousBounds = bounds;
+            _previousDensityHash = densityHash;
+            _previousDensityConfigurationHash = densityConfigurationHash;
+            _previousGroundHash = groundHash;
+            _previousSurfaceHash = surfaceHash;
+            _previousMappingHash = mappingHash;
+            _hadFrame = validFrame;
+            _hadCoverage = hasCoverage;
+            _observedState = true;
 
             if (hasDirtyBounds)
             {
@@ -825,10 +945,13 @@ namespace Cone.Grass
 
         private void Register()
         {
-            if (!activeAreas.Contains(this))
-                activeAreas.Add(this);
-            registered = true;
-            registeredGeneration = registryGeneration;
+            if (!s_activeAreas.Contains(this))
+            {
+                s_activeAreas.Add(this);
+            }
+
+            _registered = true;
+            _registeredGeneration = s_registryGeneration;
         }
 
         private bool IsActiveSource() => IsRegistryEligible() && gameObject.scene.isLoaded;
@@ -836,26 +959,37 @@ namespace Cone.Grass
         private bool IsRegistryEligible()
         {
             if (!isActiveAndEnabled || !gameObject.scene.IsValid())
+            {
                 return false;
+            }
 #if UNITY_EDITOR
             // Prefab Stage and other preview scenes must not contribute coverage to the main scene.
             if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
+            {
                 return false;
+            }
 #endif
             return true;
         }
 
         private void SynchronizeAssetSubscription()
         {
-            if (ReferenceEquals(observedAsset, densityAsset))
+            if (ReferenceEquals(_observedAsset, _densityAsset))
+            {
                 return;
+            }
             // RegionChanged lives on the managed wrapper, which can outlive the
             // native asset. Detaching it must also work after that asset is destroyed.
-            if (!ReferenceEquals(observedAsset, null))
-                observedAsset.RegionChanged -= OnAssetRegionChanged;
-            observedAsset = IsRegistryEligible() ? densityAsset : null;
-            if (observedAsset)
-                observedAsset.RegionChanged += OnAssetRegionChanged;
+            if (!ReferenceEquals(_observedAsset, null))
+            {
+                _observedAsset.RegionChanged -= OnAssetRegionChanged;
+            }
+
+            _observedAsset = IsRegistryEligible() ? _densityAsset : null;
+            if (_observedAsset)
+            {
+                _observedAsset.RegionChanged += OnAssetRegionChanged;
+            }
         }
 
         private bool TryGetFrame(out Matrix4x4 localToWorld, out Matrix4x4 worldToMask, out Bounds bounds)
@@ -865,70 +999,98 @@ namespace Cone.Grass
             Vector3 center = transform.position;
             float yaw = transform.eulerAngles.y;
             if (float.IsNaN(yaw) || float.IsInfinity(yaw))
+            {
                 return false;
+            }
+
             Quaternion rotation = Quaternion.Euler(0f, yaw, 0f);
-            Vector3 frameSize = new Vector3(Mathf.Abs(transform.lossyScale.x) * size.x, 1f,
-                Mathf.Abs(transform.lossyScale.z) * size.y);
+            Vector3 frameSize = new Vector3(Mathf.Abs(transform.lossyScale.x) * _size.x, 1f,
+                Mathf.Abs(transform.lossyScale.z) * _size.y);
 
             if (HasAssignedTerrain)
             {
-                if (!terrain || !terrain.terrainData || !terrain.isActiveAndEnabled)
+                if (!_terrain || !_terrain.terrainData || !_terrain.isActiveAndEnabled)
+                {
                     return false;
-                var supportingScene = terrain.gameObject.scene;
+                }
+
+                var supportingScene = _terrain.gameObject.scene;
                 if (!supportingScene.IsValid() || !supportingScene.isLoaded)
+                {
                     return false;
+                }
 #if UNITY_EDITOR
                 // The area may live in a normal scene while an assigned terrain is moved
                 // into a preview scene. Its geometry must not leak into the main scene.
                 if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(supportingScene))
+                {
                     return false;
+                }
 #endif
             }
             else if (HasAssignedPaintSurface)
             {
                 // An explicitly assigned mesh surface must not turn into generic coverage
                 // when its collider is destroyed, unloaded or moved into a preview scene.
-                if (!paintSurface || !paintSurface.gameObject.activeInHierarchy)
+                if (!_paintSurface || !_paintSurface.gameObject.activeInHierarchy)
+                {
                     return false;
-                Renderer supportingRenderer = GetSupportingRenderer(paintSurface);
+                }
+
+                Renderer supportingRenderer = GetSupportingRenderer(_paintSurface);
                 if (!HasSupportingGeometry(supportingRenderer))
+                {
                     return false;
-                var supportingScene = paintSurface.gameObject.scene;
+                }
+
+                var supportingScene = _paintSurface.gameObject.scene;
                 if (!supportingScene.IsValid() || !supportingScene.isLoaded)
+                {
                     return false;
+                }
 #if UNITY_EDITOR
                 if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(supportingScene))
+                {
                     return false;
+                }
 #endif
             }
-            if (useTerrainBounds)
+            if (_useTerrainBounds)
             {
-                if (!terrain || !terrain.terrainData)
+                if (!_terrain || !_terrain.terrainData)
+                {
                     return false;
-                Vector3 terrainSize = terrain.terrainData.size;
-                center = terrain.transform.position + new Vector3(terrainSize.x * 0.5f, 0f, terrainSize.z * 0.5f);
+                }
+
+                Vector3 terrainSize = _terrain.terrainData.size;
+                center = _terrain.transform.position + new Vector3(terrainSize.x * 0.5f, 0f, terrainSize.z * 0.5f);
                 frameSize = new Vector3(terrainSize.x, 1f, terrainSize.z);
                 rotation = Quaternion.identity;
             }
 
             if (!IsFinite(center) || !IsFinite(frameSize) || frameSize.x < 0.001f || frameSize.z < 0.001f)
+            {
                 return false;
+            }
 
             localToWorld = Matrix4x4.TRS(center, rotation, frameSize);
             worldToMask = Matrix4x4.Translate(new Vector3(0.5f, 0f, 0.5f)) * localToWorld.inverse;
             if (!IsFinite(localToWorld) || !IsFinite(worldToMask) ||
                 (worldToMask.m00 == 0f && worldToMask.m02 == 0f) ||
                 (worldToMask.m20 == 0f && worldToMask.m22 == 0f))
+            {
                 return false;
+            }
+
             bounds = new Bounds(center, Vector3.zero);
             bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(-0.5f, 0f, -0.5f)));
             bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, -0.5f)));
             bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(-0.5f, 0f, 0.5f)));
             bounds.Encapsulate(localToWorld.MultiplyPoint3x4(new Vector3(0.5f, 0f, 0.5f)));
-            if (terrain && terrain.terrainData)
+            if (_terrain && _terrain.terrainData)
             {
-                Vector3 position = terrain.transform.position;
-                Vector3 terrainSize = terrain.terrainData.size;
+                Vector3 position = _terrain.transform.position;
+                Vector3 terrainSize = _terrain.terrainData.size;
                 Vector3 minimum = bounds.min;
                 Vector3 maximum = bounds.max;
                 minimum.x = Mathf.Max(minimum.x, position.x);
@@ -936,17 +1098,20 @@ namespace Cone.Grass
                 maximum.x = Mathf.Min(maximum.x, position.x + terrainSize.x);
                 maximum.z = Mathf.Min(maximum.z, position.z + terrainSize.z);
                 if (minimum.x >= maximum.x || minimum.z >= maximum.z)
+                {
                     return false;
+                }
+
                 minimum.y = position.y;
                 maximum.y = position.y + terrainSize.y;
                 bounds.SetMinMax(minimum, maximum);
             }
-            else if (paintSurface)
+            else if (_paintSurface)
             {
                 Vector3 minimum = bounds.min;
                 Vector3 maximum = bounds.max;
-                minimum.y = paintSurface.bounds.min.y;
-                maximum.y = paintSurface.bounds.max.y;
+                minimum.y = _paintSurface.bounds.min.y;
+                maximum.y = _paintSurface.bounds.max.y;
                 bounds.SetMinMax(minimum, maximum);
             }
             // Finite inputs can still overflow during corner/bounds construction,
@@ -957,26 +1122,45 @@ namespace Cone.Grass
         private bool HasSupportingGeometry(Renderer renderer)
         {
             if (!renderer || !renderer.enabled || renderer.forceRenderingOff || !renderer.gameObject.activeInHierarchy)
+            {
                 return false;
-            supportingMaterials.Clear();
-            renderer.GetSharedMaterials(supportingMaterials);
+            }
+
+            _supportingMaterials.Clear();
+            renderer.GetSharedMaterials(_supportingMaterials);
             // The height pass supplies its own material, so null slots are allowed.
             // Only slot indices actually recorded by that pass can supply geometry.
-            if (supportingMaterials.Count == 0)
+            if (_supportingMaterials.Count == 0)
+            {
                 return false;
+            }
+
             Mesh mesh = null;
             if (renderer is SkinnedMeshRenderer skinned)
+            {
                 mesh = skinned.sharedMesh;
+            }
             else if (renderer is MeshRenderer)
+            {
                 mesh = renderer.TryGetComponent(out MeshFilter filter) ? filter.sharedMesh : null;
+            }
+
             if (renderer is MeshRenderer || renderer is SkinnedMeshRenderer)
             {
                 if (!mesh || mesh.vertexCount == 0)
+                {
                     return false;
-                int drawCount = Mathf.Min(mesh.subMeshCount, supportingMaterials.Count);
+                }
+
+                int drawCount = Mathf.Min(mesh.subMeshCount, _supportingMaterials.Count);
                 for (int submesh = 0; submesh < drawCount; submesh++)
+                {
                     if (mesh.GetIndexCount(submesh) != 0)
+                    {
                         return true;
+                    }
+                }
+
                 return false;
             }
             return true;
@@ -992,18 +1176,23 @@ namespace Cone.Grass
         {
             uvBounds = new Rect(0f, 0f, 1f, 1f);
             bounds = frameBounds;
-            if (shape == GrassPlacementShape.Texture)
+            if (_shape == GrassPlacementShape.Texture)
             {
                 if (HasAssignedDensityAsset)
                 {
-                    if (!densityAsset || !densityAsset.TryGetCoverageBounds(out uvBounds))
+                    if (!_densityAsset || !_densityAsset.TryGetCoverageBounds(out uvBounds))
+                    {
                         return false;
+                    }
                 }
                 else
                 {
-                    if (!GrassPlacementDrawData.IsReadyDensityTexture(densityTexture))
+                    if (!GrassPlacementDrawData.IsReadyDensityTexture(_densityTexture))
+                    {
                         return false;
-                    uvBounds = SanitizeRect(textureCoverageBounds);
+                    }
+
+                    uvBounds = SanitizeRect(_textureCoverageBounds);
                 }
             }
             return TryGetBoundsFromUV(frame, uvBounds, frameBounds, out bounds);
@@ -1017,7 +1206,10 @@ namespace Cone.Grass
         {
             bounds = default;
             if (uvBounds.width <= 0f || uvBounds.height <= 0f)
+            {
                 return false;
+            }
+
             Matrix4x4 cropped = CropFrame(frame, uvBounds);
             bounds = new Bounds(cropped.MultiplyPoint3x4(Vector3.zero), Vector3.zero);
             bounds.Encapsulate(cropped.MultiplyPoint3x4(new Vector3(-0.5f, 0f, -0.5f)));
@@ -1033,30 +1225,39 @@ namespace Cone.Grass
             minimum.y = frameBounds.min.y;
             maximum.y = frameBounds.max.y;
             if (!IsFinite(minimum) || !IsFinite(maximum) || minimum.x >= maximum.x || minimum.z >= maximum.z)
+            {
                 return false;
+            }
+
             bounds.SetMinMax(minimum, maximum);
             return HasFiniteFootprint(bounds);
         }
 
         private Matrix4x4 GetGroundWorldToMask(Matrix4x4 sourceWorldToMask)
         {
-            if (!groundColorUsesTerrainBounds || !terrain || !terrain.terrainData)
+            if (!_groundColorUsesTerrainBounds || !_terrain || !_terrain.terrainData)
+            {
                 return sourceWorldToMask;
-            Vector3 origin = terrain.transform.position;
-            Vector3 extent = terrain.terrainData.size;
+            }
+
+            Vector3 origin = _terrain.transform.position;
+            Vector3 extent = _terrain.terrainData.size;
             return Matrix4x4.Scale(new Vector3(1f / extent.x, 1f, 1f / extent.z)) *
                 Matrix4x4.Translate(new Vector3(-origin.x, 0f, -origin.z));
         }
 
         private Vector4 GetGroundLayerUV()
         {
-            if (!groundLayer)
+            if (!_groundLayer)
+            {
                 return new Vector4(1f, 1f, 0f, 0f);
-            Vector2 tileSize = groundLayer.tileSize;
+            }
+
+            Vector2 tileSize = _groundLayer.tileSize;
             float scaleX = 1f / SignedTileSize(tileSize.x);
             float scaleY = 1f / SignedTileSize(tileSize.y);
-            Vector3 origin = terrain ? terrain.transform.position : Vector3.zero;
-            Vector2 offset = groundLayer.tileOffset;
+            Vector3 origin = _terrain ? _terrain.transform.position : Vector3.zero;
+            Vector2 offset = _groundLayer.tileOffset;
             return new Vector4(scaleX, scaleY, (FiniteOr(offset.x, 0f) - origin.x) * scaleX,
                 (FiniteOr(offset.y, 0f) - origin.z) * scaleY);
         }
@@ -1065,15 +1266,15 @@ namespace Cone.Grass
         {
             unchecked
             {
-                int hash = (int)shape;
-                hash = hash * 397 ^ density.GetHashCode();
-                hash = hash * 397 ^ edgeFalloff.GetHashCode();
+                int hash = (int)_shape;
+                hash = hash * 397 ^ _density.GetHashCode();
+                hash = hash * 397 ^ _edgeFalloff.GetHashCode();
                 hash = hash * 397 ^ HasAssignedDensityAsset.GetHashCode();
-                hash = hash * 397 ^ (densityAsset ? densityAsset.GetEntityId().GetHashCode() : 0);
-                hash = hash * 397 ^ (densityAsset ? densityAsset.Width : 0);
-                hash = hash * 397 ^ (densityAsset ? densityAsset.Height : 0);
-                hash = hash * 397 ^ (!densityAsset && densityTexture ? densityTexture.GetEntityId().GetHashCode() : 0);
-                hash = hash * 397 ^ (densityAsset ? 0 : textureCoverageBounds.GetHashCode());
+                hash = hash * 397 ^ (_densityAsset ? _densityAsset.GetEntityId().GetHashCode() : 0);
+                hash = hash * 397 ^ (_densityAsset ? _densityAsset.Width : 0);
+                hash = hash * 397 ^ (_densityAsset ? _densityAsset.Height : 0);
+                hash = hash * 397 ^ (!_densityAsset && _densityTexture ? _densityTexture.GetEntityId().GetHashCode() : 0);
+                hash = hash * 397 ^ (_densityAsset ? 0 : _textureCoverageBounds.GetHashCode());
                 return hash;
             }
         }
@@ -1082,7 +1283,7 @@ namespace Cone.Grass
         {
             unchecked
             {
-                return configurationHash * 397 ^ (densityAsset ? (int)densityAsset.Revision : GetTextureStateHash(densityTexture));
+                return configurationHash * 397 ^ (_densityAsset ? (int)_densityAsset.Revision : GetTextureStateHash(_densityTexture));
             }
         }
 
@@ -1092,23 +1293,26 @@ namespace Cone.Grass
             {
                 bool useLayerSampler = !HasReadyGroundColorTexture();
                 Texture sampler = useLayerSampler ? GetGroundLayerSamplerTexture() : null;
-                int hash = GetTextureStateHash(groundColorTexture);
-                hash = hash * 397 ^ groundColorUsesTerrainBounds.GetHashCode();
-                hash = hash * 397 ^ groundTint.GetHashCode();
-                hash = hash * 397 ^ groundColorStrength.GetHashCode();
-                hash = hash * 397 ^ (groundLayer ? groundLayer.GetEntityId().GetHashCode() : 0);
-                if (groundLayer)
+                int hash = GetTextureStateHash(_groundColorTexture);
+                hash = hash * 397 ^ _groundColorUsesTerrainBounds.GetHashCode();
+                hash = hash * 397 ^ _groundTint.GetHashCode();
+                hash = hash * 397 ^ _groundColorStrength.GetHashCode();
+                hash = hash * 397 ^ (_groundLayer ? _groundLayer.GetEntityId().GetHashCode() : 0);
+                if (_groundLayer)
                 {
-                    hash = hash * 397 ^ groundLayer.tileSize.GetHashCode();
-                    hash = hash * 397 ^ groundLayer.tileOffset.GetHashCode();
-                    hash = hash * 397 ^ groundLayer.diffuseRemapMin.GetHashCode();
-                    hash = hash * 397 ^ groundLayer.diffuseRemapMax.GetHashCode();
-                    hash = hash * 397 ^ GetTextureStateHash(groundLayer.diffuseTexture);
+                    hash = hash * 397 ^ _groundLayer.tileSize.GetHashCode();
+                    hash = hash * 397 ^ _groundLayer.tileOffset.GetHashCode();
+                    hash = hash * 397 ^ _groundLayer.diffuseRemapMin.GetHashCode();
+                    hash = hash * 397 ^ _groundLayer.diffuseRemapMax.GetHashCode();
+                    hash = hash * 397 ^ GetTextureStateHash(_groundLayer.diffuseTexture);
                 }
-                hash = hash * 397 ^ (useLayerSampler ? groundSamplerTopologyHash : 0);
+                hash = hash * 397 ^ (useLayerSampler ? _groundSamplerTopologyHash : 0);
                 // Kind weights are captured with the ground colour, from the same sources.
                 for (int kind = 0; kind < GrassVariantSelection.MaximumKinds; kind++)
+                {
                     hash = hash * 397 ^ GetVariantWeight(kind).GetHashCode();
+                }
+
                 hash = hash * 397 ^ (sampler ? sampler.GetEntityId().GetHashCode() : 0);
                 if (sampler)
                 {
@@ -1122,87 +1326,95 @@ namespace Cone.Grass
             }
         }
 
-        private bool HasReadyGroundColorTexture() => GrassPlacementDrawData.IsReadyTexture(groundColorTexture) &&
-            (!groundColorUsesTerrainBounds || terrain);
+        private bool HasReadyGroundColorTexture() => GrassPlacementDrawData.IsReadyTexture(_groundColorTexture) &&
+            (!_groundColorUsesTerrainBounds || _terrain);
 
         private Texture GetGroundLayerSamplerTexture()
         {
-            TerrainData data = terrain ? terrain.terrainData : null;
+            TerrainData data = _terrain ? _terrain.terrainData : null;
             int layerCount = data ? data.alphamapLayers : 0;
 #if UNITY_EDITOR
             int editorDirtyCount = data ? UnityEditor.EditorUtility.GetDirtyCount(data) : 0;
 #endif
-            bool refresh = Interlocked.Exchange(ref groundSamplerRefreshRequested, 0) != 0 ||
-                groundSamplerTerrainData != data || groundSamplerSelectedLayer != groundLayer ||
-                groundSamplerLayerCount != layerCount;
+            bool refresh = Interlocked.Exchange(ref _groundSamplerRefreshRequested, 0) != 0 ||
+                _groundSamplerTerrainData != data || _groundSamplerSelectedLayer != _groundLayer ||
+                _groundSamplerLayerCount != layerCount;
 #if UNITY_EDITOR
-            refresh |= groundSamplerEditorDirtyCount != editorDirtyCount;
+            refresh |= _groundSamplerEditorDirtyCount != editorDirtyCount;
 #endif
             if (refresh)
             {
-                groundSamplerTerrainData = data;
-                groundSamplerSelectedLayer = groundLayer;
-                groundSamplerLayerCount = layerCount;
+                _groundSamplerTerrainData = data;
+                _groundSamplerSelectedLayer = _groundLayer;
+                _groundSamplerLayerCount = layerCount;
 #if UNITY_EDITOR
-                groundSamplerEditorDirtyCount = editorDirtyCount;
+                _groundSamplerEditorDirtyCount = editorDirtyCount;
 #endif
                 // TerrainData.terrainLayers allocates an array. Only refresh it for
                 // source/configuration notifications; steady-state captures reuse it.
-                groundSamplerLayers = data && groundLayer ? data.terrainLayers : null;
-                groundSamplerFirstLayer = null;
-                groundSamplerHasGroup = false;
-                groundSamplerTopologyHash = 0;
-                if (groundSamplerLayers != null)
+                _groundSamplerLayers = data && _groundLayer ? data.terrainLayers : null;
+                _groundSamplerFirstLayer = null;
+                _groundSamplerHasGroup = false;
+                _groundSamplerTopologyHash = 0;
+                if (_groundSamplerLayers != null)
                 {
-                    for (int index = 0; index < groundSamplerLayers.Length; index++)
+                    for (int index = 0; index < _groundSamplerLayers.Length; index++)
                     {
-                        if (groundSamplerLayers[index] != groundLayer)
+                        if (_groundSamplerLayers[index] != _groundLayer)
+                        {
                             continue;
+                        }
+
                         int first = index / 4 * 4;
-                        groundSamplerHasGroup = true;
-                        groundSamplerFirstLayer = groundSamplerLayers[first];
+                        _groundSamplerHasGroup = true;
+                        _groundSamplerFirstLayer = _groundSamplerLayers[first];
                         unchecked
                         {
-                            groundSamplerTopologyHash = (index + 1) * 397 ^
-                                (groundSamplerFirstLayer ? groundSamplerFirstLayer.GetEntityId().GetHashCode() : 0);
+                            _groundSamplerTopologyHash = (index + 1) * 397 ^
+                                (_groundSamplerFirstLayer ? _groundSamplerFirstLayer.GetEntityId().GetHashCode() : 0);
                         }
                         break;
                     }
                 }
             }
-            if (!groundLayer)
+            if (!_groundLayer)
+            {
                 return null;
+            }
             // Native TerrainLit shares each four-layer group's first sampler. The
             // gray default also matches the albedo baker's missing-diffuse binding.
-            if (groundSamplerHasGroup)
-                return groundSamplerFirstLayer && groundSamplerFirstLayer.diffuseTexture
-                    ? groundSamplerFirstLayer.diffuseTexture : Texture2D.grayTexture;
-            return groundLayer.diffuseTexture;
+            if (_groundSamplerHasGroup)
+            {
+                return _groundSamplerFirstLayer && _groundSamplerFirstLayer.diffuseTexture
+                    ? _groundSamplerFirstLayer.diffuseTexture : Texture2D.grayTexture;
+            }
+
+            return _groundLayer.diffuseTexture;
         }
 
         private int GetSurfaceStateHash()
         {
             unchecked
             {
-                int hash = paintSurface ? paintSurface.GetEntityId().GetHashCode() : 0;
-                if (paintSurface)
+                int hash = _paintSurface ? _paintSurface.GetEntityId().GetHashCode() : 0;
+                if (_paintSurface)
                 {
-                    hash = hash * 397 ^ paintSurface.bounds.GetHashCode();
+                    hash = hash * 397 ^ _paintSurface.bounds.GetHashCode();
                     // A separate area's frame and a support's AABB can stay unchanged
                     // when its geometry changes. Publish the same surface observation
                     // to capture caches and interaction history left on this surface.
-                    hash = hash * 397 ^ paintSurface.transform.localToWorldMatrix.GetHashCode();
-                    hash = hash * 397 ^ paintSurface.gameObject.scene.handle.GetRawData().GetHashCode();
-                    hash = hash * 397 ^ paintSurface.enabled.GetHashCode();
-                    hash = hash * 397 ^ paintSurface.isTrigger.GetHashCode();
-                    hash = hash * 397 ^ paintSurface.gameObject.layer;
-                    if (paintSurface is MeshCollider meshCollider)
+                    hash = hash * 397 ^ _paintSurface.transform.localToWorldMatrix.GetHashCode();
+                    hash = hash * 397 ^ _paintSurface.gameObject.scene.handle.GetRawData().GetHashCode();
+                    hash = hash * 397 ^ _paintSurface.enabled.GetHashCode();
+                    hash = hash * 397 ^ _paintSurface.isTrigger.GetHashCode();
+                    hash = hash * 397 ^ _paintSurface.gameObject.layer;
+                    if (_paintSurface is MeshCollider meshCollider)
                     {
                         hash = hash * 397 ^ GetMeshStateHash(meshCollider.sharedMesh);
                         hash = hash * 397 ^ meshCollider.convex.GetHashCode();
                         hash = hash * 397 ^ (int)meshCollider.cookingOptions;
                     }
-                    Renderer renderer = GetSupportingRenderer(paintSurface);
+                    Renderer renderer = GetSupportingRenderer(_paintSurface);
                     hash = hash * 397 ^ (renderer ? renderer.GetEntityId().GetHashCode() : 0);
                     if (renderer)
                     {
@@ -1214,18 +1426,18 @@ namespace Cone.Grass
                         hash = hash * 397 ^ GetMeshStateHash(mesh);
                         // The height override records one draw per slot. Reuse the
                         // readiness buffer instead of allocating sharedMaterials.
-                        supportingMaterials.Clear();
-                        renderer.GetSharedMaterials(supportingMaterials);
-                        hash = hash * 397 ^ supportingMaterials.Count;
+                        _supportingMaterials.Clear();
+                        renderer.GetSharedMaterials(_supportingMaterials);
+                        hash = hash * 397 ^ _supportingMaterials.Count;
                     }
                 }
-                if (terrain && terrain.terrainData)
+                if (_terrain && _terrain.terrainData)
                 {
-                    TerrainData data = terrain.terrainData;
+                    TerrainData data = _terrain.terrainData;
                     hash = hash * 397 ^ data.GetEntityId().GetHashCode();
-                    hash = hash * 397 ^ terrain.gameObject.scene.handle.GetRawData().GetHashCode();
+                    hash = hash * 397 ^ _terrain.gameObject.scene.handle.GetRawData().GetHashCode();
                     hash = hash * 397 ^ data.size.y.GetHashCode();
-                    hash = hash * 397 ^ terrain.transform.position.y.GetHashCode();
+                    hash = hash * 397 ^ _terrain.transform.position.y.GetHashCode();
                     hash = hash * 397 ^ GetTextureStateHash(data.heightmapTexture);
                     hash = hash * 397 ^ GetTextureStateHash(data.holesTexture);
                 }
@@ -1236,7 +1448,10 @@ namespace Cone.Grass
         private static int GetMeshStateHash(Mesh mesh)
         {
             if (!mesh)
+            {
                 return 0;
+            }
+
             unchecked
             {
                 int hash = mesh.GetEntityId().GetHashCode();
@@ -1250,13 +1465,13 @@ namespace Cone.Grass
         {
             unchecked
             {
-                int hash = terrain ? terrain.GetEntityId().GetHashCode() : 0;
-                hash = hash * 397 ^ useTerrainBounds.GetHashCode();
+                int hash = _terrain ? _terrain.GetEntityId().GetHashCode() : 0;
+                hash = hash * 397 ^ _useTerrainBounds.GetHashCode();
                 hash = hash * 397 ^ gameObject.scene.handle.GetRawData().GetHashCode();
-                if (terrain && terrain.terrainData)
+                if (_terrain && _terrain.terrainData)
                 {
-                    Vector3 origin = terrain.transform.position;
-                    Vector3 extent = terrain.terrainData.size;
+                    Vector3 origin = _terrain.transform.position;
+                    Vector3 extent = _terrain.terrainData.size;
                     hash = hash * 397 ^ origin.x.GetHashCode();
                     hash = hash * 397 ^ origin.z.GetHashCode();
                     hash = hash * 397 ^ extent.x.GetHashCode();
@@ -1269,7 +1484,10 @@ namespace Cone.Grass
         private static int GetTextureStateHash(Texture texture)
         {
             if (!texture)
+            {
                 return 0;
+            }
+
             unchecked
             {
                 int hash = texture.GetEntityId().GetHashCode();
@@ -1293,36 +1511,45 @@ namespace Cone.Grass
 
         private void OnTerrainHeightChanged(Terrain changedTerrain, RectInt region, bool synched)
         {
-            if (changedTerrain == terrain)
+            if (changedTerrain == _terrain)
+            {
                 MarkSurfaceDirty();
+            }
         }
 
         private void OnTerrainTextureChanged(Terrain changedTerrain, string textureName, RectInt region, bool synched)
         {
-            if (changedTerrain == terrain)
+            if (changedTerrain == _terrain)
             {
                 if (textureName == TerrainData.HolesTextureName)
+                {
                     MarkSurfaceDirty();
+                }
                 else
+                {
                     MarkGroundColorDirty();
+                }
             }
         }
 
         private void OnDrawGizmosSelected()
         {
             if (!TryGetFrame(out Matrix4x4 localToWorld, out _, out _))
+            {
                 return;
+            }
+
             Matrix4x4 previousMatrix = Gizmos.matrix;
             Color previousColor = Gizmos.color;
             Gizmos.matrix = localToWorld;
             Gizmos.color = new Color(0.3f, 0.85f, 0.35f, 0.9f);
-            if (shape == GrassPlacementShape.Circle)
+            if (_shape == GrassPlacementShape.Circle)
             {
-                const int segments = 64;
+                const int Segments = 64;
                 Vector3 previous = new Vector3(0.5f, 0f, 0f);
-                for (int i = 1; i <= segments; i++)
+                for (int i = 1; i <= Segments; i++)
                 {
-                    float angle = i * (Mathf.PI * 2f / segments);
+                    float angle = i * (Mathf.PI * 2f / Segments);
                     Vector3 point = new Vector3(Mathf.Cos(angle) * 0.5f, 0f, Mathf.Sin(angle) * 0.5f);
                     Gizmos.DrawLine(previous, point);
                     previous = point;
@@ -1339,9 +1566,9 @@ namespace Cone.Grass
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetRegistry()
         {
-            activeAreas.Clear();
-            unchecked { registryGeneration++; }
-            Interlocked.Increment(ref revision);
+            s_activeAreas.Clear();
+            unchecked { s_registryGeneration++; }
+            Interlocked.Increment(ref s_revision);
             CoverageChanged = null;
             SourceChanged = null;
         }
@@ -1352,8 +1579,12 @@ namespace Cone.Grass
             // Also handles Enter Play Mode with both scene reload and domain reload disabled.
             GrassPlacementArea[] areas = FindObjectsByType<GrassPlacementArea>(FindObjectsInactive.Exclude);
             for (int i = 0; i < areas.Length; i++)
+            {
                 if (areas[i].IsActiveSource())
+                {
                     areas[i].OnEnable();
+                }
+            }
         }
 
         private static float FiniteOr(float value, float fallback) =>
@@ -1377,8 +1608,13 @@ namespace Cone.Grass
         private static bool IsFinite(Matrix4x4 value)
         {
             for (int index = 0; index < 16; index++)
+            {
                 if (float.IsNaN(value[index]) || float.IsInfinity(value[index]))
+                {
                     return false;
+                }
+            }
+
             return true;
         }
 
@@ -1393,7 +1629,10 @@ namespace Cone.Grass
         {
             if (!IsFinite(new Vector3(value.x, value.y, value.width)) ||
                 float.IsNaN(value.height) || float.IsInfinity(value.height) || value.width <= 0f || value.height <= 0f)
+            {
                 return default;
+            }
+
             float xMin = Mathf.Clamp01(value.xMin), yMin = Mathf.Clamp01(value.yMin);
             float xMax = Mathf.Clamp01(value.xMax), yMax = Mathf.Clamp01(value.yMax);
             return xMax <= xMin || yMax <= yMin ? default : Rect.MinMaxRect(xMin, yMin, xMax, yMax);
@@ -1408,9 +1647,15 @@ namespace Cone.Grass
         private static RectInt Union(RectInt left, RectInt right)
         {
             if (left.width <= 0 || left.height <= 0)
+            {
                 return right;
+            }
+
             if (right.width <= 0 || right.height <= 0)
+            {
                 return left;
+            }
+
             int x = Mathf.Min(left.xMin, right.xMin), y = Mathf.Min(left.yMin, right.yMin);
             return new RectInt(x, y, Mathf.Max(left.xMax, right.xMax) - x, Mathf.Max(left.yMax, right.yMax) - y);
         }

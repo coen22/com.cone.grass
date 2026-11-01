@@ -11,7 +11,7 @@ namespace Cone.Grass.Tests
 {
     public sealed class GrassShaderImportTests
     {
-        private static readonly string[] SearchFolders =
+        private static readonly string[] s_searchFolders =
         {
             "Packages/com.cone.grass/Runtime",
             "Packages/com.cone.grass/Editor/GroundColor"
@@ -21,7 +21,7 @@ namespace Cone.Grass.Tests
         public void PackageShaderImportsHaveNoReportedErrors()
         {
             List<string> errors = new List<string>();
-            string[] shaderAssets = AssetDatabase.FindAssets("t:Shader", SearchFolders);
+            string[] shaderAssets = AssetDatabase.FindAssets("t:Shader", s_searchFolders);
             Assert.That(shaderAssets.Length, Is.GreaterThan(0), "The installed package must contain imported shaders.");
             foreach (string guid in shaderAssets)
             {
@@ -30,7 +30,7 @@ namespace Cone.Grass.Tests
                 Assert.That(shader, Is.Not.Null, path);
                 AddErrors(errors, path, ShaderUtil.GetShaderMessages(shader));
             }
-            string[] computeAssets = AssetDatabase.FindAssets("t:ComputeShader", SearchFolders);
+            string[] computeAssets = AssetDatabase.FindAssets("t:ComputeShader", s_searchFolders);
             Assert.That(computeAssets.Length, Is.GreaterThan(0));
             foreach (string guid in computeAssets)
             {
@@ -48,7 +48,7 @@ namespace Cone.Grass.Tests
         {
             RequireGraphics();
             List<string> errors = new List<string>();
-            string[] shaders = AssetDatabase.FindAssets("t:Shader", SearchFolders);
+            string[] shaders = AssetDatabase.FindAssets("t:Shader", s_searchFolders);
             Assert.That(shaders.Length, Is.GreaterThan(0), "No shader passes were available to compile.");
             foreach (string guid in shaders)
             {
@@ -91,14 +91,20 @@ namespace Cone.Grass.Tests
             try
             {
                 if (variant == "MainShadow")
+                {
                     material.EnableKeyword("_MAIN_LIGHT_SHADOWS");
+                }
+
                 if (variant == "CascadedSoft" || variant.StartsWith("ForwardPlus"))
                 {
                     material.EnableKeyword("_MAIN_LIGHT_SHADOWS_CASCADE");
                     material.EnableKeyword("_SHADOWS_SOFT_HIGH");
                 }
                 if (variant == "ScreenShadow")
+                {
                     material.EnableKeyword("_MAIN_LIGHT_SHADOWS_SCREEN");
+                }
+
                 if (variant.StartsWith("ForwardPlus"))
                 {
                     material.EnableKeyword("_GRASS_ADDITIONAL_LIGHTS");
@@ -107,7 +113,10 @@ namespace Cone.Grass.Tests
                     material.EnableKeyword("_ADDITIONAL_LIGHT_SHADOWS");
                 }
                 if (variant == "GroundNormals" || variant == "ForwardPlusGround")
+                {
                     material.EnableKeyword("_GRASS_GROUND_NORMAL");
+                }
+
                 Assert.That(material.passCount, Is.GreaterThan(0));
                 for (int pass = 0; pass < material.passCount; pass++)
                 {
@@ -128,7 +137,9 @@ namespace Cone.Grass.Tests
         private static void RequireGraphics()
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
                 Assert.Ignore("Shader pass compilation needs an active graphics device. A headless import is a separate check.");
+            }
         }
 
         private static void AddErrors(List<string> errors, string source, IEnumerable<ShaderMessage> messages)

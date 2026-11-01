@@ -4,6 +4,7 @@ using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass
 {
@@ -13,30 +14,38 @@ namespace Cone.Grass
     /// multiplies the already shaded color, so it also attenuates ambient lighting;
     /// keep its strength restrained. Off-screen and hidden occluders are unavailable.
     /// The renderer feature owns and records this effect; configure it through
-    /// <see cref="InfiniteGrassRenderer.contactShadows"/>.
+    /// <see cref="InfiniteGrassRenderer.ContactShadows"/>.
     /// </summary>
     public sealed class GrassContactShadows : IDisposable
     {
-        /// <summary>Contact-shadow settings, serialized on <see cref="InfiniteGrassRenderer.contactShadows"/>.</summary>
+        /// <summary>Contact-shadow settings, serialized on <see cref="InfiniteGrassRenderer.ContactShadows"/>.</summary>
         [Serializable]
         public sealed class Settings
         {
+            [Tooltip("Adds a grass depth draw and a screen-space contact pass. The overlay also darkens ambient lighting."), SerializeField, FormerlySerializedAs("enabled")]
+            private bool _enabled;
             /// <summary>Adds a grass depth draw and a screen-space contact pass. The overlay also darkens ambient lighting.</summary>
-            [Tooltip("Adds a grass depth draw and a screen-space contact pass. The overlay also darkens ambient lighting.")]
-            public bool enabled;
+            public bool Enabled { get => _enabled; set => _enabled = value; }
+
+            [Range(0f, 1f), SerializeField, FormerlySerializedAs("strength")] private float _strength = 0.35f;
 
             /// <summary>How strongly a contact darkens the shaded colour, from 0 to 1; zero disables the effect.</summary>
-            [Range(0f, 1f)] public float strength = 0.35f;
+            public float Strength { get => _strength; set => _strength = value; }
+            [Min(0.01f), SerializeField, FormerlySerializedAs("rayLength")] private float _rayLength = 0.75f;
             /// <summary>World-space length of the ray marched toward the main light, in metres.</summary>
-            [Min(0.01f)] public float rayLength = 0.75f;
+            public float RayLength { get => _rayLength; set => _rayLength = value; }
+            [Range(4, 32), SerializeField, FormerlySerializedAs("steps")] private int _steps = 8;
             /// <summary>Ray-march steps, clamped to 4 to 32.</summary>
-            [Range(4, 32)] public int steps = 8;
+            public int Steps { get => _steps; set => _steps = value; }
+            [Min(0.001f), SerializeField, FormerlySerializedAs("bias")] private float _bias = 0.03f;
             /// <summary>Initial ray offset and depth tolerance that avoid self-shadowing, in metres.</summary>
-            [Min(0.001f)] public float bias = 0.03f;
+            public float Bias { get => _bias; set => _bias = value; }
+            [Min(0.001f), SerializeField, FormerlySerializedAs("thickness")] private float _thickness = 0.15f;
             /// <summary>Depth range behind an occluding surface that still counts as a hit, in metres.</summary>
-            [Min(0.001f)] public float thickness = 0.15f;
+            public float Thickness { get => _thickness; set => _thickness = value; }
+            [Min(0.1f), SerializeField, FormerlySerializedAs("maxDistance")] private float _maxDistance = 50f;
             /// <summary>Camera distance in metres at which the effect has faded out; it fades over the last fifth.</summary>
-            [Min(0.1f)] public float maxDistance = 50f;
+            public float MaxDistance { get => _maxDistance; set => _maxDistance = value; }
         }
 
         /// <summary>Only the renderer feature creates this effect.</summary>
@@ -44,18 +53,18 @@ namespace Cone.Grass
         {
         }
 
-        private static readonly int BlitScaleBias = Shader.PropertyToID("_BlitScaleBias");
-        private static readonly int SceneDepthTexture = Shader.PropertyToID("_GrassContactSceneDepth");
-        private static readonly int GrassDepthTexture = Shader.PropertyToID("_GrassContactGrassDepth");
-        private static readonly int DepthScale = Shader.PropertyToID("_GrassContactDepthScale");
-        private static readonly int GrassDepthScale = Shader.PropertyToID("_GrassContactGrassDepthScale");
-        private static readonly int ContactParameters = Shader.PropertyToID("_GrassContactParameters");
-        private static readonly int ContactLimits = Shader.PropertyToID("_GrassContactLimits");
-        private static readonly int CasterDistance = Shader.PropertyToID("_GrassContactCasterDistance");
-        private static readonly int ViewProjection = Shader.PropertyToID("_GrassContactViewProjection");
-        private static readonly int InverseViewProjection = Shader.PropertyToID("_GrassContactInverseViewProjection");
-        private static readonly int InverseProjection = Shader.PropertyToID("_GrassContactInverseProjection");
-        private static readonly int ViewMatrix = Shader.PropertyToID("_GrassContactViewMatrix");
+        private static readonly int s_blitScaleBias = Shader.PropertyToID("_BlitScaleBias");
+        private static readonly int s_sceneDepthTexture = Shader.PropertyToID("_GrassContactSceneDepth");
+        private static readonly int s_grassDepthTexture = Shader.PropertyToID("_GrassContactGrassDepth");
+        private static readonly int s_depthScale = Shader.PropertyToID("_GrassContactDepthScale");
+        private static readonly int s_grassDepthScale = Shader.PropertyToID("_GrassContactGrassDepthScale");
+        private static readonly int s_contactParameters = Shader.PropertyToID("_GrassContactParameters");
+        private static readonly int s_contactLimits = Shader.PropertyToID("_GrassContactLimits");
+        private static readonly int s_casterDistance = Shader.PropertyToID("_GrassContactCasterDistance");
+        private static readonly int s_viewProjection = Shader.PropertyToID("_GrassContactViewProjection");
+        private static readonly int s_inverseViewProjection = Shader.PropertyToID("_GrassContactInverseViewProjection");
+        private static readonly int s_inverseProjection = Shader.PropertyToID("_GrassContactInverseProjection");
+        private static readonly int s_viewMatrix = Shader.PropertyToID("_GrassContactViewMatrix");
 
         private Material _contactMaterial;
         private bool _warnedMissingShader;
@@ -95,17 +104,25 @@ namespace Cone.Grass
             // In particular, do not allocate textures or load/create a material while disabled.
             if (_disposed || !TryGetParameters(settings, out Vector4 parameters,
                     out Vector4 limits, out float casterDistance))
+            {
                 return;
+            }
 
             if (positionsBuffer == null || argumentsBuffer == null || bladeMaterial == null ||
                 !positionsHandle.IsValid() || !argumentsHandle.IsValid() ||
                 lodMeshes == null || lodMeshes.Length != 3 ||
                 drawProperties == null || drawProperties.Length != 3)
+            {
                 return;
+            }
 
             for (int lod = 0; lod < 3; lod++)
+            {
                 if (lodMeshes[lod] == null || drawProperties[lod] == null)
+                {
                     return;
+                }
+            }
 
             UniversalResourceData resources = frameData.Get<UniversalResourceData>();
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
@@ -115,13 +132,17 @@ namespace Cone.Grass
             // Avoid producing one eye's shadow mask for both eyes in an XR camera.
             if (cameraData.camera == null || cameraData.camera.stereoEnabled ||
                 !resources.activeColorTexture.IsValid() || !resources.cameraDepthTexture.IsValid())
+            {
                 return;
+            }
 
             int mainLightIndex = lightData.mainLightIndex;
             if (mainLightIndex < 0 || mainLightIndex >= lightData.visibleLights.Length ||
                 lightData.visibleLights[mainLightIndex].lightType != LightType.Directional ||
                 lightData.visibleLights[mainLightIndex].finalColor.maxColorComponent <= 0f)
+            {
                 return;
+            }
 
             TextureHandle cameraColor = resources.activeColorTexture;
             // Imported system backbuffers have RenderTargetInfo but deliberately no
@@ -136,20 +157,31 @@ namespace Cone.Grass
                 sceneDepthDescriptor.dimension != TextureDimension.Tex2D ||
                 sceneDepthDescriptor.msaaSamples != MSAASamples.None ||
                 !TryGetFormats(cameraTarget.format))
+            {
                 return;
+            }
 
             int depthPassIndex = bladeMaterial.FindPass("GrassContactDepth");
             if (depthPassIndex < 0 || !TryGetMaterial(out Material contactMaterial))
+            {
                 return;
+            }
 
             // Shared color/motion property blocks do not consume this contact-only
             // property. Keep all deformed casters reachable by an in-range ray.
             for (int lod = 0; lod < 3; lod++)
-                drawProperties[lod].SetFloat(CasterDistance, casterDistance);
+            {
+                drawProperties[lod].SetFloat(s_casterDistance, casterDistance);
+            }
+
             int headPassIndex = heads.FindPass("GrassHeadContactDepth");
             for (int queue = 0; headPassIndex >= 0 && queue < GrassHeadDraws.Queues; queue++)
+            {
                 if (heads.Draws(queue))
-                    heads.Properties[queue].SetFloat(CasterDistance, casterDistance);
+                {
+                    heads.Properties[queue].SetFloat(s_casterDistance, casterDistance);
+                }
+            }
 
             TextureDesc grassDescriptor = sceneDepthDescriptor;
             grassDescriptor.name = "Grass Contact Depth And Coverage";
@@ -196,8 +228,12 @@ namespace Cone.Grass
                 if (vertexTextureHandles != null)
                 {
                     foreach (TextureHandle texture in vertexTextureHandles)
+                    {
                         if (texture.IsValid())
+                        {
                             builder.UseTexture(texture, AccessFlags.Read);
+                        }
+                    }
                 }
                 builder.SetRenderAttachment(grassDepth, 0, AccessFlags.Write);
                 builder.SetRenderAttachmentDepth(grassDepthAttachment, AccessFlags.Write);
@@ -210,7 +246,7 @@ namespace Cone.Grass
                     Matrix4x4 viewProjection = projection * data.View;
                     for (int lod = 0; lod < 3; lod++)
                     {
-                        data.DrawProperties[lod].SetMatrix(ViewProjection, viewProjection);
+                        data.DrawProperties[lod].SetMatrix(s_viewProjection, viewProjection);
                         context.cmd.DrawMeshInstancedIndirect(
                             data.LodMeshes[lod], 0, data.BladeMaterial, data.DepthPassIndex,
                             data.Arguments, lod * GraphicsBuffer.IndirectDrawIndexedArgs.size,
@@ -219,8 +255,11 @@ namespace Cone.Grass
                     for (int queue = 0; data.HeadPassIndex >= 0 && queue < GrassHeadDraws.Queues; queue++)
                     {
                         if (!data.Heads.Draws(queue))
+                        {
                             continue;
-                        data.Heads.Properties[queue].SetMatrix(ViewProjection, viewProjection);
+                        }
+
+                        data.Heads.Properties[queue].SetMatrix(s_viewProjection, viewProjection);
                         context.cmd.DrawMeshInstancedIndirect(data.Heads.Meshes[queue], 0, data.Heads.Material,
                             data.HeadPassIndex, data.Arguments, GrassHeadDraws.ArgumentOffset(queue),
                             data.Heads.Properties[queue]);
@@ -255,33 +294,37 @@ namespace Cone.Grass
                         grassOrigin == TextureUVOrigin.BottomLeft);
                     if (!TryGetProjectionMatrices(projection, data.View, out Matrix4x4 viewProjection,
                             out Matrix4x4 inverseViewProjection, out Matrix4x4 inverseProjection))
+                    {
                         return;
+                    }
 
                     // Intermediate camera textures already cover the camera viewport.
                     // A direct backbuffer draw must preserve other camera rectangles.
                     if (data.SetBackBufferViewport)
+                    {
                         context.cmd.SetViewport(data.Viewport);
+                    }
 
                     // Blit.hlsl's full-screen vertex entry point, with a pooled property
                     // block so queued cameras never share mutable material parameters.
                     MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
-                    properties.SetTexture(SceneDepthTexture, data.SceneDepth);
-                    properties.SetTexture(GrassDepthTexture, data.GrassDepth);
+                    properties.SetTexture(s_sceneDepthTexture, data.SceneDepth);
+                    properties.SetTexture(s_grassDepthTexture, data.GrassDepth);
                     // Vertex UVs are normalized in the grass depth domain. Convert
                     // destination origin -> grass origin, then grass -> scene origin
                     // when sampling. RTHandle allocation scales are applied only to
                     // samples, never to projection or world reconstruction.
-                    properties.SetVector(BlitScaleBias, GetUVScaleBias(Vector2.one,
+                    properties.SetVector(s_blitScaleBias, GetUVScaleBias(Vector2.one,
                         grassOrigin != context.GetTextureUVOrigin(data.Color)));
-                    properties.SetVector(DepthScale, GetUVScaleBias(GetTextureScale(data.SceneDepth),
+                    properties.SetVector(s_depthScale, GetUVScaleBias(GetTextureScale(data.SceneDepth),
                         grassOrigin != context.GetTextureUVOrigin(data.SceneDepth)));
-                    properties.SetVector(GrassDepthScale, GetUVScaleBias(GetTextureScale(data.GrassDepth), false));
-                    properties.SetVector(ContactParameters, data.Parameters);
-                    properties.SetVector(ContactLimits, data.Limits);
-                    properties.SetMatrix(ViewProjection, viewProjection);
-                    properties.SetMatrix(InverseViewProjection, inverseViewProjection);
-                    properties.SetMatrix(InverseProjection, inverseProjection);
-                    properties.SetMatrix(ViewMatrix, data.View);
+                    properties.SetVector(s_grassDepthScale, GetUVScaleBias(GetTextureScale(data.GrassDepth), false));
+                    properties.SetVector(s_contactParameters, data.Parameters);
+                    properties.SetVector(s_contactLimits, data.Limits);
+                    properties.SetMatrix(s_viewProjection, viewProjection);
+                    properties.SetMatrix(s_inverseViewProjection, inverseViewProjection);
+                    properties.SetMatrix(s_inverseProjection, inverseProjection);
+                    properties.SetMatrix(s_viewMatrix, data.View);
                     context.cmd.DrawProcedural(Matrix4x4.identity, data.Material, 0,
                         MeshTopology.Triangles, 3, 1, properties);
                 });
@@ -292,7 +335,9 @@ namespace Cone.Grass
         public void Dispose()
         {
             if (_disposed)
+            {
                 return;
+            }
 
             _disposed = true;
             CoreUtils.Destroy(_contactMaterial);
@@ -310,18 +355,20 @@ namespace Cone.Grass
             parameters = default;
             limits = default;
             casterDistance = 0f;
-            if (settings == null || !settings.enabled ||
-                !IsFinite(settings.strength) || !IsFinite(settings.rayLength) ||
-                !IsFinite(settings.bias) || !IsFinite(settings.thickness) ||
-                !IsFinite(settings.maxDistance) || settings.strength <= 0f ||
-                settings.rayLength <= 0f || settings.maxDistance <= 0f)
+            if (settings == null || !settings.Enabled ||
+                !IsFinite(settings.Strength) || !IsFinite(settings.RayLength) ||
+                !IsFinite(settings.Bias) || !IsFinite(settings.Thickness) ||
+                !IsFinite(settings.MaxDistance) || settings.Strength <= 0f ||
+                settings.RayLength <= 0f || settings.MaxDistance <= 0f)
+            {
                 return false;
+            }
 
-            parameters = new Vector4(Mathf.Clamp01(settings.strength),
-                Mathf.Max(0.01f, settings.rayLength), Mathf.Max(0.001f, settings.bias),
-                Mathf.Max(0.001f, settings.thickness));
-            limits = new Vector4(Mathf.Max(0.1f, settings.maxDistance),
-                Mathf.Clamp(settings.steps, 4, 32), 0.025f, 0f);
+            parameters = new Vector4(Mathf.Clamp01(settings.Strength),
+                Mathf.Max(0.01f, settings.RayLength), Mathf.Max(0.001f, settings.Bias),
+                Mathf.Max(0.001f, settings.Thickness));
+            limits = new Vector4(Mathf.Max(0.1f, settings.MaxDistance),
+                Mathf.Clamp(settings.Steps, 4, 32), 0.025f, 0f);
             casterDistance = limits.x + parameters.y + parameters.z;
             // The depth shader compares squared distances, so guard the square too.
             if (!IsFinite(casterDistance) || !IsFinite(casterDistance * casterDistance))
@@ -357,11 +404,19 @@ namespace Cone.Grass
             inverseViewProjection = viewProjection.inverse;
             inverseProjection = gpuProjection.inverse;
             if (viewProjection.determinant == 0f || gpuProjection.determinant == 0f)
+            {
                 return false;
+            }
+
             for (int i = 0; i < 16; i++)
+            {
                 if (!IsFinite(viewProjection[i]) || !IsFinite(inverseViewProjection[i]) ||
                     !IsFinite(inverseProjection[i]))
+                {
                     return false;
+                }
+            }
+
             return true;
         }
 
@@ -369,7 +424,9 @@ namespace Cone.Grass
         {
             RTHandle handle = texture;
             if (!handle.useScaling)
+            {
                 return Vector2.one;
+            }
 
             Vector4 scale = handle.rtHandleProperties.rtHandleScale;
             return new Vector2(scale.x, scale.y);
@@ -388,10 +445,15 @@ namespace Cone.Grass
                         ? GraphicsFormat.R32G32B32A32_SFloat : GraphicsFormat.None;
                 _depthAttachmentFormat = GraphicsFormat.D32_SFloat;
                 if (!SystemInfo.IsFormatSupported(_depthAttachmentFormat, GraphicsFormatUsage.Render))
+                {
                     _depthAttachmentFormat = SystemInfo.GetGraphicsFormat(DefaultFormat.DepthStencil);
+                }
+
                 if (!GraphicsFormatUtility.IsDepthFormat(_depthAttachmentFormat) ||
                     !SystemInfo.IsFormatSupported(_depthAttachmentFormat, GraphicsFormatUsage.Render))
+                {
                     _depthAttachmentFormat = GraphicsFormat.None;
+                }
             }
 
             bool supported = _depthCoverageFormat != GraphicsFormat.None &&
@@ -416,7 +478,9 @@ namespace Cone.Grass
             {
                 Shader shader = Resources.Load<Shader>("InfiniteGrassContactShadows");
                 if (shader != null && shader.isSupported)
+                {
                     _contactMaterial = CoreUtils.CreateEngineMaterial(shader);
+                }
                 else if (!_warnedMissingShader)
                 {
                     Debug.LogWarning("Grass contact shadows require the supported InfiniteGrassContactShadows resource shader.");

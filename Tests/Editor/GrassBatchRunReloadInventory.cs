@@ -14,7 +14,7 @@ namespace Cone.Grass.Tests
     // an exact authored-leaf whitelist; the actual RunStarted tree owns selection.
     internal static class GrassBatchRunReloadInventory
     {
-        internal static readonly HashSet<string> Methods = new HashSet<string>(StringComparer.Ordinal)
+        internal static readonly HashSet<string> s_methods = new HashSet<string>(StringComparer.Ordinal)
         {
             "GrassAntialiasingRenderingTests.DensityAndMinimumWidthCompensationAttenuateTheSameExpandedGeometry(System.Single,System.Single)",
             "GrassAntialiasingRenderingTests.DownwardPerspectiveViewKeepsVisibleBladesOnBothSidesOfTheCamera(System.Int32)",

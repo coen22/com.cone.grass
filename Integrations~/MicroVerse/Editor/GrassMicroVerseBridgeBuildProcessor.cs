@@ -35,19 +35,28 @@ namespace Cone.Grass.MicroVerse
             foreach (string path in scenePaths)
             {
                 if (string.IsNullOrEmpty(path) || !checkedPaths.Add(path))
+                {
                     continue;
+                }
+
                 Scene preview = default;
                 try
                 {
                     preview = EditorSceneManager.OpenPreviewScene(path);
                     if (!preview.IsValid() || !preview.isLoaded)
+                    {
                         throw new BuildFailedException("Could not inspect grass bindings in saved scene '" + path + "'.");
+                    }
+
                     ValidateScene(preview);
                 }
                 finally
                 {
                     if (preview.IsValid())
+                    {
                         EditorSceneManager.ClosePreviewScene(preview);
+                    }
+
                     GrassMicroVerseBridgeUtility.PruneUnusedMaskCaches();
                 }
             }
@@ -57,7 +66,10 @@ namespace Cone.Grass.MicroVerse
         {
             // Unity also processes scenes when entering Play mode.
             if (report == null)
+            {
                 return;
+            }
+
             foreach (GameObject root in scene.GetRootGameObjects())
             {
                 foreach (GrassMicroVerseBridge bridge in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
@@ -82,21 +94,32 @@ namespace Cone.Grass.MicroVerse
         private static void ValidateScene(Scene scene)
         {
             foreach (GameObject root in scene.GetRootGameObjects())
+            {
                 foreach (GrassMicroVerseBridge bridge in root.GetComponentsInChildren<GrassMicroVerseBridge>(true))
-                    if (bridge.enabled) ValidateBridge(bridge, scene.path);
+                {
+                    if (bridge.enabled)
+                    {
+                        ValidateBridge(bridge, scene.path);
+                    }
+                }
+            }
         }
 
         private static void ValidateBridge(GrassMicroVerseBridge bridge, string scenePath)
         {
             if (!GrassMicroVerseBridgeUtility.TryValidateForBuild(bridge, out string message))
+            {
                 throw new BuildFailedException(
                     $"Grass output in saved scene '{scenePath}' on '{bridge.name}' is not ready: " + message);
+            }
         }
 
         private static void DependOn(Object asset)
         {
             if (asset && !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(asset)))
+            {
                 BuildPipelineContext.DependOnAsset(asset);
+            }
         }
     }
 }

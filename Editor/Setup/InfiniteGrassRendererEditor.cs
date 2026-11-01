@@ -20,12 +20,16 @@ namespace Cone.Grass.Editor
                 EditorGUILayout.HelpBox("The active URP renderer has no Grass Data Renderer Feature, so no grass is drawn.",
                     MessageType.Warning);
                 if (GUILayout.Button("Add Grass Data Renderer Feature"))
+                {
                     GrassRendererSetup.Install();
+                }
             }
 
-            if (targets.Length == 1 && target is InfiniteGrassRenderer renderer && !renderer.grassMaterial)
+            if (targets.Length == 1 && target is InfiniteGrassRenderer renderer && !renderer.GrassMaterial)
+            {
                 EditorGUILayout.HelpBox("Assign a grass material, for example the package's Grass Blade material.",
                     MessageType.Warning);
+            }
 
             DrawDefaultInspector();
         }

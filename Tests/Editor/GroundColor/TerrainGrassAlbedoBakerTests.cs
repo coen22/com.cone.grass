@@ -1,7 +1,7 @@
-using Cone.Grass.Editor;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Cone.Grass.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -16,43 +16,54 @@ namespace Cone.Grass.Tests
     [Category("GrassGPU")]
     public sealed partial class TerrainGrassAlbedoBakerTests
     {
-        private readonly List<Object> owned = new List<Object>();
-        private Terrain terrain;
-        private string folder;
-        private string outputPath;
+        private readonly List<Object> _owned = new List<Object>();
+        private Terrain _terrain;
+        private string _folder;
+        private string _outputPath;
 
         [SetUp]
         public void SetUp()
         {
             if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset) ||
                 SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
                 Assert.Ignore("Ground-albedo GPU tests require a URP Editor project with a graphics device.");
+            }
+
             Shader shader = Shader.Find(TerrainGrassAlbedoBaker.NativeTerrainShaderName);
             Assert.That(shader, Is.Not.Null, "Native URP Terrain/Lit shader must be installed.");
             string name = "ConeGrassAlbedoTests_" + Guid.NewGuid().ToString("N");
-            folder = "Assets/" + name;
+            _folder = "Assets/" + name;
             AssetDatabase.CreateFolder("Assets", name);
-            outputPath = folder + "/Albedo.asset";
+            _outputPath = _folder + "/Albedo.asset";
             TerrainData data = Own(new TerrainData { heightmapResolution = 33, alphamapResolution = 16, size = new Vector3(16, 8, 16) });
             GameObject gameObject = Own(Terrain.CreateTerrainGameObject(data));
-            terrain = gameObject.GetComponent<Terrain>();
-            terrain.transform.position = new Vector3(1024, 17, -256);
-            terrain.materialTemplate = Own(new Material(shader));
-            terrain.materialTemplate.DisableKeyword("_TERRAIN_BLEND_HEIGHT");
-            terrain.materialTemplate.SetFloat("_EnableHeightBlend", 0f);
+            _terrain = gameObject.GetComponent<Terrain>();
+            _terrain.transform.position = new Vector3(1024, 17, -256);
+            _terrain.materialTemplate = Own(new Material(shader));
+            _terrain.materialTemplate.DisableKeyword("_TERRAIN_BLEND_HEIGHT");
+            _terrain.materialTemplate.SetFloat("_EnableHeightBlend", 0f);
         }
 
         [TearDown]
         public void TearDown()
         {
-            for (int i = owned.Count - 1; i >= 0; i--)
-                if (owned[i])
-                    Object.DestroyImmediate(owned[i]);
-            owned.Clear();
-            if (!string.IsNullOrEmpty(folder))
-                AssetDatabase.DeleteAsset(folder);
-            folder = null;
-            terrain = null;
+            for (int i = _owned.Count - 1; i >= 0; i--)
+            {
+                if (_owned[i])
+                {
+                    Object.DestroyImmediate(_owned[i]);
+                }
+            }
+
+            _owned.Clear();
+            if (!string.IsNullOrEmpty(_folder))
+            {
+                AssetDatabase.DeleteAsset(_folder);
+            }
+
+            _folder = null;
+            _terrain = null;
         }
 
         [Test]
@@ -60,16 +71,19 @@ namespace Cone.Grass.Tests
         {
             TerrainLayer[] layers = new TerrainLayer[5];
             for (int i = 0; i < layers.Length; i++)
+            {
                 layers[i] = Layer(i == 0 ? Color.red : Color.blue, true);
+            }
+
             SetLayers(layers, new[] { 0.25f, 0f, 0f, 0f, 0.75f });
             Texture2D first = Bake();
             AssertColor(first.GetPixel(8, 8), new Color(0.25f, 0f, 0.75f), 0.015f);
-            string guid = AssetDatabase.AssetPathToGUID(outputPath);
+            string guid = AssetDatabase.AssetPathToGUID(_outputPath);
             EntityId id = first.GetEntityId();
             SetLayers(layers, new[] { 0.75f, 0f, 0f, 0f, 0.25f });
             Texture2D second = Bake();
             Assert.That(second.GetEntityId(), Is.EqualTo(id));
-            Assert.That(AssetDatabase.AssetPathToGUID(outputPath), Is.EqualTo(guid));
+            Assert.That(AssetDatabase.AssetPathToGUID(_outputPath), Is.EqualTo(guid));
             Assert.That(second.isDataSRGB, Is.False);
             Assert.That(second.mipmapCount, Is.GreaterThan(1));
             AssertColor(second.GetPixel(8, 8), new Color(0.75f, 0f, 0.25f), 0.015f);
@@ -94,9 +108,9 @@ namespace Cone.Grass.Tests
             blue.maskMapTexture = Solid(new Color(0f, 0f, 0.2f, 1f), true);
             blue.maskMapRemapMin = new Vector4(0f, 0f, 0.8f, 0f);
             blue.maskMapRemapMax = Vector4.one;
-            terrain.materialTemplate.SetFloat("_EnableHeightBlend", 1f);
-            terrain.materialTemplate.SetFloat("_HeightTransition", 0.01f);
-            terrain.materialTemplate.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
+            _terrain.materialTemplate.SetFloat("_EnableHeightBlend", 1f);
+            _terrain.materialTemplate.SetFloat("_HeightTransition", 0.01f);
+            _terrain.materialTemplate.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
             SetLayers(new[] { red, blue }, new[] { 0.5f, 0.5f });
             AssertColor(Bake().GetPixel(8, 8), Color.blue, 0.015f);
             SetLayers(new[] { red, blue, Layer(Color.green, true), Layer(Color.white, true), Layer(Color.black, true) },
@@ -144,15 +158,15 @@ namespace Cone.Grass.Tests
         {
             TerrainLayer layer = Layer(Color.green, true);
             SetLayers(new[] { layer }, new[] { 1f });
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16, out Hash128 first, out string error), Is.True, error);
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16, out Hash128 first, out string error), Is.True, error);
             Bake();
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16, out Hash128 afterBake, out error), Is.True, error);
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16, out Hash128 afterBake, out error), Is.True, error);
             Assert.That(afterBake, Is.EqualTo(first));
             layer.tileOffset = Vector2.one;
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16, out Hash128 afterEdit, out error), Is.True, error);
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16, out Hash128 afterEdit, out error), Is.True, error);
             Assert.That(afterEdit, Is.Not.EqualTo(first));
-            TerrainGrassAlbedoBaker.Invalidate(terrain);
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16, out Hash128 afterInvalidation, out error), Is.True, error);
+            TerrainGrassAlbedoBaker.Invalidate(_terrain);
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16, out Hash128 afterInvalidation, out error), Is.True, error);
             Assert.That(afterInvalidation, Is.Not.EqualTo(afterEdit));
         }
 
@@ -170,8 +184,8 @@ namespace Cone.Grass.Tests
             if (maskTexture)
             {
                 layer.maskMapTexture = source;
-                terrain.materialTemplate.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
-                terrain.materialTemplate.SetFloat("_HeightTransition", 0.01f);
+                _terrain.materialTemplate.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
+                _terrain.materialTemplate.SetFloat("_HeightTransition", 0.01f);
                 SetLayers(new[] { layer, Layer(Color.blue, true) }, new[] { 0.5f, 0.5f });
             }
             else
@@ -185,7 +199,7 @@ namespace Cone.Grass.Tests
             EditorUtility.ClearDirty(source);
             uint updateCount = source.updateCount;
             int dirtyCount = EditorUtility.GetDirtyCount(source);
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 repeated, out string error), Is.True, error);
             AssertColor(Bake().GetPixel(2, 10), maskTexture ? Color.blue : Color.red, 0.015f);
             source.wrapModeV = TextureWrapMode.Clamp;
@@ -193,10 +207,10 @@ namespace Cone.Grass.Tests
             Assert.That(source.wrapMode, Is.EqualTo(TextureWrapMode.Repeat), "The combined getter still exposes the unchanged U axis.");
             Assert.That(source.updateCount, Is.EqualTo(updateCount), "Changing addressing must not require a pixel upload.");
             Assert.That(EditorUtility.GetDirtyCount(source), Is.EqualTo(dirtyCount), "The sampler edit must be detected independently of dirty counters.");
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 clamped, out error), Is.True, error);
             Assert.That(clamped, Is.Not.EqualTo(repeated));
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 unchanged, out error), Is.True, error);
             Assert.That(unchanged, Is.EqualTo(clamped), "Unchanged sampler settings must settle after the edit.");
             AssertColor(Bake().GetPixel(2, 10), maskTexture ? Color.red : Color.blue, 0.015f);
@@ -215,7 +229,7 @@ namespace Cone.Grass.Tests
             EditorUtility.ClearDirty(source);
             uint updateCount = source.updateCount;
             int dirtyCount = EditorUtility.GetDirtyCount(source);
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 original, out string error), Is.True, error);
 
             source.anisoLevel = 8;
@@ -223,10 +237,10 @@ namespace Cone.Grass.Tests
             Assert.That(source.anisoLevel, Is.EqualTo(8));
             Assert.That(source.updateCount, Is.EqualTo(updateCount));
             Assert.That(EditorUtility.GetDirtyCount(source), Is.EqualTo(dirtyCount));
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 changed, out error), Is.True, error);
             Assert.That(changed, Is.Not.EqualTo(original));
-            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(terrain, 16,
+            Assert.That(TerrainGrassAlbedoBaker.TryGetSourceSignature(_terrain, 16,
                 out Hash128 unchanged, out error), Is.True, error);
             Assert.That(unchanged, Is.EqualTo(changed), "An unchanged sampler must not keep invalidating the bake.");
         }
@@ -239,7 +253,10 @@ namespace Cone.Grass.Tests
             TerrainLayer[] layers = new TerrainLayer[selectedIndex + 1];
             float[] weights = new float[layers.Length];
             for (int i = 0; i < layers.Length; i++)
+            {
                 layers[i] = Layer(Color.white, true);
+            }
+
             weights[selectedIndex] = 1f;
             Texture2D selectedTexture = Own(new Texture2D(2, 2, TextureFormat.RGBA32, false, true));
             selectedTexture.SetPixels(new[] { Color.red, Color.green, Color.blue, Color.white });
@@ -254,7 +271,7 @@ namespace Cone.Grass.Tests
             Texture2D samplerSource = layers[(selectedIndex / 4) * 4].diffuseTexture;
             var areaObject = Own(new GameObject("Native selected-layer comparison"));
             GrassPlacementArea area = areaObject.AddComponent<GrassPlacementArea>();
-            area.ConfigureTexture(terrain, Texture2D.whiteTexture, selectedLayer);
+            area.ConfigureTexture(_terrain, Texture2D.whiteTexture, selectedLayer);
             for (int variant = 0; variant < 2; variant++)
             {
                 // In later-layer cases the selected texture keeps Bilinear/Repeat.
@@ -289,7 +306,10 @@ namespace Cone.Grass.Tests
                 Color color = mip == 0 ? Color.red : mip == 1 ? Color.green : Color.blue;
                 Color[] pixels = new Color[size * size];
                 for (int i = 0; i < pixels.Length; i++)
+                {
                     pixels[i] = color;
+                }
+
                 source.SetPixels(pixels, mip);
             }
             source.Apply(false, true);
@@ -306,7 +326,9 @@ namespace Cone.Grass.Tests
                 Color[] actual = Bake().GetPixels();
                 Assert.That(actual.Length, Is.EqualTo(expected.Length));
                 for (int i = 0; i < actual.Length; i++)
+                {
                     AssertColor(actual[i], expected[i], 0.0001f);
+                }
             }
             finally
             {
@@ -325,7 +347,7 @@ namespace Cone.Grass.Tests
             {
                 GameObject gameObject = Own(new GameObject("Baked ground consumer " + i));
                 GrassPlacementArea area = gameObject.AddComponent<GrassPlacementArea>();
-                area.ConfigureTexture(terrain, Texture2D.whiteTexture);
+                area.ConfigureTexture(_terrain, Texture2D.whiteTexture);
                 area.SetGroundColorTexture(output, true);
                 Assert.That(area.TryGetCaptureData(out _), Is.True);
                 areas[i] = area;
@@ -361,10 +383,10 @@ namespace Cone.Grass.Tests
             {
                 LogAssert.Expect(LogType.Exception, new Regex("Injected ground-albedo observer failure"));
                 Texture2D output = Bake();
-                Assert.That(notifiedTerrain, Is.SameAs(terrain));
+                Assert.That(notifiedTerrain, Is.SameAs(_terrain));
                 Assert.That(notifiedTexture, Is.SameAs(output),
                     "All observers must receive the successfully saved output even when an earlier observer fails.");
-                Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(outputPath), Is.SameAs(output));
+                Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(_outputPath), Is.SameAs(output));
                 Assert.That(EditorUtility.IsDirty(output), Is.False);
                 AssertColor(output.GetPixel(8, 8), Color.green, 0.015f);
             }
@@ -380,21 +402,27 @@ namespace Cone.Grass.Tests
         public void ReentrantBakeCannotOverwriteAnAliasedOrMovedOutput(bool moveOutput)
         {
             SetLayers(new[] { Layer(Color.green, true) }, new[] { 1f });
-            string requestedPath = moveOutput ? folder + "/Moved.asset" :
-                outputPath.Replace("Albedo.asset", "ALBEDO.ASSET").Replace('/', '\\');
+            string requestedPath = moveOutput ? _folder + "/Moved.asset" :
+                _outputPath.Replace("Albedo.asset", "ALBEDO.ASSET").Replace('/', '\\');
             bool attempted = false, nestedSucceeded = true;
             string nestedError = null, moveError = null, originalGuid = null;
             Texture2D nestedTexture = null;
             Action<Terrain, Texture2D> observer = (source, output) =>
             {
                 // Keep the regression bounded even without the reentrancy guard.
-                if (source != terrain || attempted)
+                if (source != _terrain || attempted)
+                {
                     return;
+                }
+
                 attempted = true;
-                originalGuid = AssetDatabase.AssetPathToGUID(outputPath);
+                originalGuid = AssetDatabase.AssetPathToGUID(_outputPath);
                 if (moveOutput)
-                    moveError = AssetDatabase.MoveAsset(outputPath, requestedPath);
-                nestedSucceeded = TerrainGrassAlbedoBaker.TryBake(terrain, 32, requestedPath,
+                {
+                    moveError = AssetDatabase.MoveAsset(_outputPath, requestedPath);
+                }
+
+                nestedSucceeded = TerrainGrassAlbedoBaker.TryBake(_terrain, 32, requestedPath,
                     out nestedTexture, out nestedError);
             };
             TerrainGrassAlbedoBaker.Baked += observer;
@@ -410,7 +438,10 @@ namespace Cone.Grass.Tests
 
             Assert.That(attempted, Is.True);
             if (moveOutput)
+            {
                 Assert.That(moveError, Is.Empty);
+            }
+
             Assert.That(nestedSucceeded, Is.False);
             Assert.That(nestedTexture, Is.Null);
             StringAssert.Contains("already owns this output", nestedError);
@@ -419,7 +450,7 @@ namespace Cone.Grass.Tests
             string actualPath = AssetDatabase.GetAssetPath(first);
             Assert.That(AssetDatabase.AssetPathToGUID(actualPath), Is.EqualTo(originalGuid));
 
-            Assert.That(TerrainGrassAlbedoBaker.TryBake(terrain, 32, actualPath,
+            Assert.That(TerrainGrassAlbedoBaker.TryBake(_terrain, 32, actualPath,
                 out Texture2D later, out string error), Is.True, error);
             Assert.That(later, Is.SameAs(first));
             Assert.That(later.width, Is.EqualTo(32), "Output ownership must be released after notifications finish.");
@@ -432,23 +463,23 @@ namespace Cone.Grass.Tests
             SetLayers(new[] { layer }, new[] { 1f });
             Shader custom = Shader.Find("Universal Render Pipeline/Unlit");
             Assert.That(custom, Is.Not.Null);
-            terrain.materialTemplate = Own(new Material(custom));
-            Assert.That(TerrainGrassAlbedoBaker.TryBake(terrain, 16, outputPath, out _, out string error), Is.False);
+            _terrain.materialTemplate = Own(new Material(custom));
+            Assert.That(TerrainGrassAlbedoBaker.TryBake(_terrain, 16, _outputPath, out _, out string error), Is.False);
             StringAssert.Contains("native", error);
-            Assert.That(TerrainGrassAlbedoBaker.TryBakeTransient(terrain, 16, out Texture2D transient, out error), Is.False);
+            Assert.That(TerrainGrassAlbedoBaker.TryBakeTransient(_terrain, 16, out Texture2D transient, out error), Is.False);
             Assert.That(transient, Is.Null);
             StringAssert.Contains("GrassAlbedo=TerrainLit", error);
-            Assert.That(AssetDatabase.LoadMainAssetAtPath(outputPath), Is.Null);
-            terrain.materialTemplate = Own(new Material(Shader.Find(TerrainGrassAlbedoBaker.NativeTerrainShaderName)));
-            owned.Remove(layer.diffuseTexture);
-            AssetDatabase.CreateAsset(layer.diffuseTexture, outputPath);
-            Assert.That(TerrainGrassAlbedoBaker.TryBake(terrain, 16, outputPath, out _, out error), Is.False);
+            Assert.That(AssetDatabase.LoadMainAssetAtPath(_outputPath), Is.Null);
+            _terrain.materialTemplate = Own(new Material(Shader.Find(TerrainGrassAlbedoBaker.NativeTerrainShaderName)));
+            _owned.Remove(layer.diffuseTexture);
+            AssetDatabase.CreateAsset(layer.diffuseTexture, _outputPath);
+            Assert.That(TerrainGrassAlbedoBaker.TryBake(_terrain, 16, _outputPath, out _, out error), Is.False);
             StringAssert.Contains("source textures", error);
         }
 
         private Texture2D Bake()
         {
-            bool result = TerrainGrassAlbedoBaker.TryBake(terrain, 16, outputPath, out Texture2D texture, out string error);
+            bool result = TerrainGrassAlbedoBaker.TryBake(_terrain, 16, _outputPath, out Texture2D texture, out string error);
             Assert.That(result, Is.True, error);
             return texture;
         }
@@ -468,8 +499,8 @@ namespace Cone.Grass.Tests
                     new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f) },
                 triangles = new[] { 0, 2, 1, 1, 2, 3 }
             });
-            Vector3 origin = terrain.transform.position;
-            Vector3 size = terrain.terrainData.size;
+            Vector3 origin = _terrain.transform.position;
+            Vector3 size = _terrain.terrainData.size;
             Vector3 cameraPosition = origin + new Vector3(size.x * 0.5f, size.y + 1f, size.z * 0.5f);
             Matrix4x4 view = Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) *
                 Matrix4x4.TRS(cameraPosition, Quaternion.LookRotation(Vector3.down, Vector3.forward), Vector3.one).inverse;
@@ -547,15 +578,22 @@ namespace Cone.Grass.Tests
         }
         private void SetLayers(TerrainLayer[] layers, float[] weights)
         {
-            terrain.terrainData.terrainLayers = layers;
+            _terrain.terrainData.terrainLayers = layers;
             float[,,] controls = new float[16, 16, layers.Length];
             for (int y = 0; y < 16; y++)
+            {
                 for (int x = 0; x < 16; x++)
+                {
                     for (int layer = 0; layer < layers.Length; layer++)
+                    {
                         controls[y, x, layer] = weights[layer];
-            terrain.terrainData.SetAlphamaps(0, 0, controls);
+                    }
+                }
+            }
+
+            _terrain.terrainData.SetAlphamaps(0, 0, controls);
         }
-        private T Own<T>(T value) where T : Object { owned.Add(value); return value; }
+        private T Own<T>(T value) where T : Object { _owned.Add(value); return value; }
         private static void AssertColor(Color actual, Color expected, float tolerance)
         {
             Assert.That(actual.r, Is.EqualTo(expected.r).Within(tolerance));

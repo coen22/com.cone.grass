@@ -24,14 +24,14 @@ namespace Cone.Grass.Tests
         private const string BladeShaderPath = "Packages/com.cone.grass/Runtime/Shaders/GrassBladeShader.shader";
         private const float HeadSize = 0.3f;
         private const int Subdivisions = 2;
-        private static readonly string[] HeadPasses = { "GrassHeadForward", "GrassHeadContactDepth", "GrassHeadMotionVectors" };
+        private static readonly string[] s_headPasses = { "GrassHeadForward", "GrassHeadContactDepth", "GrassHeadMotionVectors" };
 
-        private Material blade, head;
-        private GrassVariantProfile profile;
-        private GrassVariantGpuData variants;
-        private Mesh headMesh, bladeMesh;
-        private Texture2D empty, calm, windy;
-        private readonly List<GraphicsBuffer> buffers = new List<GraphicsBuffer>();
+        private Material _blade, _head;
+        private GrassVariantProfile _profile;
+        private GrassVariantGpuData _variants;
+        private Mesh _headMesh, _bladeMesh;
+        private Texture2D _empty, _calm, _windy;
+        private readonly List<GraphicsBuffer> _buffers = new List<GraphicsBuffer>();
 
         [SetUp]
         public void SetUp()
@@ -39,79 +39,89 @@ namespace Cone.Grass.Tests
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !SystemInfo.supportsComputeShaders ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R32G32_SFloat, GraphicsFormatUsage.Render) ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Render))
+            {
                 Assert.Ignore("Head pass tests require a graphics device, structured buffers and RG32F and RGBA8 targets.");
+            }
 
             Shader headShader = AssetDatabase.LoadAssetAtPath<Shader>(HeadShaderPath);
             Shader bladeShader = AssetDatabase.LoadAssetAtPath<Shader>(BladeShaderPath);
             Assert.That(headShader, Is.Not.Null);
             Assert.That(bladeShader, Is.Not.Null);
             Assert.That(headShader.isSupported, Is.True, "The shipped head shader must be supported on the tested graphics API.");
-            blade = new Material(bladeShader) { enableInstancing = true };
-            blade.SetColor("_Color", Color.white);
-            blade.SetColor("_AOColor", Color.white);
-            blade.SetFloat("_GrassHeight", 1f);
-            blade.SetFloat("_GrassWidth", 0.08f);
-            blade.SetFloat("_GrassWidthRandomness", 0f);
-            blade.SetFloat("_GrassHeightRandomness", 0f);
-            blade.SetFloat("_GrassCurving", 0f);
-            blade.SetFloat("_ExpandDistantGrassWidth", 0f);
-            blade.SetFloat("_SubdivisionHeightBoost", 0f);
-            blade.SetFloat("_MinimumPixelWidth", 0f);
-            blade.SetFloat("_WindStrength", 0.5f);
-            blade.SetVector("_WindScroll", Vector4.zero);
-            blade.SetTextureScale("_WindTexture", Vector2.one);
-            blade.SetTextureOffset("_WindTexture", Vector2.zero);
-            blade.SetFloat("_GroundBlendStrength", 0f);
-            blade.SetFloat("_GrassAlphaToCoverage", 0f);
-            head = new Material(headShader) { enableInstancing = true };
-            head.CopyPropertiesFromMaterial(blade);
-            foreach (string name in HeadPasses)
+            _blade = new Material(bladeShader) { enableInstancing = true };
+            _blade.SetColor("_Color", Color.white);
+            _blade.SetColor("_AOColor", Color.white);
+            _blade.SetFloat("_GrassHeight", 1f);
+            _blade.SetFloat("_GrassWidth", 0.08f);
+            _blade.SetFloat("_GrassWidthRandomness", 0f);
+            _blade.SetFloat("_GrassHeightRandomness", 0f);
+            _blade.SetFloat("_GrassCurving", 0f);
+            _blade.SetFloat("_ExpandDistantGrassWidth", 0f);
+            _blade.SetFloat("_SubdivisionHeightBoost", 0f);
+            _blade.SetFloat("_MinimumPixelWidth", 0f);
+            _blade.SetFloat("_WindStrength", 0.5f);
+            _blade.SetVector("_WindScroll", Vector4.zero);
+            _blade.SetTextureScale("_WindTexture", Vector2.one);
+            _blade.SetTextureOffset("_WindTexture", Vector2.zero);
+            _blade.SetFloat("_GroundBlendStrength", 0f);
+            _blade.SetFloat("_GrassAlphaToCoverage", 0f);
+            _head = new Material(headShader) { enableInstancing = true };
+            _head.CopyPropertiesFromMaterial(_blade);
+            foreach (string name in s_headPasses)
             {
-                int pass = head.FindPass(name);
+                int pass = _head.FindPass(name);
                 Assert.That(pass, Is.GreaterThanOrEqualTo(0), name + " exists.");
-                ShaderUtil.CompilePass(head, pass, true);
-                Assert.That(ShaderUtil.IsPassCompiled(head, pass), Is.True, name + " compiles natively.");
+                ShaderUtil.CompilePass(_head, pass, true);
+                Assert.That(ShaderUtil.IsPassCompiled(_head, pass), Is.True, name + " compiles natively.");
             }
-            int bladeMotion = blade.FindPass("GrassMotionVectors");
-            ShaderUtil.CompilePass(blade, bladeMotion, true);
-            Assert.That(ShaderUtil.IsPassCompiled(blade, bladeMotion), Is.True);
+            int bladeMotion = _blade.FindPass("GrassMotionVectors");
+            ShaderUtil.CompilePass(_blade, bladeMotion, true);
+            Assert.That(ShaderUtil.IsPassCompiled(_blade, bladeMotion), Is.True);
 
             // Kind 1 carries a large open puff that faces the sun (straight up here): no buds, seeds or nodding heads.
-            profile = ScriptableObject.CreateInstance<GrassVariantProfile>();
-            profile.budFraction = 0f;
-            profile.seedFraction = 0f;
-            profile.headDrawDistance = 60f;
-            profile.kinds = new List<GrassVariantKind>
+            _profile = ScriptableObject.CreateInstance<GrassVariantProfile>();
+            _profile.BudFraction = 0f;
+            _profile.SeedFraction = 0f;
+            _profile.HeadDrawDistance = 60f;
+            _profile.Kinds = new List<GrassVariantKind>
             {
-                new GrassVariantKind { name = "Blade" },
-                new GrassVariantKind { name = "Puff", head = GrassHeadShape.Puff, headSize = HeadSize, headSizeRandomness = 0f,
-                    sideways = 0f, stemWidth = 0.5f, palette = new[] { Color.white } }
+                new GrassVariantKind { Name = "Blade" },
+                new GrassVariantKind { Name = "Puff", Head = GrassHeadShape.Puff, HeadSize = HeadSize, HeadSizeRandomness = 0f,
+                    Sideways = 0f, StemWidth = 0.5f, Palette = new[] { Color.white } }
             };
-            variants = new GrassVariantGpuData();
-            variants.Update(profile, false);
-            headMesh = InfiniteGrassRenderer.CreateHeadMesh();
-            bladeMesh = InfiniteGrassRenderer.CreateBladeMesh(Subdivisions);
-            empty = Solid(Color.clear);
-            calm = Solid(new Color(0.5f, 0.5f, 0f, 0f));
-            windy = Solid(new Color(0.9f, 0.5f, 0f, 0f));
+            _variants = new GrassVariantGpuData();
+            _variants.Update(_profile, false);
+            _headMesh = InfiniteGrassRenderer.CreateHeadMesh();
+            _bladeMesh = InfiniteGrassRenderer.CreateBladeMesh(Subdivisions);
+            _empty = Solid(Color.clear);
+            _calm = Solid(new Color(0.5f, 0.5f, 0f, 0f));
+            _windy = Solid(new Color(0.9f, 0.5f, 0f, 0f));
         }
 
         [TearDown]
         public void TearDown()
         {
-            foreach (GraphicsBuffer buffer in buffers)
+            foreach (GraphicsBuffer buffer in _buffers)
+            {
                 buffer.Dispose();
-            buffers.Clear();
-            foreach (Object item in new Object[] { blade, head, profile, headMesh, bladeMesh, empty, calm, windy })
-                if (item) Object.DestroyImmediate(item);
+            }
+
+            _buffers.Clear();
+            foreach (Object item in new Object[] { _blade, _head, _profile, _headMesh, _bladeMesh, _empty, _calm, _windy })
+            {
+                if (item)
+                {
+                    Object.DestroyImmediate(item);
+                }
+            }
         }
 
         [Test]
         public void HeadsArePresentInTheContactDepthWithTheForwardSilhouette()
         {
             Vector4[] roots = { Root(0f) };
-            Color[] forward = RenderForward(roots, calm);
-            Vector2[] depth = RenderContactDepth(roots, calm, 100f, Size, out int drawn);
+            Color[] forward = RenderForward(roots, _calm);
+            Vector2[] depth = RenderContactDepth(roots, _calm, 100f, Size, out int drawn);
             float far = SystemInfo.usesReversedZBuffer ? 0f : 1f;
             int covered = 0, present = 0, stray = 0;
             for (int i = 0; i < forward.Length; i++)
@@ -125,7 +135,9 @@ namespace Cone.Grass.Tests
                     Assert.That(depth[i].x, Is.Not.EqualTo(far), "A covered texel records the head's depth.");
                 }
                 else if (inContact)
+                {
                     stray++;
+                }
             }
             Assert.That(drawn, Is.EqualTo(1));
             Assert.That(covered, Is.GreaterThan(60), "The head covers a multi-pixel area in colour.");
@@ -133,29 +145,36 @@ namespace Cone.Grass.Tests
             Assert.That(present, Is.GreaterThanOrEqualTo((int)(covered * 0.95f)), "The head is in the contact depth.");
             Assert.That(stray, Is.LessThanOrEqualTo((int)(covered * 0.05f) + 2), "No contact coverage outside the head.");
 
-            Vector2[] tooFar = RenderContactDepth(roots, calm, 1f, Size, out _);
+            Vector2[] tooFar = RenderContactDepth(roots, _calm, 1f, Size, out _);
             foreach (Vector2 texel in tooFar)
+            {
                 Assert.That(texel.y, Is.Zero, "A head beyond the caster distance is not a contact caster.");
+            }
         }
 
         [Test]
         public void SwayingHeadWritesMotionWithAStaticCamera()
         {
             Vector4[] roots = { Root(0f) };
-            Color[] forward = RenderForward(roots, windy);
-            Vector2[] still = RenderMotion(roots, windy, windy, true, false);
-            Vector2[] swaying = RenderMotion(roots, windy, calm, true, false);
+            Color[] forward = RenderForward(roots, _windy);
+            Vector2[] still = RenderMotion(roots, _windy, _windy, true, false);
+            Vector2[] swaying = RenderMotion(roots, _windy, _calm, true, false);
             int covered = 0, moving = 0;
             float stillMax = 0f, swayMean = 0f;
             for (int i = 0; i < forward.Length; i++)
             {
                 if (forward[i].a <= 0.5f)
+                {
                     continue;
+                }
+
                 covered++;
                 stillMax = Mathf.Max(stillMax, still[i].magnitude);
                 swayMean += swaying[i].magnitude;
                 if (swaying[i].x > 0.002f)
+                {
                     moving++;
+                }
             }
             Assert.That(covered, Is.GreaterThan(60));
             swayMean /= covered;
@@ -201,7 +220,7 @@ namespace Cone.Grass.Tests
                 Draw(target, Color.clear, cmd =>
                 {
                     MaterialPropertyBlock properties = Properties(roots, wind);
-                    cmd.DrawMeshInstancedProcedural(headMesh, 0, head, head.FindPass("GrassHeadForward"), roots.Length, properties);
+                    cmd.DrawMeshInstancedProcedural(_headMesh, 0, _head, _head.FindPass("GrassHeadForward"), roots.Length, properties);
                 }, Size, Size);
                 var readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
                 RenderTexture previous = RenderTexture.active;
@@ -230,7 +249,7 @@ namespace Cone.Grass.Tests
                     MaterialPropertyBlock properties = Properties(roots, wind);
                     properties.SetFloat("_GrassContactCasterDistance", casterDistance);
                     properties.SetMatrix("_GrassContactViewProjection", GpuProjection() * View());
-                    cmd.DrawMeshInstancedProcedural(headMesh, 0, head, head.FindPass("GrassHeadContactDepth"), roots.Length,
+                    cmd.DrawMeshInstancedProcedural(_headMesh, 0, _head, _head.FindPass("GrassHeadContactDepth"), roots.Length,
                         properties);
                 }, size, size);
                 drawn = roots.Length;
@@ -256,11 +275,16 @@ namespace Cone.Grass.Tests
                     MaterialPropertyBlock properties = Properties(roots, wind);
                     BindHistory(properties, roots, previousWind);
                     if (blades)
-                        cmd.DrawMeshInstancedProcedural(bladeMesh, 0, blade, blade.FindPass("GrassMotionVectors"), roots.Length,
+                    {
+                        cmd.DrawMeshInstancedProcedural(_bladeMesh, 0, _blade, _blade.FindPass("GrassMotionVectors"), roots.Length,
                             properties);
+                    }
+
                     if (heads)
-                        cmd.DrawMeshInstancedProcedural(headMesh, 0, head, head.FindPass("GrassHeadMotionVectors"), roots.Length,
+                    {
+                        cmd.DrawMeshInstancedProcedural(_headMesh, 0, _head, _head.FindPass("GrassHeadMotionVectors"), roots.Length,
                             properties);
+                    }
                 }, Size, Size);
                 return ReadRG(target);
             }
@@ -277,7 +301,7 @@ namespace Cone.Grass.Tests
             int tableSize = GrassMotionVectors.HistoryTableSize(roots.Length);
             var keys = new uint[tableSize];
             var previous = new Vector4[roots.Length];
-            int rows = (bladeMesh.vertexCount - 1) / 2;
+            int rows = (_bladeMesh.vertexCount - 1) / 2;
             for (int i = 0; i < roots.Length; i++)
             {
                 Vector4 root = roots[i];
@@ -288,7 +312,10 @@ namespace Cone.Grass.Tests
                 uint seed = Seed(root.x, root.z);
                 uint slot = seed & (uint)(tableSize - 1);
                 while (keys[slot] != 0u)
+                {
                     slot = (slot + 1u) & (uint)(tableSize - 1);
+                }
+
                 keys[slot] = (seed & 0x7f000000u) | (uint)(i + 1);
             }
             GraphicsBuffer keyBuffer = Buffer(tableSize, sizeof(uint));
@@ -299,18 +326,18 @@ namespace Cone.Grass.Tests
             properties.SetInteger("_GrassMotionHashMask", tableSize - 1);
             properties.SetBuffer("_GrassPreviousRootKeys", keyBuffer);
             properties.SetBuffer("_GrassPreviousRoots", rootBuffer);
-            properties.SetTexture("_GrassPreviousSlope", empty);
+            properties.SetTexture("_GrassPreviousSlope", _empty);
             properties.SetTexture("_GrassPreviousWind", previousWind);
-            properties.SetVector("_GrassPreviousDimensions", new Vector4(blade.GetFloat("_GrassWidth"),
-                blade.GetFloat("_GrassHeight"), blade.GetFloat("_GrassWidthRandomness"), blade.GetFloat("_GrassHeightRandomness")));
-            properties.SetVector("_GrassPreviousShaping", new Vector4(blade.GetFloat("_GrassCurving"),
-                blade.GetFloat("_ExpandDistantGrassWidth"), blade.GetFloat("_SubdivisionHeightBoost"),
-                blade.GetFloat("_SubdivisionBumpWidth")));
-            Vector4 widthRange = blade.GetVector("_ExpandDistantGrassRange");
+            properties.SetVector("_GrassPreviousDimensions", new Vector4(_blade.GetFloat("_GrassWidth"),
+                _blade.GetFloat("_GrassHeight"), _blade.GetFloat("_GrassWidthRandomness"), _blade.GetFloat("_GrassHeightRandomness")));
+            properties.SetVector("_GrassPreviousShaping", new Vector4(_blade.GetFloat("_GrassCurving"),
+                _blade.GetFloat("_ExpandDistantGrassWidth"), _blade.GetFloat("_SubdivisionHeightBoost"),
+                _blade.GetFloat("_SubdivisionBumpWidth")));
+            Vector4 widthRange = _blade.GetVector("_ExpandDistantGrassRange");
             properties.SetVector("_GrassPreviousRanges", new Vector4(widthRange.x, widthRange.y,
-                blade.GetFloat("_SubdivisionDistance"), blade.GetFloat("_MinimumPixelWidth")));
+                _blade.GetFloat("_SubdivisionDistance"), _blade.GetFloat("_MinimumPixelWidth")));
             properties.SetVector("_GrassPreviousWindST", new Vector4(1f, 1f, 0f, 0f));
-            properties.SetVector("_GrassPreviousWindMotion", new Vector4(0f, 0f, blade.GetFloat("_WindStrength"), 0f));
+            properties.SetVector("_GrassPreviousWindMotion", new Vector4(0f, 0f, _blade.GetFloat("_WindStrength"), 0f));
             properties.SetVector("_GrassPreviousCameraPosition", Vector4.zero);
             properties.SetVector("_GrassPreviousCameraForward", new Vector4(0f, 0f, 1f, 0f));
             properties.SetVector("_GrassPreviousCameraRight", new Vector4(1f, 0f, 0f, 0f));
@@ -331,10 +358,10 @@ namespace Cone.Grass.Tests
             properties.SetFloat("_DrawDistance", 100f);
             properties.SetFloat("_TextureUpdateThreshold", 1f);
             properties.SetVector("_CenterPos", Vector4.zero);
-            properties.SetTexture("_GrassColorRT", empty);
-            properties.SetTexture("_GrassGroundColorRT", empty);
-            properties.SetTexture("_GrassSlopeRT", empty);
-            properties.SetTexture("_GrassHeightMapRT", empty);
+            properties.SetTexture("_GrassColorRT", _empty);
+            properties.SetTexture("_GrassGroundColorRT", _empty);
+            properties.SetTexture("_GrassSlopeRT", _empty);
+            properties.SetTexture("_GrassHeightMapRT", _empty);
             properties.SetTexture("_GrassDensityRT", Texture2D.whiteTexture);
             properties.SetTexture("_WindTexture", wind);
             properties.SetVector("_GrassSHAr", new Vector4(0f, 0f, 0f, 1f));
@@ -344,7 +371,7 @@ namespace Cone.Grass.Tests
             properties.SetVector("_GrassSHBg", Vector4.zero);
             properties.SetVector("_GrassSHBb", Vector4.zero);
             properties.SetVector("_GrassSHC", Vector4.zero);
-            variants.Apply(properties);
+            _variants.Apply(properties);
             return properties;
         }
 
@@ -363,9 +390,15 @@ namespace Cone.Grass.Tests
             var matrices = new Matrix4x4[matrixNames.Length];
             var vectors = new Vector4[vectorNames.Length];
             for (int i = 0; i < matrixNames.Length; i++)
+            {
                 matrices[i] = Shader.GetGlobalMatrix(matrixNames[i]);
+            }
+
             for (int i = 0; i < vectorNames.Length; i++)
+            {
                 vectors[i] = Shader.GetGlobalVector(vectorNames[i]);
+            }
+
             bool sRGBWrite = GL.sRGBWrite;
             try
             {
@@ -376,16 +409,25 @@ namespace Cone.Grass.Tests
                     Vector4.zero, new Vector4(0f, 0f, 1f, 0f)
                 };
                 for (int i = 0; i < vectorNames.Length; i++)
+                {
                     commands.SetGlobalVector(vectorNames[i], values[i]);
+                }
+
                 commands.SetRenderTarget(target);
                 commands.SetViewport(new Rect(0f, 0f, width, height));
                 commands.ClearRenderTarget(true, true, clear);
                 RenderingUtils.SetViewAndProjectionMatrices(commands, View(), GpuProjection(), false);
                 record(commands);
                 for (int i = 0; i < matrixNames.Length; i++)
+                {
                     commands.SetGlobalMatrix(matrixNames[i], matrices[i]);
+                }
+
                 for (int i = 0; i < vectorNames.Length; i++)
+                {
                     commands.SetGlobalVector(vectorNames[i], vectors[i]);
+                }
+
                 GL.sRGBWrite = false;
                 Graphics.ExecuteCommandBuffer(commands);
             }
@@ -399,11 +441,11 @@ namespace Cone.Grass.Tests
         // GPU-synced wall clock of Draws draws of every root with one head pass, less an empty submission, per draw.
         private double MeasurePass(Vector4[] roots, string pass, int width, int height, int draws, int rounds) =>
             Measure(width, height, draws, rounds, roots, (cmd, properties) =>
-                cmd.DrawMeshInstancedProcedural(headMesh, 0, head, head.FindPass(pass), roots.Length, properties));
+                cmd.DrawMeshInstancedProcedural(_headMesh, 0, _head, _head.FindPass(pass), roots.Length, properties));
 
         private double MeasureBladePass(Vector4[] roots, string pass, int width, int height, int draws, int rounds) =>
             Measure(width, height, draws, rounds, roots, (cmd, properties) =>
-                cmd.DrawMeshInstancedProcedural(bladeMesh, 0, blade, blade.FindPass(pass), roots.Length, properties));
+                cmd.DrawMeshInstancedProcedural(_bladeMesh, 0, _blade, _blade.FindPass(pass), roots.Length, properties));
 
         private double Measure(int width, int height, int draws, int rounds, Vector4[] roots,
             Action<CommandBuffer, MaterialPropertyBlock> draw)
@@ -411,8 +453,8 @@ namespace Cone.Grass.Tests
             RenderTexture target = Target(GraphicsFormat.R32G32_SFloat, width, height, true);
             try
             {
-                MaterialPropertyBlock properties = Properties(roots, calm);
-                BindHistory(properties, roots, calm);
+                MaterialPropertyBlock properties = Properties(roots, _calm);
+                BindHistory(properties, roots, _calm);
                 properties.SetFloat("_GrassContactCasterDistance", 100f);
                 properties.SetMatrix("_GrassContactViewProjection", GpuProjection() * View());
                 double Sample(int count)
@@ -424,13 +466,17 @@ namespace Cone.Grass.Tests
                         Draw(target, Color.clear, cmd =>
                         {
                             for (int i = 0; i < count; i++)
+                            {
                                 draw(cmd, properties);
+                            }
                         }, width, height);
                         AsyncGPUReadback.Request(target, 0, 0, 1, 0, 1, 0, 1).WaitForCompletion();
                         watch.Stop();
                         // The first round warms the pipeline state.
                         if (round > 0)
+                        {
                             samples.Add(watch.Elapsed.TotalMilliseconds);
+                        }
                     }
                     samples.Sort();
                     return samples[samples.Count / 2];
@@ -457,8 +503,10 @@ namespace Cone.Grass.Tests
         {
             var target = new RenderTexture(new RenderTextureDescriptor(width, height)
             {
-                graphicsFormat = format, depthStencilFormat = depth ? GraphicsFormat.D32_SFloat : GraphicsFormat.None,
-                msaaSamples = 1, sRGB = false
+                graphicsFormat = format,
+                depthStencilFormat = depth ? GraphicsFormat.D32_SFloat : GraphicsFormat.None,
+                msaaSamples = 1,
+                sRGB = false
             });
             Assert.That(target.Create(), Is.True);
             return target;
@@ -467,7 +515,7 @@ namespace Cone.Grass.Tests
         private GraphicsBuffer Buffer(int count, int stride)
         {
             var buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, stride);
-            buffers.Add(buffer);
+            _buffers.Add(buffer);
             return buffer;
         }
 

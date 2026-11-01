@@ -14,46 +14,72 @@ namespace Cone.Grass.Tests
     public sealed class GrassColliderInteractorTests : GrassPhysicsFixtureTests
     {
         private const float LiveStrength = 0.85f;
-        private GrassPlacementArea[] previousAreas;
-        private GrassColliderInteractor[] previousInteractors;
-        private bool[] previousInteractorEnabled;
+        private GrassPlacementArea[] _previousAreas;
+        private GrassColliderInteractor[] _previousInteractors;
+        private bool[] _previousInteractorEnabled;
 
         [SetUp]
         public void IsolateLoadedGrassCoverage()
         {
-            previousInteractors = new GrassColliderInteractor[GrassColliderInteractor.ActiveInteractors.Count];
-            previousInteractorEnabled = new bool[previousInteractors.Length];
-            for (int i = 0; i < previousInteractors.Length; i++)
+            _previousInteractors = new GrassColliderInteractor[GrassColliderInteractor.ActiveInteractors.Count];
+            _previousInteractorEnabled = new bool[_previousInteractors.Length];
+            for (int i = 0; i < _previousInteractors.Length; i++)
             {
-                previousInteractors[i] = GrassColliderInteractor.ActiveInteractors[i];
-                previousInteractorEnabled[i] = previousInteractors[i] && previousInteractors[i].enabled;
+                _previousInteractors[i] = GrassColliderInteractor.ActiveInteractors[i];
+                _previousInteractorEnabled[i] = _previousInteractors[i] && _previousInteractors[i].enabled;
             }
-            for (int i = 0; i < previousInteractors.Length; i++)
-                if (previousInteractors[i])
-                    previousInteractors[i].enabled = false;
-            previousAreas = new GrassPlacementArea[GrassPlacementArea.ActiveAreas.Count];
-            for (int i = 0; i < previousAreas.Length; i++)
-                previousAreas[i] = GrassPlacementArea.ActiveAreas[i];
-            for (int i = 0; i < previousAreas.Length; i++)
-                if (previousAreas[i])
-                    previousAreas[i].enabled = false;
+            for (int i = 0; i < _previousInteractors.Length; i++)
+            {
+                if (_previousInteractors[i])
+                {
+                    _previousInteractors[i].enabled = false;
+                }
+            }
+
+            _previousAreas = new GrassPlacementArea[GrassPlacementArea.ActiveAreas.Count];
+            for (int i = 0; i < _previousAreas.Length; i++)
+            {
+                _previousAreas[i] = GrassPlacementArea.ActiveAreas[i];
+            }
+
+            for (int i = 0; i < _previousAreas.Length; i++)
+            {
+                if (_previousAreas[i])
+                {
+                    _previousAreas[i].enabled = false;
+                }
+            }
         }
 
         [TearDown]
         public void RestoreLoadedGrassCoverage()
         {
-            if (previousAreas != null)
-                for (int i = 0; i < previousAreas.Length; i++)
-                    if (previousAreas[i])
-                        previousAreas[i].enabled = true;
-            previousAreas = null;
+            if (_previousAreas != null)
+            {
+                for (int i = 0; i < _previousAreas.Length; i++)
+                {
+                    if (_previousAreas[i])
+                    {
+                        _previousAreas[i].enabled = true;
+                    }
+                }
+            }
+
+            _previousAreas = null;
             // Coverage is restored before producers are re-enabled and resubscribed.
-            if (previousInteractors != null)
-                for (int i = 0; i < previousInteractors.Length; i++)
-                    if (previousInteractors[i])
-                        previousInteractors[i].enabled = previousInteractorEnabled[i];
-            previousInteractors = null;
-            previousInteractorEnabled = null;
+            if (_previousInteractors != null)
+            {
+                for (int i = 0; i < _previousInteractors.Length; i++)
+                {
+                    if (_previousInteractors[i])
+                    {
+                        _previousInteractors[i].enabled = _previousInteractorEnabled[i];
+                    }
+                }
+            }
+
+            _previousInteractors = null;
+            _previousInteractorEnabled = null;
         }
 
         [Test]
@@ -144,7 +170,10 @@ namespace Cone.Grass.Tests
                 Assert.That(initialCount, Is.GreaterThan(0));
                 Assert.That(fixture.Interactor.TryGetDraw(out Mesh mesh, out Material material, out _), Is.True);
                 for (int step = 1; step <= 30; step++)
+                {
                     fixture.Advance(step * 0.1);
+                }
+
                 Assert.That(fixture.Interactor.ActiveNodeCount, Is.EqualTo(initialCount),
                     "A stopped actor refreshes last contact rather than appending overlapping stamps.");
                 Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 3.0, 2f, out _, out float liveWeight), Is.True);
@@ -158,13 +187,18 @@ namespace Cone.Grass.Tests
                 // Keep observing the airborne actor within the producer's continuity window:
                 // a pause here would deliberately clear history instead of measuring recovery.
                 for (int step = 31; step <= 40; step++)
+                {
                     fixture.Advance(step * 0.1);
+                }
+
                 Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 4.0, 2f, out _, out float halfwayWeight), Is.True);
                 Assert.That(halfwayWeight, Is.EqualTo(LiveStrength * 0.5f).Within(0.00001f));
                 uint recoveryRevision = fixture.Interactor.DrawRevision;
 
                 for (int step = 41; step <= 50; step++)
+                {
                     fixture.Advance(step * 0.1);
+                }
 
                 Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
                 Assert.That(fixture.Interactor.TryGetDraw(out _, out _, out _), Is.False);
@@ -229,7 +263,9 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.Field.TryGetNode(Vector2Int.zero, 0.2, 2f, out _, out _), Is.False,
                     "Losing contact must not hide a later horizontal or vertical teleport from the observation clock.");
                 if (lands)
+                {
                     Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.PathReset));
+                }
                 else
                 {
                     Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero,
@@ -264,7 +300,9 @@ namespace Cone.Grass.Tests
                     "The 0.4-second observation gap must clear a trail whose ordinary recovery is still positive.");
                 Assert.That(GrassInteractionField.RecoveryWeight(0.5, 2f), Is.GreaterThan(0f));
                 if (lands)
+                {
                     Assert.That(fixture.Interactor.State, Is.EqualTo(GrassColliderInteractor.InteractionState.PathReset));
+                }
                 else
                 {
                     Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
@@ -486,9 +524,14 @@ namespace Cone.Grass.Tests
                 finally
                 {
                     if (surface)
+                    {
                         Object.DestroyImmediate(surface);
+                    }
+
                     if (mesh)
+                    {
                         Object.DestroyImmediate(mesh);
+                    }
                 }
             }
         }
@@ -566,7 +609,10 @@ namespace Cone.Grass.Tests
                     fixture.Ground.transform.position += Vector3.up * 6f;
                     fixture.Actor.transform.position += Vector3.up * 6f;
                     if (area)
+                    {
                         Invoke(area, "RefreshState");
+                    }
+
                     fixture.Advance(0.4);
                     Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
                     Assert.That(fixture.Interactor.ContactStrength, Is.Zero);
@@ -598,7 +644,9 @@ namespace Cone.Grass.Tests
                 finally
                 {
                     if (surfaceMesh)
+                    {
                         Object.DestroyImmediate(surfaceMesh);
+                    }
                 }
             }
         }
@@ -675,11 +723,17 @@ namespace Cone.Grass.Tests
                     "Render lookup validates retained support without sampling the actor's new pose.");
                 near.Actor.transform.position -= Vector3.right * 0.1f;
                 if (change == "disabled")
+                {
                     near.Ground.enabled = false;
+                }
                 else if (change == "destroyed")
+                {
                     Object.DestroyImmediate(near.Ground.gameObject);
+                }
                 else
+                {
                     near.Ground.transform.position += Vector3.right;
+                }
 
                 ulong emptyVersion = nearCapture.Collect();
 
@@ -777,7 +831,9 @@ namespace Cone.Grass.Tests
                     listener = (area, bounds, change) =>
                     {
                         if (area == areas[0] && (change & GrassPlacementChange.Surface) != 0)
+                        {
                             surfaceEvents++;
+                        }
                     };
                     GrassPlacementArea.SourceChanged += listener;
 
@@ -813,14 +869,29 @@ namespace Cone.Grass.Tests
                 finally
                 {
                     if (listener != null)
+                    {
                         GrassPlacementArea.SourceChanged -= listener;
+                    }
+
                     for (int i = 0; i < 2; i++)
                     {
-                        if (areaObjects[i]) Object.DestroyImmediate(areaObjects[i]);
-                        if (surfaces[i]) Object.DestroyImmediate(surfaces[i]);
+                        if (areaObjects[i])
+                        {
+                            Object.DestroyImmediate(areaObjects[i]);
+                        }
+
+                        if (surfaces[i])
+                        {
+                            Object.DestroyImmediate(surfaces[i]);
+                        }
                     }
                     foreach (Mesh mesh in meshes)
-                        if (mesh) Object.DestroyImmediate(mesh);
+                    {
+                        if (mesh)
+                        {
+                            Object.DestroyImmediate(mesh);
+                        }
+                    }
                 }
             }
         }
@@ -876,7 +947,9 @@ namespace Cone.Grass.Tests
             finally
             {
                 if (destination.IsValid() && destination.isLoaded)
+                {
                     GrassPhysicsFixtureScenes.Close(destination);
+                }
             }
         }
 
@@ -908,7 +981,9 @@ namespace Cone.Grass.Tests
             finally
             {
                 if (preview.IsValid())
+                {
                     EditorSceneManager.ClosePreviewScene(preview);
+                }
             }
         }
 
@@ -1022,42 +1097,52 @@ namespace Cone.Grass.Tests
             public void Dispose()
             {
                 if (Actor)
+                {
                     Object.DestroyImmediate(Actor);
+                }
+
                 if (Ground)
+                {
                     Object.DestroyImmediate(Ground.gameObject);
+                }
+
                 if (Scene.IsValid() && Scene.isLoaded)
+                {
                     GrassPhysicsFixtureScenes.Close(Scene);
+                }
             }
         }
 
         private sealed class CameraCaptureFixture : IDisposable
         {
-            private static readonly Type PassType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
-            private static readonly Type StateType = PassType.GetNestedType("CameraState", BindingFlags.NonPublic);
-            private readonly Camera camera;
-            private readonly Bounds bounds;
+            private static readonly Type s_passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
+            private static readonly Type s_stateType = s_passType.GetNestedType("CameraState", BindingFlags.NonPublic);
+            private readonly Camera _camera;
+            private readonly Bounds _bounds;
             public readonly object State;
             public int DrawCount => ((IList)Get(State, "InteractionDraws")).Count;
 
             public CameraCaptureFixture(Vector3 center)
             {
-                camera = new GameObject("Grass interaction capture window").AddComponent<Camera>();
-                State = Activator.CreateInstance(StateType, new object[] { camera });
-                bounds = new Bounds(center, Vector3.one * 10f);
+                _camera = new GameObject("Grass interaction capture window").AddComponent<Camera>();
+                State = Activator.CreateInstance(s_stateType, new object[] { _camera });
+                _bounds = new Bounds(center, Vector3.one * 10f);
             }
 
             public ulong Collect()
             {
-                PassType.GetMethod("CollectInteractionDraws", BindingFlags.Static | BindingFlags.NonPublic)
-                    .Invoke(null, new[] { State, (object)bounds });
+                s_passType.GetMethod("CollectInteractionDraws", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new[] { State, (object)_bounds });
                 return (ulong)Get(State, "NextInteractionVersion");
             }
 
             public void Dispose()
             {
                 ((IDisposable)State)?.Dispose();
-                if (camera)
-                    Object.DestroyImmediate(camera.gameObject);
+                if (_camera)
+                {
+                    Object.DestroyImmediate(_camera.gameObject);
+                }
             }
         }
 
@@ -1065,8 +1150,13 @@ namespace Cone.Grass.Tests
         {
             int count = 0;
             for (int i = 0; i < GrassColliderInteractor.ActiveInteractors.Count; i++)
+            {
                 if (ReferenceEquals(GrassColliderInteractor.ActiveInteractors[i], component))
+                {
                     count++;
+                }
+            }
+
             return count;
         }
 

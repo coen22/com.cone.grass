@@ -29,7 +29,7 @@ namespace Cone.Grass
         public const uint MoistureSalt = 0x7feb352du;
 
         private const int DistributionSamples = 1 << 18;
-        private static readonly Lazy<Distribution> noiseDistribution = new Lazy<Distribution>(() => new Distribution());
+        private static readonly Lazy<Distribution> s_noiseDistribution = new Lazy<Distribution>(() => new Distribution());
 
         public static uint Hash(uint value)
         {
@@ -94,18 +94,18 @@ namespace Cone.Grass
         public static Vector2 DriftThresholds(float area)
         {
             area = Mathf.Clamp(area, 0.01f, 0.99f);
-            lock (thresholdCache)
+            lock (s_thresholdCache)
             {
-                if (!thresholdCache.TryGetValue(area, out Vector2 thresholds))
+                if (!s_thresholdCache.TryGetValue(area, out Vector2 thresholds))
                 {
-                    thresholds = noiseDistribution.Value.Thresholds(area);
-                    thresholdCache.Add(area, thresholds);
+                    thresholds = s_noiseDistribution.Value.Thresholds(area);
+                    s_thresholdCache.Add(area, thresholds);
                 }
                 return thresholds;
             }
         }
 
-        private static readonly System.Collections.Generic.Dictionary<float, Vector2> thresholdCache =
+        private static readonly System.Collections.Generic.Dictionary<float, Vector2> s_thresholdCache =
             new System.Collections.Generic.Dictionary<float, Vector2>();
 
         /// <summary>The smallest drift area a kind can use: inside a drift its share may not exceed one.</summary>
@@ -137,13 +137,21 @@ namespace Cone.Grass
             driftArea = Mathf.Clamp(kind.DriftArea, 0.01f, 0.99f);
             clusterArea = Mathf.Clamp(kind.ClusterArea, 0.01f, 1f);
             if (amount <= 0f || normalized <= 0f)
+            {
                 return new Vector4(normalized, normalized, 0f, 0f);
+            }
             // Inside a cluster in a drift the kind may hold at most every root: widen the clusters first, then the drifts.
             float needed = MinimumDriftArea(normalized, amount);
             if (driftArea * clusterArea < needed)
+            {
                 clusterArea = Mathf.Min(1f, needed / driftArea);
+            }
+
             if (driftArea * clusterArea < needed)
+            {
                 driftArea = Mathf.Min(0.99f, needed / clusterArea);
+            }
+
             return new Vector4(normalized, normalized * (1f - amount), amount * normalized / (driftArea * clusterArea), 0f);
         }
 
@@ -184,7 +192,10 @@ namespace Cone.Grass
             kindCount = Mathf.Clamp(kindCount, 0, MaximumKinds);
             float profileTotal = 0f;
             for (int k = 0; k < kindCount; k++)
+            {
                 profileTotal += Mathf.Max(kinds[k].Weight, 0f);
+            }
+
             float moisture = Moisture(positionXZ, field);
             float total = 0f;
             for (int k = 0; k < kindCount; k++)
@@ -195,7 +206,10 @@ namespace Cone.Grass
             if (total <= 0f)
             {
                 for (int k = 0; k < kindCount; k++)
+                {
                     shares[k] = k == 0 ? 1f : 0f;
+                }
+
                 return;
             }
             float clumpedWeight = 0f, clumpedShare = 0f;
@@ -211,14 +225,18 @@ namespace Cone.Grass
                     clumpedShare += shares[k];
                 }
                 else
+                {
                     shares[k] = -mix.x * scale;
+                }
             }
             // Unclumped kinds are marked negative above until the drifts' total is known.
             bool fillsAll = clumpedWeight >= 1f - 1e-6f || clumpedShare >= 1f;
             float clumpedScale = fillsAll ? 1f / Mathf.Max(clumpedShare, 1e-6f) : 1f;
             float fillScale = fillsAll ? 0f : (1f - clumpedShare) / Mathf.Max(1f - clumpedWeight, 1e-6f);
             for (int k = 0; k < kindCount; k++)
+            {
                 shares[k] = shares[k] < 0f ? -shares[k] * fillScale : shares[k] * clumpedScale;
+            }
         }
 
         private static float AreaWeight(float[] areaWeights, int kind) =>
@@ -232,11 +250,16 @@ namespace Cone.Grass
             for (int k = 0; k < kindCount; k++)
             {
                 if (shares[k] <= 0f)
+                {
                     continue;
+                }
+
                 last = k;
                 cumulative += shares[k];
                 if (random < cumulative)
+                {
                     return k;
+                }
             }
             // Rounding can leave the sum a hair under one.
             return last;
@@ -261,8 +284,8 @@ namespace Cone.Grass
         // so the mean of a soft threshold is exact over the sample. The seed and cells are fixed, so every run agrees.
         private sealed class Distribution
         {
-            private readonly float[] sorted = new float[DistributionSamples];
-            private readonly double[] prefix = new double[DistributionSamples + 1];
+            private readonly float[] _sorted = new float[DistributionSamples];
+            private readonly double[] _prefix = new double[DistributionSamples + 1];
 
             public Distribution()
             {
@@ -274,22 +297,24 @@ namespace Cone.Grass
                     state = Hash(state + 0x9e3779b9u);
                     float v = (state >> 8) * (1f / 16777216f);
                     // A distinct lattice cell per sample, at a random point inside it.
-                    sorted[i] = Noise(new Vector2((i & 511) + u, (i >> 9) + v), 0x5bd1e995u);
+                    _sorted[i] = Noise(new Vector2((i & 511) + u, (i >> 9) + v), 0x5bd1e995u);
                 }
-                Array.Sort(sorted);
+                Array.Sort(_sorted);
                 for (int i = 0; i < DistributionSamples; i++)
-                    prefix[i + 1] = prefix[i] + sorted[i];
+                {
+                    _prefix[i + 1] = _prefix[i] + _sorted[i];
+                }
             }
 
             private float Quantile(float probability) =>
-                sorted[Mathf.Clamp(Mathf.RoundToInt(probability * (DistributionSamples - 1)), 0, DistributionSamples - 1)];
+                _sorted[Mathf.Clamp(Mathf.RoundToInt(probability * (DistributionSamples - 1)), 0, DistributionSamples - 1)];
 
             // The sample mean of saturate((v - lo) / (hi - lo)).
             private double Mean(float lo, float hi)
             {
                 int below = LowerBound(lo);
                 int above = LowerBound(hi);
-                double inside = (prefix[above] - prefix[below] - (above - below) * (double)lo) / Math.Max(hi - lo, 1e-9);
+                double inside = (_prefix[above] - _prefix[below] - (above - below) * (double)lo) / Math.Max(hi - lo, 1e-9);
                 return (DistributionSamples - above + inside) / DistributionSamples;
             }
 
@@ -299,13 +324,15 @@ namespace Cone.Grass
                 while (count > 0)
                 {
                     int step = count / 2;
-                    if (sorted[first + step] < value)
+                    if (_sorted[first + step] < value)
                     {
                         first += step + 1;
                         count -= step + 1;
                     }
                     else
+                    {
                         count = step;
+                    }
                 }
                 return first;
             }
@@ -321,9 +348,13 @@ namespace Cone.Grass
                 {
                     float shift = 0.5f * (low + high);
                     if (Mean(lo + shift, lo + shift + width) > area)
+                    {
                         low = shift;
+                    }
                     else
+                    {
                         high = shift;
+                    }
                 }
                 float centre = lo + 0.5f * (low + high);
                 return new Vector2(centre, centre + width);

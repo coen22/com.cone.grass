@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass.Samples.Meadow
 {
@@ -9,51 +10,56 @@ namespace Cone.Grass.Samples.Meadow
     [AddComponentMenu("Cone/Grass/Samples/Meadow Camera")]
     public sealed class MeadowCamera : MonoBehaviour
     {
-        [SerializeField] private Transform target;
+        [SerializeField, FormerlySerializedAs("target")] private Transform _target;
         [Tooltip("Height of the orbit pivot above the target's feet.")]
-        [SerializeField] private float pivotHeight = 1.45f;
-        [SerializeField, Min(0.5f)] private float distance = 3.6f;
-        [SerializeField, Range(-30f, 80f)] private float pitch = 18f;
+        [SerializeField, FormerlySerializedAs("pivotHeight")] private readonly float _pivotHeight = 1.45f;
+        [SerializeField, Min(0.5f), FormerlySerializedAs("distance")] private readonly float _distance = 3.6f;
+        [SerializeField, Range(-30f, 80f), FormerlySerializedAs("pitch")] private float _pitch = 18f;
         [Tooltip("Degrees per pixel of mouse movement.")]
-        [SerializeField, Min(0f)] private float sensitivity = 0.15f;
+        [SerializeField, Min(0f), FormerlySerializedAs("sensitivity")] private readonly float _sensitivity = 0.15f;
         [Tooltip("How quickly the camera swings behind the character while the player is not orbiting.")]
-        [SerializeField, Min(0f)] private float followYaw = 1.5f;
+        [SerializeField, Min(0f), FormerlySerializedAs("followYaw")] private readonly float _followYaw = 1.5f;
 
-        private float yaw;
-        private float lastLookTime = float.NegativeInfinity;
+        private float _yaw;
+        private float _lastLookTime = float.NegativeInfinity;
 
         /// <summary>The character the camera follows.</summary>
         public Transform Target
         {
-            get => target;
-            set => target = value;
+            get => _target;
+            set => _target = value;
         }
 
         private void Start()
         {
-            if (target)
-                yaw = target.eulerAngles.y;
+            if (_target)
+            {
+                _yaw = _target.eulerAngles.y;
+            }
         }
 
         private void LateUpdate()
         {
-            if (!target)
+            if (!_target)
+            {
                 return;
+            }
+
             Vector2 look = MeadowInput.Look();
             if (look.sqrMagnitude > 0f)
             {
-                yaw += look.x * sensitivity;
-                pitch = Mathf.Clamp(pitch - look.y * sensitivity, -30f, 80f);
-                lastLookTime = Time.time;
+                _yaw += look.x * _sensitivity;
+                _pitch = Mathf.Clamp(_pitch - look.y * _sensitivity, -30f, 80f);
+                _lastLookTime = Time.time;
             }
-            else if (Time.time - lastLookTime > 2f)
+            else if (Time.time - _lastLookTime > 2f)
             {
-                yaw = Mathf.LerpAngle(yaw, target.eulerAngles.y, 1f - Mathf.Exp(-followYaw * Time.deltaTime));
+                _yaw = Mathf.LerpAngle(_yaw, _target.eulerAngles.y, 1f - Mathf.Exp(-_followYaw * Time.deltaTime));
             }
 
-            Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
-            Vector3 pivot = target.position + Vector3.up * pivotHeight;
-            transform.SetPositionAndRotation(pivot - rotation * Vector3.forward * distance, rotation);
+            Quaternion rotation = Quaternion.Euler(_pitch, _yaw, 0f);
+            Vector3 pivot = _target.position + Vector3.up * _pivotHeight;
+            transform.SetPositionAndRotation(pivot - rotation * Vector3.forward * _distance, rotation);
         }
     }
 }

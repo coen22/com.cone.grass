@@ -19,9 +19,15 @@ namespace Cone.Grass.Editor
             texture = null;
             if (!TryGetInputs(terrain, resolution, out Material source, out TerrainLayer[] layers, out error) ||
                 !TryGetCaptureShader(out Shader shader, out error))
+            {
                 return false;
+            }
+
             if (!TryRenderAlbedo(terrain, resolution, source, layers, shader, "Terrain grass albedo", out texture, out error))
+            {
                 return false;
+            }
+
             texture.hideFlags = HideFlags.DontSave;
             return true;
         }
@@ -54,7 +60,10 @@ namespace Cone.Grass.Editor
             texture = null;
             if (!TryRenderAlbedo(terrain, resolution, source, layers, shader,
                 existing ? existing.name : Path.GetFileNameWithoutExtension(assetPath), out Texture2D staging, out error))
+            {
                 return false;
+            }
+
             try
             {
                 if (existing)
@@ -67,7 +76,7 @@ namespace Cone.Grass.Editor
                 else
                 {
                     // Saving can reenter authoring callbacks; keep the existing output guard.
-                    activeBakes[assetPath] = staging;
+                    s_activeBakes[assetPath] = staging;
                     AssetDatabase.CreateAsset(staging, assetPath);
                     texture = staging;
                     staging = null;
@@ -80,7 +89,13 @@ namespace Cone.Grass.Editor
                 texture = null;
                 return false;
             }
-            finally { if (staging) Object.DestroyImmediate(staging); }
+            finally
+            {
+                if (staging)
+                {
+                    Object.DestroyImmediate(staging);
+                }
+            }
 
             return CompleteSavedBake(terrain, ref texture, out error);
         }
@@ -124,9 +139,16 @@ namespace Cone.Grass.Editor
         private static Material CaptureMaterial(Material source, TerrainLayer[] layers, Shader shader)
         {
             var material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-            if (source.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT")) material.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
+            if (source.IsKeywordEnabled("_TERRAIN_BLEND_HEIGHT"))
+            {
+                material.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
+            }
+
             foreach (TerrainLayer layer in layers)
+            {
                 if (layer.maskMapTexture) { material.EnableKeyword("_MASKMAP"); break; }
+            }
+
             return material;
         }
 
@@ -145,7 +167,10 @@ namespace Cone.Grass.Editor
                 material = CaptureMaterial(source, layers, shader);
                 ShaderUtil.CompilePass(material, 0, true);
                 if (ShaderUtil.ShaderHasError(shader))
+                {
                     throw new InvalidOperationException("The TerrainLit albedo bake shader failed to compile.");
+                }
+
                 capture = RenderTexture.GetTemporary(resolution, resolution, 0,
                     RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
                 capture.filterMode = FilterMode.Bilinear;
@@ -155,13 +180,16 @@ namespace Cone.Grass.Editor
                 commands.SetViewport(new Rect(0, 0, resolution, resolution));
                 commands.ClearRenderTarget(false, true, Color.clear);
                 for (int group = 0; group < (layers.Length + 3) / 4; group++)
+                {
                     commands.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3, 1,
                         BuildGroupProperties(terrain.terrainData, source, layers, group));
+                }
+
                 GL.sRGBWrite = false;
                 Graphics.ExecuteCommandBuffer(commands);
                 RenderTexture.active = capture;
                 texture = new Texture2D(resolution, resolution, TextureFormat.RGBAHalf, true, true)
-                    { name = name, filterMode = FilterMode.Trilinear, wrapMode = TextureWrapMode.Clamp, anisoLevel = 1 };
+                { name = name, filterMode = FilterMode.Trilinear, wrapMode = TextureWrapMode.Clamp, anisoLevel = 1 };
                 texture.ReadPixels(new Rect(0, 0, resolution, resolution), 0, 0, false);
                 texture.Apply(true, false);
                 complete = true;
@@ -178,8 +206,16 @@ namespace Cone.Grass.Editor
                 RenderTexture.active = previousActive;
                 GL.sRGBWrite = previousSRGBWrite;
                 commands?.Release();
-                if (capture) RenderTexture.ReleaseTemporary(capture);
-                if (material) Object.DestroyImmediate(material);
+                if (capture)
+                {
+                    RenderTexture.ReleaseTemporary(capture);
+                }
+
+                if (material)
+                {
+                    Object.DestroyImmediate(material);
+                }
+
                 if (!complete && texture) { Object.DestroyImmediate(texture); texture = null; }
             }
         }

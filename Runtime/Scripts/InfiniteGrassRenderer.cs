@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 namespace Cone.Grass
 {
@@ -21,153 +22,197 @@ namespace Cone.Grass
         /// <summary>The one enabled renderer in a loaded scene that owns the grass settings, or null.</summary>
         public static InfiniteGrassRenderer Instance { get; private set; }
 
+        [Header("Rendering"), SerializeField, FormerlySerializedAs("grassMaterial")]
+        private Material _grassMaterial;
+
         /// <summary>The blade material, for example the package's Grass Blade material.</summary>
-        [Header("Rendering")]
-        public Material grassMaterial;
+        public Material GrassMaterial { get => _grassMaterial; set => _grassMaterial = value; }
+        [Tooltip("Authored Areas requires explicit Grass Placement Area components. Legacy mode uses the feature's height layer."), SerializeField, FormerlySerializedAs("placementMode")]
+        private GrassPlacementMode _placementMode = GrassPlacementMode.AuthoredAreas;
         /// <summary>
         /// Authored Areas requires explicit Grass Placement Area components. Legacy mode uses the feature's height
         /// layer.
         /// </summary>
-        [Tooltip("Authored Areas requires explicit Grass Placement Area components. Legacy mode uses the feature's height layer.")]
-        public GrassPlacementMode placementMode = GrassPlacementMode.AuthoredAreas;
+        public GrassPlacementMode PlacementMode { get => _placementMode; set => _placementMode = value; }
+        [SerializeField, FormerlySerializedAs("renderInSceneView")] private bool _renderInSceneView = true;
         /// <summary>Whether scene-view cameras draw the grass too.</summary>
-        public bool renderInSceneView = true;
+        public bool RenderInSceneView { get => _renderInSceneView; set => _renderInSceneView = value; }
+        [Tooltip("Off draws no grass and keeps only the interaction capture, so effects that read the interaction field "
+    + "(com.cone.render-features' ground fog) still see contacts where nothing grows, such as a dungeon floor."), SerializeField, FormerlySerializedAs("drawBlades")]
+        private bool _drawBlades = true;
         /// <summary>
         /// Off draws no grass and keeps only the interaction capture, so effects that read the interaction field still
         /// see contacts where nothing grows.
         /// </summary>
-        [Tooltip("Off draws no grass and keeps only the interaction capture, so effects that read the interaction field "
-            + "(com.cone.render-features' ground fog) still see contacts where nothing grows, such as a dungeon floor.")]
-        public bool drawBlades = true;
+        public bool DrawBlades { get => _drawBlades; set => _drawBlades = value; }
+
+        [Header("Population")]
+        [Min(0.01f), SerializeField, FormerlySerializedAs("spacing")] private float _spacing = 0.1f;
 
         /// <summary>World-grid spacing between blade roots, in metres.</summary>
-        [Header("Population")]
-        [Min(0.01f)] public float spacing = 0.1f;
+        public float Spacing { get => _spacing; set => _spacing = value; }
+        [Min(1f), SerializeField, FormerlySerializedAs("drawDistance")] private float _drawDistance = 300f;
         /// <summary>Camera distance up to which grass is drawn, in metres.</summary>
-        [Min(1f)] public float drawDistance = 300f;
+        public float DrawDistance { get => _drawDistance; set => _drawDistance = value; }
+        [Min(0f), SerializeField, FormerlySerializedAs("fullDensityDistance")] private float _fullDensityDistance = 30f;
         /// <summary>Camera distance up to which the population keeps its full density, in metres.</summary>
-        [Min(0f)] public float fullDensityDistance = 30f;
+        public float FullDensityDistance { get => _fullDensityDistance; set => _fullDensityDistance = value; }
+        [Min(0.1f), SerializeField, FormerlySerializedAs("densityFalloffExponent")] private float _densityFalloffExponent = 4f;
         /// <summary>Exponent of the density falloff between the full-density distance and the draw distance.</summary>
-        [Min(0.1f)] public float densityFalloffExponent = 4f;
+        public float DensityFalloffExponent { get => _densityFalloffExponent; set => _densityFalloffExponent = value; }
+        [Range(0f, 0.25f), SerializeField, FormerlySerializedAs("densityTransition")] private float _densityTransition = 0.05f;
         /// <summary>Width of the band of random thresholds over which thinned blades fade instead of popping.</summary>
-        [Range(0f, 0.25f)] public float densityTransition = 0.05f;
+        public float DensityTransition { get => _densityTransition; set => _densityTransition = value; }
+        [Tooltip("Authored areas keep every blade where their density is above zero and shorten it in proportion, "
+    + "instead of thinning the population. A painted falloff then tapers an edge to stubble."), SerializeField, FormerlySerializedAs("densityShortensBlades")]
+        private bool _densityShortensBlades;
         /// <summary>
         /// Authored areas keep every blade where their density is above zero and shorten it in proportion, instead of
         /// thinning the population.
         /// </summary>
-        [Tooltip("Authored areas keep every blade where their density is above zero and shorten it in proportion, "
-            + "instead of thinning the population. A painted falloff then tapers an edge to stubble.")]
-        public bool densityShortensBlades;
+        public bool DensityShortensBlades { get => _densityShortensBlades; set => _densityShortensBlades = value; }
+
+        [Header("Plant Kinds")]
+        [Tooltip("Several kinds of blade, herb and flower, mixed by weight and gathered into drifts. Empty grows the material's one blade."), SerializeField, FormerlySerializedAs("variants")]
+        private GrassVariantProfile _variants;
 
         /// <summary>
         /// Several kinds of blade, herb and flower, mixed by weight and gathered into drifts. Empty grows the
         /// material's one blade.
         /// </summary>
-        [Header("Plant Kinds")]
-        [Tooltip("Several kinds of blade, herb and flower, mixed by weight and gathered into drifts. Empty grows the material's one blade.")]
-        public GrassVariantProfile variants;
+        public GrassVariantProfile Variants { get => _variants; set => _variants = value; }
+        [Tooltip("Capacity of each flower-head queue, in millions. Heads beyond it are dropped and counted as overflow.")]
+        [Range(0.001f, 4f), SerializeField, FormerlySerializedAs("maxHeadCount")] private float _maxHeadCount = 0.25f;
         /// <summary>
         /// Capacity of each flower-head queue, in millions. Heads beyond it are dropped and counted as overflow.
         /// </summary>
-        [Tooltip("Capacity of each flower-head queue, in millions. Heads beyond it are dropped and counted as overflow.")]
-        [Range(0.001f, 4f)] public float maxHeadCount = 0.25f;
+        public float MaxHeadCount { get => _maxHeadCount; set => _maxHeadCount = value; }
+
+        [Header("Geometry LOD")]
+        [Range(0, 8), SerializeField, FormerlySerializedAs("grassMeshSubdivision")] private int _grassMeshSubdivision = 5;
 
         /// <summary>Subdivisions of the near LOD blade mesh, 0 to 8; the middle LOD uses at most two.</summary>
-        [Header("Geometry LOD")]
-        [Range(0, 8)] public int grassMeshSubdivision = 5;
+        public int GrassMeshSubdivision { get => _grassMeshSubdivision; set => _grassMeshSubdivision = value; }
+        [Min(0.01f), SerializeField, FormerlySerializedAs("nearLodDistance")] private float _nearLodDistance = 30f;
         /// <summary>Camera distance at which blades change from the near to the middle LOD, in metres.</summary>
-        [Min(0.01f)] public float nearLodDistance = 30f;
+        public float NearLodDistance { get => _nearLodDistance; set => _nearLodDistance = value; }
+        [Tooltip("Start of the far, single-triangle LOD."), SerializeField, FormerlySerializedAs("subdivisionDistance")]
+        private float _subdivisionDistance = 100f;
         /// <summary>Start of the far, single-triangle LOD, in metres.</summary>
-        [Tooltip("Start of the far, single-triangle LOD.")]
-        public float subdivisionDistance = 100f;
+        public float SubdivisionDistance { get => _subdivisionDistance; set => _subdivisionDistance = value; }
+        [Min(0f), SerializeField, FormerlySerializedAs("lodTransitionWidth")] private float _lodTransitionWidth = 10f;
         /// <summary>Distance over which blades dither between neighbouring LODs, in metres.</summary>
-        [Min(0f)] public float lodTransitionWidth = 10f;
-        /// <summary>Relative blade height added around <see cref="subdivisionDistance"/>, from -0.95 to 10.</summary>
-        public float subdivisionHeightBoost;
+        public float LodTransitionWidth { get => _lodTransitionWidth; set => _lodTransitionWidth = value; }
+        [SerializeField, FormerlySerializedAs("subdivisionHeightBoost")] private float _subdivisionHeightBoost;
+        /// <summary>Relative blade height added around <see cref="SubdivisionDistance"/>, from -0.95 to 10.</summary>
+        public float SubdivisionHeightBoost { get => _subdivisionHeightBoost; set => _subdivisionHeightBoost = value; }
+        [Min(0.01f), SerializeField, FormerlySerializedAs("subdivisionBumpWidth")] private float _subdivisionBumpWidth = 20f;
         /// <summary>
-        /// Distance either side of <see cref="subdivisionDistance"/> over which the height boost fades, in metres.
+        /// Distance either side of <see cref="SubdivisionDistance"/> over which the height boost fades, in metres.
         /// </summary>
-        [Min(0.01f)] public float subdivisionBumpWidth = 20f;
+        public float SubdivisionBumpWidth { get => _subdivisionBumpWidth; set => _subdivisionBumpWidth = value; }
+        [Tooltip("Conservative world-space radius around a root for frustum culling. Increase for tall/wide, strongly bent grass.")]
+        [Min(0.1f), SerializeField, FormerlySerializedAs("cullingPadding")] private float _cullingPadding = 2f;
         /// <summary>
         /// Conservative world-space radius around a root for frustum culling. Increase for tall, wide or strongly bent
         /// grass.
         /// </summary>
-        [Tooltip("Conservative world-space radius around a root for frustum culling. Increase for tall/wide, strongly bent grass.")]
-        [Min(0.1f)] public float cullingPadding = 2f;
+        public float CullingPadding { get => _cullingPadding; set => _cullingPadding = value; }
+
+        [Header("Data Capture")]
+        [Tooltip("Power-of-two capture resolution. Higher values improve small boundaries at greater memory and capture cost."), SerializeField, FormerlySerializedAs("captureResolution")]
+        private int _captureResolution = 1024;
 
         /// <summary>
         /// Power-of-two capture resolution, 128 to 2048. Higher values improve small boundaries at greater memory and
         /// capture cost.
         /// </summary>
-        [Header("Data Capture")]
-        [Tooltip("Power-of-two capture resolution. Higher values improve small boundaries at greater memory and capture cost.")]
-        public int captureResolution = 1024;
+        public int CaptureResolution { get => _captureResolution; set => _captureResolution = value; }
+        [Min(0.1f), SerializeField, FormerlySerializedAs("textureUpdateThreshold")] private float _textureUpdateThreshold = 10f;
         /// <summary>
         /// The capture window snaps to this world grid, in metres, and extends this far beyond the draw distance.
         /// </summary>
-        [Min(0.1f)] public float textureUpdateThreshold = 10f;
+        public float TextureUpdateThreshold { get => _textureUpdateThreshold; set => _textureUpdateThreshold = value; }
+        [Tooltip("Stable world-space minimum/maximum Y used by the top-down mesh capture."), SerializeField, FormerlySerializedAs("captureHeightRange")]
+        private Vector2 _captureHeightRange = new Vector2(-100f, 1000f);
         /// <summary>Stable world-space minimum and maximum Y used by the top-down mesh capture.</summary>
-        [Tooltip("Stable world-space minimum/maximum Y used by the top-down mesh capture.")]
-        public Vector2 captureHeightRange = new Vector2(-100f, 1000f);
+        public Vector2 CaptureHeightRange { get => _captureHeightRange; set => _captureHeightRange = value; }
+        [SerializeField, FormerlySerializedAs("cacheSurfaceData")] private bool _cacheSurfaceData = true;
         /// <summary>
         /// Keeps the captured surface height between frames until the capture window, the scene inventory or a source
         /// changes.
         /// </summary>
-        public bool cacheSurfaceData = true;
+        public bool CacheSurfaceData { get => _cacheSurfaceData; set => _cacheSurfaceData = value; }
+        [Tooltip("Keep enabled for moving mask/color/slope modifiers. Static scenes can disable it and call RefreshGrassData after edits."), SerializeField, FormerlySerializedAs("updateModifiersEveryFrame")]
+        private bool _updateModifiersEveryFrame = true;
         /// <summary>
         /// Recaptures mask, colour and interaction modifiers every frame. Static scenes can disable it and call
         /// <see cref="RefreshGrassData"/> after edits.
         /// </summary>
-        [Tooltip("Keep enabled for moving mask/color/slope modifiers. Static scenes can disable it and call RefreshGrassData after edits.")]
-        public bool updateModifiersEveryFrame = true;
+        public bool UpdateModifiersEveryFrame { get => _updateModifiersEveryFrame; set => _updateModifiersEveryFrame = value; }
+
+        [Header("GPU Capacity")]
+        [Tooltip("Total capacity across all three LOD queues, in millions. Overflow is dropped safely and exposed in diagnostics.")]
+        [Range(0.01f, 16f), SerializeField, FormerlySerializedAs("maxBufferCount")] private float _maxBufferCount = 2f;
 
         /// <summary>
         /// Total capacity across all three LOD queues, in millions. Overflow is dropped safely and exposed in
         /// diagnostics.
         /// </summary>
-        [Header("GPU Capacity")]
-        [Tooltip("Total capacity across all three LOD queues, in millions. Overflow is dropped safely and exposed in diagnostics.")]
-        [Range(0.01f, 16f)] public float maxBufferCount = 2f;
+        public float MaxBufferCount { get => _maxBufferCount; set => _maxBufferCount = value; }
+        [SerializeField, FormerlySerializedAs("lodCapacityWeights")] private Vector3 _lodCapacityWeights = new Vector3(0.35f, 0.45f, 0.2f);
         /// <summary>Relative shares of <see cref="Capacity"/> given to the near, middle and far LOD queues.</summary>
-        public Vector3 lodCapacityWeights = new Vector3(0.35f, 0.45f, 0.2f);
+        public Vector3 LodCapacityWeights { get => _lodCapacityWeights; set => _lodCapacityWeights = value; }
+
+        [Header("Ground Blending")]
+        [Range(0f, 1f), SerializeField, FormerlySerializedAs("groundBlendStrength")] private float _groundBlendStrength = 0.8f;
 
         /// <summary>How strongly the blade root blends toward the authored ground albedo.</summary>
-        [Header("Ground Blending")]
-        [Range(0f, 1f)] public float groundBlendStrength = 0.8f;
-        /// <summary>Fraction of the blade height that blends toward the authored ground albedo.</summary>
+        public float GroundBlendStrength { get => _groundBlendStrength; set => _groundBlendStrength = value; }
         [Tooltip("Fraction of the blade height that blends toward the authored ground albedo.")]
-        [Range(0.001f, 1f)] public float groundBlendHeight = 0.25f;
+        [Range(0.001f, 1f), SerializeField, FormerlySerializedAs("groundBlendHeight")] private float _groundBlendHeight = 0.25f;
+        /// <summary>Fraction of the blade height that blends toward the authored ground albedo.</summary>
+        public float GroundBlendHeight { get => _groundBlendHeight; set => _groundBlendHeight = value; }
+
+        [Header("Aliasing")]
+        [Tooltip("Uses alpha-to-coverage only when the camera's actual color target is multisampled."), SerializeField, FormerlySerializedAs("alphaToCoverage")]
+        private bool _alphaToCoverage = true;
 
         /// <summary>Uses alpha-to-coverage only when the camera's actual colour target is multisampled.</summary>
-        [Header("Aliasing")]
-        [Tooltip("Uses alpha-to-coverage only when the camera's actual color target is multisampled.")]
-        public bool alphaToCoverage = true;
+        public bool AlphaToCoverage { get => _alphaToCoverage; set => _alphaToCoverage = value; }
+        [Range(0f, 3f), SerializeField, FormerlySerializedAs("minimumPixelWidth")] private float _minimumPixelWidth = 1f;
         /// <summary>Distant blades widen to at least this many pixels, 0 to 3.</summary>
-        [Range(0f, 3f)] public float minimumPixelWidth = 1f;
+        public float MinimumPixelWidth { get => _minimumPixelWidth; set => _minimumPixelWidth = value; }
+        [SerializeField, FormerlySerializedAs("specularFadeRange")] private Vector2 _specularFadeRange = new Vector2(30f, 100f);
         /// <summary>Camera distances, in metres, over which the blades' specular highlight fades out.</summary>
-        public Vector2 specularFadeRange = new Vector2(30f, 100f);
+        public Vector2 SpecularFadeRange { get => _specularFadeRange; set => _specularFadeRange = value; }
+        [SerializeField, FormerlySerializedAs("motionVectors")] private GrassMotionVectors.Settings _motionVectors = new GrassMotionVectors.Settings();
         /// <summary>
         /// Optional grass motion vectors for temporal anti-aliasing, motion blur and custom consumers.
         /// </summary>
-        public GrassMotionVectors.Settings motionVectors = new GrassMotionVectors.Settings();
+        public GrassMotionVectors.Settings MotionVectors { get => _motionVectors; set => _motionVectors = value; }
+
+        [Header("Optional Contact Shadows"), SerializeField, FormerlySerializedAs("contactShadows")]
+        private GrassContactShadows.Settings _contactShadows = new GrassContactShadows.Settings();
 
         /// <summary>Optional screen-space contact shadows involving the grass.</summary>
-        [Header("Optional Contact Shadows")]
-        public GrassContactShadows.Settings contactShadows = new GrassContactShadows.Settings();
+        public GrassContactShadows.Settings ContactShadows { get => _contactShadows; set => _contactShadows = value; }
+
+        [Header("Diagnostics")]
+        [Tooltip("Periodically reads counts asynchronously. Counts may lag behind the rendered frame."), SerializeField, FormerlySerializedAs("previewVisibleGrassCount")]
+        private bool _previewVisibleGrassCount;
 
         /// <summary>
         /// Periodically reads counts asynchronously and shows them on screen. Counts may lag behind the rendered frame.
         /// </summary>
-        [Header("Diagnostics")]
-        [Tooltip("Periodically reads counts asynchronously. Counts may lag behind the rendered frame.")]
-        public bool previewVisibleGrassCount;
+        public bool PreviewVisibleGrassCount { get => _previewVisibleGrassCount; set => _previewVisibleGrassCount = value; }
 
         /// <summary>The world bounds the feature last generated grass in for a camera; not serialized.</summary>
-        [NonSerialized] public Bounds cameraBounds;
-        /// <summary>Blades drawn, as last read back while <see cref="previewVisibleGrassCount"/> is on.</summary>
+        public Bounds CameraBounds { get; set; }
+        /// <summary>Blades drawn, as last read back while <see cref="PreviewVisibleGrassCount"/> is on.</summary>
         public uint VisibleGrassCount { get; internal set; }
         /// <summary>
-        /// Blades dropped over capacity, as last read back while <see cref="previewVisibleGrassCount"/> is on.
+        /// Blades dropped over capacity, as last read back while <see cref="PreviewVisibleGrassCount"/> is on.
         /// </summary>
         public uint OverflowGrassCount { get; internal set; }
         /// <summary>
@@ -176,21 +221,27 @@ namespace Cone.Grass
         public uint Revision { get; private set; }
         /// <summary>Advances on <see cref="RefreshGrassInteraction"/>.</summary>
         public uint InteractionRevision { get; private set; }
-        /// <summary>Total blade capacity across the three LOD queues, from <see cref="maxBufferCount"/>.</summary>
-        public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
+        /// <summary>Total blade capacity across the three LOD queues, from <see cref="MaxBufferCount"/>.</summary>
+        public int Capacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(_maxBufferCount, 2f), 0f, 16f) * 1000000f), 3, 16000000);
         /// <summary>Roots each head queue can hold: quad-cross heads, and the profile's mesh heads.</summary>
-        public int HeadCapacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(maxHeadCount, 0.25f), 0f, 4f) * 1000000f), 1, 4000000);
+        public int HeadCapacity => Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp(Finite(_maxHeadCount, 0.25f), 0f, 4f) * 1000000f), 1, 4000000);
 
         /// <summary>The capacity of head queue 0 (quad-cross) or 1 (mesh) this owner needs: zero when no kind grows that head.</summary>
         /// <param name="queue">0 for the quad-cross queue, 1 for the mesh queue.</param>
         public int HeadQueueCapacity(int queue)
         {
-            if (!variants || variants.KindCount < 1)
+            if (!_variants || _variants.KindCount < 1)
+            {
                 return 0;
+            }
+
             bool mesh = queue == 1;
-            if (mesh && !variants.headMesh)
+            if (mesh && !_variants.HeadMesh)
+            {
                 return 0;
-            return variants.HasHeads(mesh ? GrassHeadShape.Mesh : GrassHeadShape.Daisy) ? HeadCapacity : 0;
+            }
+
+            return _variants.HasHeads(mesh ? GrassHeadShape.Mesh : GrassHeadShape.Daisy) ? HeadCapacity : 0;
         }
         /// <summary>
         /// Whether this is the enabled <see cref="Instance"/> in a loaded scene that is not a preview scene.
@@ -198,15 +249,18 @@ namespace Cone.Grass
         public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
         /// <summary>
-        /// Whether a camera draws this grass: a game view, or the scene view when <see cref="renderInSceneView"/> is on, that
+        /// Whether a camera draws this grass: a game view, or the scene view when <see cref="RenderInSceneView"/> is on, that
         /// sees the layer this owner is on. A utility camera that culls everything, such as a depth or ground capture that
         /// submits its own renders through the pipeline, then costs the grass no capture or generation pass.
         /// </summary>
         public bool DrawsFor(Camera camera)
         {
             if (camera == null || camera.stereoEnabled || (camera.cullingMask & (1 << gameObject.layer)) == 0)
+            {
                 return false;
-            return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && renderInSceneView);
+            }
+
+            return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && _renderInSceneView);
         }
 
         /// <summary>
@@ -219,15 +273,18 @@ namespace Cone.Grass
         public bool AdmitCamera(Camera camera)
         {
             if (DrawsFor(camera))
+            {
                 return true;
+            }
+
             GrassInteractionPublisher.Withdraw();
             return false;
         }
 
-        private Mesh[] meshes;
-        private Mesh headMesh;
-        private int cachedSubdivision = -1;
-        private GUIStyle diagnosticStyle;
+        private Mesh[] _meshes;
+        private Mesh _headMesh;
+        private int _cachedSubdivision = -1;
+        private GUIStyle _diagnosticStyle;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStatics()
@@ -240,7 +297,9 @@ namespace Cone.Grass
             // Scene objects receive OnEnable before an additive scene reports
             // isLoaded. Register now; rendering starts after scene activation.
             if (!IsSceneInstance(false))
+            {
                 return;
+            }
             // Moving the current owner into a preview scene need not invoke
             // OnDisable. A replacement can enable before that owner's next Update.
             if (Instance && Instance != this && !Instance.IsSceneInstance(false))
@@ -269,14 +328,20 @@ namespace Cone.Grass
         private void OnDisable()
         {
             if (Instance == this)
+            {
                 Instance = null;
+            }
+
             ReleaseMeshes();
         }
 
         private void OnDestroy()
         {
             if (Instance == this)
+            {
                 Instance = null;
+            }
+
             ReleaseMeshes();
         }
 
@@ -301,10 +366,14 @@ namespace Cone.Grass
         private bool IsSceneInstance(bool requireLoaded = true)
         {
             if (!gameObject.scene.IsValid() || (requireLoaded && !gameObject.scene.isLoaded))
+            {
                 return false;
+            }
 #if UNITY_EDITOR
             if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
+            {
                 return false;
+            }
 #endif
             return true;
         }
@@ -317,14 +386,17 @@ namespace Cone.Grass
         /// </summary>
         public float CanopyAreaIndex()
         {
-            if (!grassMaterial || !grassMaterial.HasProperty("_GrassWidth") || !grassMaterial.HasProperty("_GrassHeight"))
+            if (!_grassMaterial || !_grassMaterial.HasProperty("_GrassWidth") || !_grassMaterial.HasProperty("_GrassHeight"))
+            {
                 return 0f;
-            float width = 0.5f * Mathf.Max(grassMaterial.GetFloat("_GrassWidth"), 0f) *
-                (1f - 0.5f * Mathf.Clamp01(grassMaterial.GetFloat("_GrassWidthRandomness")));
-            float height = Mathf.Max(grassMaterial.GetFloat("_GrassHeight"), 0f) *
-                (1f - 0.5f * Mathf.Clamp01(grassMaterial.GetFloat("_GrassHeightRandomness")));
-            float cell = Mathf.Max(spacing, 0.001f);
-            float mix = variants && variants.KindCount > 0 ? variants.MeanBladeAreaScale() : 1f;
+            }
+
+            float width = 0.5f * Mathf.Max(_grassMaterial.GetFloat("_GrassWidth"), 0f) *
+                (1f - 0.5f * Mathf.Clamp01(_grassMaterial.GetFloat("_GrassWidthRandomness")));
+            float height = Mathf.Max(_grassMaterial.GetFloat("_GrassHeight"), 0f) *
+                (1f - 0.5f * Mathf.Clamp01(_grassMaterial.GetFloat("_GrassHeightRandomness")));
+            float cell = Mathf.Max(_spacing, 0.001f);
+            float mix = _variants && _variants.KindCount > 0 ? _variants.MeanBladeAreaScale() : 1f;
             return 0.5f * width * height * mix / (cell * cell);
         }
 
@@ -350,7 +422,7 @@ namespace Cone.Grass
         }
 
         /// <summary>
-        /// Splits <see cref="Capacity"/> into the three LOD queues by <see cref="lodCapacityWeights"/>; entry 3 of each
+        /// Splits <see cref="Capacity"/> into the three LOD queues by <see cref="LodCapacityWeights"/>; entry 3 of each
         /// array is set to zero.
         /// </summary>
         /// <param name="capacities">Receives each LOD queue's capacity; at least four entries.</param>
@@ -359,14 +431,16 @@ namespace Cone.Grass
         public void GetLodCapacity(int[] capacities, int[] offsets)
         {
             if (capacities == null || capacities.Length < 4 || offsets == null || offsets.Length < 4)
+            {
                 throw new ArgumentException("LOD capacity and offset arrays must contain at least four entries.");
+            }
 
             // Public fields can change after OnValidate/OnEnable. Float arithmetic
             // can overflow even when every supplied weight is finite. Widen before
             // adding or multiplying, then convert only the bounded final shares.
-            double near = Math.Max(0.01f, Finite(lodCapacityWeights.x, 0.35f));
-            double middle = Math.Max(0.01f, Finite(lodCapacityWeights.y, 0.45f));
-            double far = Math.Max(0.01f, Finite(lodCapacityWeights.z, 0.2f));
+            double near = Math.Max(0.01f, Finite(_lodCapacityWeights.x, 0.35f));
+            double middle = Math.Max(0.01f, Finite(_lodCapacityWeights.y, 0.45f));
+            double far = Math.Max(0.01f, Finite(_lodCapacityWeights.z, 0.2f));
             double total = near + middle + far;
             int capacity = Capacity;
             capacities[0] = Mathf.Clamp(Mathf.FloorToInt((float)(capacity * near / total)), 1, capacity - 2);
@@ -386,24 +460,26 @@ namespace Cone.Grass
         }
 
         /// <summary>
-        /// The near, middle and far blade meshes, rebuilt when <see cref="grassMeshSubdivision"/> changes. The renderer
+        /// The near, middle and far blade meshes, rebuilt when <see cref="GrassMeshSubdivision"/> changes. The renderer
         /// owns them; callers must not destroy them.
         /// </summary>
         public Mesh[] GetLodMeshes()
         {
-            int subdivisions = Mathf.Clamp(grassMeshSubdivision, 0, 8);
-            if (meshes != null && cachedSubdivision == subdivisions && meshes[0] && meshes[1] && meshes[2])
-                return meshes;
+            int subdivisions = Mathf.Clamp(_grassMeshSubdivision, 0, 8);
+            if (_meshes != null && _cachedSubdivision == subdivisions && _meshes[0] && _meshes[1] && _meshes[2])
+            {
+                return _meshes;
+            }
 
             ReleaseMeshes();
-            meshes = new[]
+            _meshes = new[]
             {
                 CreateBladeMesh(subdivisions),
                 CreateBladeMesh(Mathf.Min(subdivisions, 2)),
                 CreateBladeMesh(0)
             };
-            cachedSubdivision = subdivisions;
-            return meshes;
+            _cachedSubdivision = subdivisions;
+            return _meshes;
         }
 
         /// <summary>Shares row vertices, including a two-vertex tip for opaque footprint caps.
@@ -469,9 +545,12 @@ namespace Cone.Grass
         /// <summary>The quad-cross every procedural head draws: one flat face and two crossed upright quads, one unit across.</summary>
         public Mesh GetHeadMesh()
         {
-            if (!headMesh)
-                headMesh = CreateHeadMesh();
-            return headMesh;
+            if (!_headMesh)
+            {
+                _headMesh = CreateHeadMesh();
+            }
+
+            return _headMesh;
         }
 
         /// <summary>
@@ -524,49 +603,57 @@ namespace Cone.Grass
 
         private void ReleaseMeshes()
         {
-            if (meshes != null)
+            if (_meshes != null)
             {
-                foreach (Mesh mesh in meshes)
+                foreach (Mesh mesh in _meshes)
+                {
                     CoreUtils.Destroy(mesh);
-                meshes = null;
+                }
+
+                _meshes = null;
             }
-            CoreUtils.Destroy(headMesh);
-            headMesh = null;
-            cachedSubdivision = -1;
+            CoreUtils.Destroy(_headMesh);
+            _headMesh = null;
+            _cachedSubdivision = -1;
         }
 
         private void ValidateSettings()
         {
-            spacing = Mathf.Clamp(Finite(spacing, 0.1f), 0.01f, 10f);
-            drawDistance = Mathf.Clamp(Finite(drawDistance, 300f), 1f, 10000f);
-            fullDensityDistance = Mathf.Clamp(Finite(fullDensityDistance, 30f), 0f, drawDistance - 0.001f);
-            densityFalloffExponent = Mathf.Clamp(Finite(densityFalloffExponent, 4f), 0.1f, 16f);
-            densityTransition = Mathf.Clamp(Finite(densityTransition, 0.05f), 0f, 0.25f);
-            grassMeshSubdivision = Mathf.Clamp(grassMeshSubdivision, 0, 8);
-            nearLodDistance = Mathf.Clamp(Finite(nearLodDistance, 30f), 0.01f, drawDistance);
-            subdivisionDistance = Mathf.Clamp(Finite(subdivisionDistance, 100f), nearLodDistance, drawDistance);
-            lodTransitionWidth = Mathf.Clamp(Finite(lodTransitionWidth, 10f), 0f, subdivisionDistance);
-            subdivisionHeightBoost = Mathf.Clamp(Finite(subdivisionHeightBoost, 0f), -0.95f, 10f);
-            subdivisionBumpWidth = Mathf.Max(0.01f, Finite(subdivisionBumpWidth, 20f));
-            cullingPadding = Mathf.Max(0.1f, Finite(cullingPadding, 2f));
-            textureUpdateThreshold = Mathf.Clamp(Finite(textureUpdateThreshold, 10f), 0.1f, drawDistance);
-            captureResolution = Mathf.ClosestPowerOfTwo(Mathf.Clamp(captureResolution, 128, 2048));
-            captureHeightRange.x = Finite(captureHeightRange.x, -100f);
-            captureHeightRange.y = Mathf.Max(captureHeightRange.x + 1f, Finite(captureHeightRange.y, 1000f));
-            maxBufferCount = Mathf.Clamp(Finite(maxBufferCount, 2f), 0.01f, 16f);
-            maxHeadCount = Mathf.Clamp(Finite(maxHeadCount, 0.25f), 0.001f, 4f);
-            lodCapacityWeights.x = Mathf.Clamp(Finite(lodCapacityWeights.x, 0.35f), 0.01f, 100f);
-            lodCapacityWeights.y = Mathf.Clamp(Finite(lodCapacityWeights.y, 0.45f), 0.01f, 100f);
-            lodCapacityWeights.z = Mathf.Clamp(Finite(lodCapacityWeights.z, 0.2f), 0.01f, 100f);
-            groundBlendStrength = Mathf.Clamp01(Finite(groundBlendStrength, 0.8f));
-            groundBlendHeight = Mathf.Clamp(Finite(groundBlendHeight, 0.25f), 0.001f, 1f);
-            minimumPixelWidth = Mathf.Clamp(Finite(minimumPixelWidth, 1f), 0f, 3f);
-            specularFadeRange.x = Mathf.Max(0f, Finite(specularFadeRange.x, 30f));
-            specularFadeRange.y = Mathf.Max(specularFadeRange.x + 0.01f, Finite(specularFadeRange.y, 100f));
-            if (motionVectors == null)
-                motionVectors = new GrassMotionVectors.Settings();
-            if (contactShadows == null)
-                contactShadows = new GrassContactShadows.Settings();
+            _spacing = Mathf.Clamp(Finite(_spacing, 0.1f), 0.01f, 10f);
+            _drawDistance = Mathf.Clamp(Finite(_drawDistance, 300f), 1f, 10000f);
+            _fullDensityDistance = Mathf.Clamp(Finite(_fullDensityDistance, 30f), 0f, _drawDistance - 0.001f);
+            _densityFalloffExponent = Mathf.Clamp(Finite(_densityFalloffExponent, 4f), 0.1f, 16f);
+            _densityTransition = Mathf.Clamp(Finite(_densityTransition, 0.05f), 0f, 0.25f);
+            _grassMeshSubdivision = Mathf.Clamp(_grassMeshSubdivision, 0, 8);
+            _nearLodDistance = Mathf.Clamp(Finite(_nearLodDistance, 30f), 0.01f, _drawDistance);
+            _subdivisionDistance = Mathf.Clamp(Finite(_subdivisionDistance, 100f), _nearLodDistance, _drawDistance);
+            _lodTransitionWidth = Mathf.Clamp(Finite(_lodTransitionWidth, 10f), 0f, _subdivisionDistance);
+            _subdivisionHeightBoost = Mathf.Clamp(Finite(_subdivisionHeightBoost, 0f), -0.95f, 10f);
+            _subdivisionBumpWidth = Mathf.Max(0.01f, Finite(_subdivisionBumpWidth, 20f));
+            _cullingPadding = Mathf.Max(0.1f, Finite(_cullingPadding, 2f));
+            _textureUpdateThreshold = Mathf.Clamp(Finite(_textureUpdateThreshold, 10f), 0.1f, _drawDistance);
+            _captureResolution = Mathf.ClosestPowerOfTwo(Mathf.Clamp(_captureResolution, 128, 2048));
+            _captureHeightRange.x = Finite(_captureHeightRange.x, -100f);
+            _captureHeightRange.y = Mathf.Max(_captureHeightRange.x + 1f, Finite(_captureHeightRange.y, 1000f));
+            _maxBufferCount = Mathf.Clamp(Finite(_maxBufferCount, 2f), 0.01f, 16f);
+            _maxHeadCount = Mathf.Clamp(Finite(_maxHeadCount, 0.25f), 0.001f, 4f);
+            _lodCapacityWeights.x = Mathf.Clamp(Finite(_lodCapacityWeights.x, 0.35f), 0.01f, 100f);
+            _lodCapacityWeights.y = Mathf.Clamp(Finite(_lodCapacityWeights.y, 0.45f), 0.01f, 100f);
+            _lodCapacityWeights.z = Mathf.Clamp(Finite(_lodCapacityWeights.z, 0.2f), 0.01f, 100f);
+            _groundBlendStrength = Mathf.Clamp01(Finite(_groundBlendStrength, 0.8f));
+            _groundBlendHeight = Mathf.Clamp(Finite(_groundBlendHeight, 0.25f), 0.001f, 1f);
+            _minimumPixelWidth = Mathf.Clamp(Finite(_minimumPixelWidth, 1f), 0f, 3f);
+            _specularFadeRange.x = Mathf.Max(0f, Finite(_specularFadeRange.x, 30f));
+            _specularFadeRange.y = Mathf.Max(_specularFadeRange.x + 0.01f, Finite(_specularFadeRange.y, 100f));
+            if (_motionVectors == null)
+            {
+                _motionVectors = new GrassMotionVectors.Settings();
+            }
+
+            if (_contactShadows == null)
+            {
+                _contactShadows = new GrassContactShadows.Settings();
+            }
         }
 
         private static float Finite(float value, float fallback)
@@ -576,13 +663,19 @@ namespace Cone.Grass
 
         private void OnGUI()
         {
-            if (!previewVisibleGrassCount || Instance != this)
+            if (!_previewVisibleGrassCount || Instance != this)
+            {
                 return;
-            if (diagnosticStyle == null)
-                diagnosticStyle = new GUIStyle(GUI.skin.label) { fontSize = 18 };
+            }
+
+            if (_diagnosticStyle == null)
+            {
+                _diagnosticStyle = new GUIStyle(GUI.skin.label) { fontSize = 18 };
+            }
+
             GUI.Label(new Rect(24f, 24f, 600f, 60f),
                 "Grass: " + VisibleGrassCount.ToString("N0") + " drawn; " +
-                OverflowGrassCount.ToString("N0") + " over capacity (async)", diagnosticStyle);
+                OverflowGrassCount.ToString("N0") + " over capacity (async)", _diagnosticStyle);
         }
     }
 }

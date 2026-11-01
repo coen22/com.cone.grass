@@ -19,34 +19,46 @@ namespace Cone.Grass
             public float ContactStrength;
         }
 
-        private readonly Node[] nodes;
-        private readonly Dictionary<Vector2Int, int> indices;
+        private readonly Node[] _nodes;
+        private readonly Dictionary<Vector2Int, int> _indices;
 
         public float CellSize { get; }
-        public int Capacity => nodes.Length;
+        public int Capacity => _nodes.Length;
         public Vector2 Origin { get; }
         public int Count { get; private set; }
 
         public GrassInteractionField(float cellSize, int capacity = DefaultCapacity, Vector2 origin = default)
         {
             if (!Finite(cellSize) || cellSize <= 0f)
+            {
                 throw new ArgumentOutOfRangeException(nameof(cellSize));
+            }
+
             if (capacity <= 0 || capacity > MaximumCapacity)
+            {
                 throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
             if (!Finite(origin))
+            {
                 throw new ArgumentOutOfRangeException(nameof(origin));
+            }
+
             CellSize = cellSize;
             Origin = origin;
-            nodes = new Node[capacity];
-            indices = new Dictionary<Vector2Int, int>(capacity);
+            _nodes = new Node[capacity];
+            _indices = new Dictionary<Vector2Int, int>(capacity);
         }
 
         /// <summary>Dense indices are valid until the next mutation; pruning may reorder them.</summary>
         public Vector2Int GetKey(int index)
         {
             if ((uint)index >= (uint)Count)
+            {
                 throw new ArgumentOutOfRangeException(nameof(index));
-            return nodes[index].Key;
+            }
+
+            return _nodes[index].Key;
         }
 
         public Vector2 GetPosition(Vector2Int key) => new Vector2(
@@ -59,12 +71,18 @@ namespace Cone.Grass
         {
             direction = Vector2.zero;
             strength = 0f;
-            if (!indices.TryGetValue(key, out int index))
+            if (!_indices.TryGetValue(key, out int index))
+            {
                 return false;
-            float weight = nodes[index].ContactStrength * RecoveryWeight(now - nodes[index].LastContactTime, recovery);
+            }
+
+            float weight = _nodes[index].ContactStrength * RecoveryWeight(now - _nodes[index].LastContactTime, recovery);
             if (weight <= 0f)
+            {
                 return false;
-            direction = nodes[index].Direction;
+            }
+
+            direction = _nodes[index].Direction;
             strength = weight;
             return true;
         }
@@ -91,9 +109,14 @@ namespace Cone.Grass
                 !Finite(t0) || !Finite(t1) || t1 < t0 || !Finite(t1 - t0) ||
                 !Finite(responseAtStart) || !Finite(targetResponse) || !Finite(attackSeconds) || attackSeconds < 0f ||
                 (t1 == t0 && (p0.x != p1.x || p0.y != p1.y || r0 != r1)))
+            {
                 return false;
+            }
+
             if (!TryGetRange(p0, r0, p1, r1, out int firstX, out int firstY, out int lastX, out int lastY))
+            {
                 return false;
+            }
 
             var sweep = new CircleSweep(p0, r0, p1, r1);
             double duration = t1 - t0;
@@ -101,48 +124,61 @@ namespace Cone.Grass
             // The first bounded walk reserves capacity without changing existing
             // timestamps or directions. The second walk cannot fail halfway through.
             for (int y = firstY; y <= lastY; y++)
-            for (int x = firstX; x <= lastX; x++)
             {
-                var key = new Vector2Int(x, y);
-                if (!indices.ContainsKey(key) && sweep.TryGetLatest(
-                        Origin.x + (double)x * CellSize, Origin.y + (double)y * CellSize, out double fraction) &&
-                    EvaluateAttack(responseAtStart, targetResponse, fraction * duration, attackSeconds) > 0f)
+                for (int x = firstX; x <= lastX; x++)
                 {
-                    additions++;
-                    if (additions > Capacity - Count)
-                        return false;
+                    var key = new Vector2Int(x, y);
+                    if (!_indices.ContainsKey(key) && sweep.TryGetLatest(
+                            Origin.x + (double)x * CellSize, Origin.y + (double)y * CellSize, out double fraction) &&
+                        EvaluateAttack(responseAtStart, targetResponse, fraction * duration, attackSeconds) > 0f)
+                    {
+                        additions++;
+                        if (additions > Capacity - Count)
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
 
             for (int y = firstY; y <= lastY; y++)
-            for (int x = firstX; x <= lastX; x++)
             {
-                double worldX = Origin.x + (double)x * CellSize;
-                double worldY = Origin.y + (double)y * CellSize;
-                if (!sweep.TryGetLatest(worldX, worldY, out double fraction))
-                    continue;
-                float contactStrength = EvaluateAttack(responseAtStart, targetResponse, fraction * duration, attackSeconds);
-                if (contactStrength <= 0f)
-                    continue;
-                double contactTime = fraction == 1.0 ? t1 : fraction == 0.0 ? t0 : t0 + fraction * duration;
-                var key = new Vector2Int(x, y);
-                if (!indices.TryGetValue(key, out int index))
+                for (int x = firstX; x <= lastX; x++)
                 {
-                    index = Count++;
-                    indices.Add(key, index);
+                    double worldX = Origin.x + (double)x * CellSize;
+                    double worldY = Origin.y + (double)y * CellSize;
+                    if (!sweep.TryGetLatest(worldX, worldY, out double fraction))
+                    {
+                        continue;
+                    }
+
+                    float contactStrength = EvaluateAttack(responseAtStart, targetResponse, fraction * duration, attackSeconds);
+                    if (contactStrength <= 0f)
+                    {
+                        continue;
+                    }
+
+                    double contactTime = fraction == 1.0 ? t1 : fraction == 0.0 ? t0 : t0 + fraction * duration;
+                    var key = new Vector2Int(x, y);
+                    if (!_indices.TryGetValue(key, out int index))
+                    {
+                        index = Count++;
+                        _indices.Add(key, index);
+                    }
+                    else if (contactTime < _nodes[index].LastContactTime)
+                    {
+                        continue;
+                    }
+                    _nodes[index] = new Node
+                    {
+                        Key = key,
+                        LastContactTime = contactTime,
+                        ContactStrength = contactStrength,
+                        Direction = sweep.GetDirection(worldX, worldY, fraction, fallbackDirection)
+                    };
                 }
-                else if (contactTime < nodes[index].LastContactTime)
-                {
-                    continue;
-                }
-                nodes[index] = new Node
-                {
-                    Key = key,
-                    LastContactTime = contactTime,
-                    ContactStrength = contactStrength,
-                    Direction = sweep.GetDirection(worldX, worldY, fraction, fallbackDirection)
-                };
             }
+
             return true;
         }
 
@@ -150,20 +186,26 @@ namespace Cone.Grass
         public int Prune(double now, float recovery)
         {
             if (!Finite(now) || !Finite(recovery) || recovery < 0f)
+            {
                 return 0;
+            }
+
             int removed = 0;
             for (int i = Count - 1; i >= 0; i--)
             {
-                if (nodes[i].ContactStrength * RecoveryWeight(now - nodes[i].LastContactTime, recovery) > 0f)
+                if (_nodes[i].ContactStrength * RecoveryWeight(now - _nodes[i].LastContactTime, recovery) > 0f)
+                {
                     continue;
-                indices.Remove(nodes[i].Key);
+                }
+
+                _indices.Remove(_nodes[i].Key);
                 int last = --Count;
                 if (i != last)
                 {
-                    nodes[i] = nodes[last];
-                    indices[nodes[i].Key] = i;
+                    _nodes[i] = _nodes[last];
+                    _indices[_nodes[i].Key] = i;
                 }
-                nodes[last] = default;
+                _nodes[last] = default;
                 removed++;
             }
             return removed;
@@ -171,8 +213,8 @@ namespace Cone.Grass
 
         public void Clear()
         {
-            indices.Clear();
-            Array.Clear(nodes, 0, Count);
+            _indices.Clear();
+            Array.Clear(_nodes, 0, Count);
             Count = 0;
         }
 
@@ -181,24 +223,41 @@ namespace Cone.Grass
         {
             if (!Finite(responseAtStart) || !Finite(targetResponse) || !Finite(elapsed) || elapsed < 0.0 ||
                 !Finite(attackSeconds) || attackSeconds < 0f)
+            {
                 return 0f;
+            }
+
             float start = Mathf.Clamp01(responseAtStart);
             float target = Mathf.Clamp01(targetResponse);
             if (attackSeconds == 0f || start == target)
+            {
                 return target;
+            }
+
             if (elapsed == 0.0)
+            {
                 return start;
+            }
+
             return (float)(target + ((double)start - target) * Math.Exp(-elapsed / attackSeconds));
         }
 
         public static float RecoveryWeight(double age, float recovery)
         {
             if (!Finite(age) || age < 0.0 || !Finite(recovery) || recovery < 0f)
+            {
                 return 0f;
+            }
+
             if (recovery == 0f)
+            {
                 return age == 0.0 ? 1f : 0f;
+            }
+
             if (age >= recovery)
+            {
                 return 0f;
+            }
             // Evaluate the complementary smoothstep directly so subtracting two
             // almost equal values cannot turn the final part of recovery into zero.
             double remaining = (recovery - age) / recovery;
@@ -225,21 +284,32 @@ namespace Cone.Grass
             double x1 = Math.Floor((Math.Max((double)p0.x + r0, (double)p1.x + r1) - Origin.x) / CellSize);
             double y1 = Math.Floor((Math.Max((double)p0.y + r0, (double)p1.y + r1) - Origin.y) / CellSize);
             if (x0 > x1 || y0 > y1)
+            {
                 return true;
+            }
             // Leave room for the mesh's one-node zero-alpha halo. Check before any
             // integer conversion, product or traversal; a long diagonal is still bounded.
             if (x0 <= int.MinValue || y0 <= int.MinValue || x1 >= int.MaxValue || y1 >= int.MaxValue)
+            {
                 return false;
+            }
+
             long width = (long)x1 - (long)x0 + 1L;
             long height = (long)y1 - (long)y0 + 1L;
             if (width > MaximumSweepCandidates || height > MaximumSweepCandidates ||
                 width * height > MaximumSweepCandidates)
+            {
                 return false;
+            }
+
             if (!Finite((float)(Origin.x + (x0 - 1.0) * CellSize)) ||
                 !Finite((float)(Origin.y + (y0 - 1.0) * CellSize)) ||
                 !Finite((float)(Origin.x + (x1 + 1.0) * CellSize)) ||
                 !Finite((float)(Origin.y + (y1 + 1.0) * CellSize)))
+            {
                 return false;
+            }
+
             firstX = (int)x0;
             firstY = (int)y0;
             lastX = (int)x1;
@@ -249,73 +319,91 @@ namespace Cone.Grass
 
         private readonly struct CircleSweep
         {
-            private readonly double x0, y0, dx, dy, radius0, radius1, dr, quadratic;
+            private readonly double _x0, _y0, _dx, _dy, _radius0, _radius1, _dr, _quadratic;
 
             public CircleSweep(Vector2 p0, float r0, Vector2 p1, float r1)
             {
-                x0 = p0.x;
-                y0 = p0.y;
-                dx = (double)p1.x - p0.x;
-                dy = (double)p1.y - p0.y;
-                radius0 = r0;
-                radius1 = r1;
-                dr = (double)r1 - r0;
-                quadratic = dx * dx + dy * dy - dr * dr;
+                _x0 = p0.x;
+                _y0 = p0.y;
+                _dx = (double)p1.x - p0.x;
+                _dy = (double)p1.y - p0.y;
+                _radius0 = r0;
+                _radius1 = r1;
+                _dr = (double)r1 - r0;
+                _quadratic = _dx * _dx + _dy * _dy - _dr * _dr;
             }
 
             public bool TryGetLatest(double x, double y, out double fraction)
             {
                 fraction = 0.0;
-                double mx = x - x0;
-                double my = y - y0;
-                double endX = mx - dx;
-                double endY = my - dy;
-                if (endX * endX + endY * endY <= radius1 * radius1)
+                double mx = x - _x0;
+                double my = y - _y0;
+                double endX = mx - _dx;
+                double endY = my - _dy;
+                if (endX * endX + endY * endY <= _radius1 * _radius1)
                 {
                     fraction = 1.0;
                     return true;
                 }
 
-                double projection = mx * dx + my * dy + radius0 * dr;
-                double constant = mx * mx + my * my - radius0 * radius0;
-                if (quadratic == 0.0)
+                double projection = mx * _dx + my * _dy + _radius0 * _dr;
+                double constant = mx * mx + my * my - _radius0 * _radius0;
+                if (_quadratic == 0.0)
                 {
                     if (projection == 0.0)
+                    {
                         return false;
+                    }
+
                     double root = constant / (2.0 * projection);
                     if (root < 0.0 || root > 1.0)
+                    {
                         return false;
+                    }
+
                     fraction = root;
                     return true;
                 }
 
                 // This is B^2/4 - A*C in geometric form. For a constant radius,
                 // it avoids cancelling a large along-path distance at a tangent.
-                double radialX = radius0 * dx + dr * mx;
-                double radialY = radius0 * dy + dr * my;
-                double cross = mx * dy - my * dx;
+                double radialX = _radius0 * _dx + _dr * mx;
+                double radialY = _radius0 * _dy + _dr * my;
+                double cross = mx * _dy - my * _dx;
                 double discriminant = radialX * radialX + radialY * radialY - cross * cross;
                 if (discriminant < 0.0)
+                {
                     return false;
+                }
+
                 double squareRoot = Math.Sqrt(discriminant);
                 double q = projection + (projection >= 0.0 ? squareRoot : -squareRoot);
-                double root0 = q / quadratic;
+                double root0 = q / _quadratic;
                 double root1 = q == 0.0 ? root0 : constant / q;
                 double latest = -1.0;
                 if (root0 >= 0.0 && root0 <= 1.0)
+                {
                     latest = root0;
+                }
+
                 if (root1 >= 0.0 && root1 <= 1.0)
+                {
                     latest = Math.Max(latest, root1);
+                }
+
                 if (latest < 0.0)
+                {
                     return false;
+                }
+
                 fraction = latest;
                 return true;
             }
 
             public Vector2 GetDirection(double x, double y, double fraction, Vector2 fallback)
             {
-                double radialX = x - (x0 + fraction * dx);
-                double radialY = y - (y0 + fraction * dy);
+                double radialX = x - (_x0 + fraction * _dx);
+                double radialY = y - (_y0 + fraction * _dy);
                 if (radialX == 0.0 && radialY == 0.0)
                 {
                     radialX = fallback.x;

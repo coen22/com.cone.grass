@@ -9,45 +9,45 @@ namespace Cone.Grass.Tests
     /// </summary>
     public sealed class GrassCameraFilterTests
     {
-        GameObject ownerObject, cameraObject;
-        InfiniteGrassRenderer owner;
-        Camera camera;
+        private GameObject _ownerObject, _cameraObject;
+        private InfiniteGrassRenderer _owner;
+        private Camera _camera;
 
         [SetUp]
         public void Create()
         {
-            ownerObject = new GameObject("Grass camera filter owner") { hideFlags = HideFlags.HideAndDontSave };
-            ownerObject.SetActive(false);
-            owner = ownerObject.AddComponent<InfiniteGrassRenderer>();
-            cameraObject = new GameObject("Grass camera filter camera") { hideFlags = HideFlags.HideAndDontSave };
-            camera = cameraObject.AddComponent<Camera>();
-            camera.enabled = false;
+            _ownerObject = new GameObject("Grass camera filter owner") { hideFlags = HideFlags.HideAndDontSave };
+            _ownerObject.SetActive(false);
+            _owner = _ownerObject.AddComponent<InfiniteGrassRenderer>();
+            _cameraObject = new GameObject("Grass camera filter camera") { hideFlags = HideFlags.HideAndDontSave };
+            _camera = _cameraObject.AddComponent<Camera>();
+            _camera.enabled = false;
         }
 
         [TearDown]
         public void Destroy()
         {
-            Object.DestroyImmediate(cameraObject);
-            Object.DestroyImmediate(ownerObject);
+            Object.DestroyImmediate(_cameraObject);
+            Object.DestroyImmediate(_ownerObject);
         }
 
         [Test]
         public void AGameCameraThatSeesTheOwnersLayerDrawsTheGrass()
         {
-            Assert.That(owner.DrawsFor(camera), Is.True);
+            Assert.That(_owner.DrawsFor(_camera), Is.True);
         }
 
         [Test]
         public void ACameraThatCullsTheOwnersLayerDrawsNoGrass()
         {
-            camera.cullingMask = 0;
-            Assert.That(owner.DrawsFor(camera), Is.False, "A camera culling everything, like a ground capture's idle render.");
+            _camera.cullingMask = 0;
+            Assert.That(_owner.DrawsFor(_camera), Is.False, "A camera culling everything, like a ground capture's idle render.");
 
-            ownerObject.layer = 5;
-            camera.cullingMask = 1 << 0;
-            Assert.That(owner.DrawsFor(camera), Is.False, "A camera that sees only another layer, like a preview portrait.");
-            camera.cullingMask |= 1 << 5;
-            Assert.That(owner.DrawsFor(camera), Is.True);
+            _ownerObject.layer = 5;
+            _camera.cullingMask = 1 << 0;
+            Assert.That(_owner.DrawsFor(_camera), Is.False, "A camera that sees only another layer, like a preview portrait.");
+            _camera.cullingMask |= 1 << 5;
+            Assert.That(_owner.DrawsFor(_camera), Is.True);
         }
 
         [Test]
@@ -58,7 +58,7 @@ namespace Cone.Grass.Tests
             try
             {
                 // Camera A draws the grass and publishes its interaction capture.
-                Assert.That(owner.AdmitCamera(camera), Is.True);
+                Assert.That(_owner.AdmitCamera(_camera), Is.True);
                 GrassInteractionPublisher.Publish(field, Vector2.zero, 10f);
                 Assert.That(Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId).x, Is.EqualTo(1f));
 
@@ -66,7 +66,7 @@ namespace Cone.Grass.Tests
                 var refused = refusedObject.AddComponent<Camera>();
                 refused.enabled = false;
                 refused.cullingMask = 0;
-                Assert.That(owner.AdmitCamera(refused), Is.False);
+                Assert.That(_owner.AdmitCamera(refused), Is.False);
                 Assert.That(Shader.GetGlobalVector(GrassInteractionPublisher.ParamsId).x, Is.Zero, "B still sees A's interaction field.");
             }
             finally
@@ -81,16 +81,16 @@ namespace Cone.Grass.Tests
         [Test]
         public void OnlyGameViewsAndTheEnabledSceneViewDrawTheGrass()
         {
-            camera.cameraType = CameraType.Preview;
-            Assert.That(owner.DrawsFor(camera), Is.False);
-            camera.cameraType = CameraType.Reflection;
-            Assert.That(owner.DrawsFor(camera), Is.False);
-            camera.cameraType = CameraType.SceneView;
-            owner.renderInSceneView = true;
-            Assert.That(owner.DrawsFor(camera), Is.True);
-            owner.renderInSceneView = false;
-            Assert.That(owner.DrawsFor(camera), Is.False);
-            Assert.That(owner.DrawsFor(null), Is.False);
+            _camera.cameraType = CameraType.Preview;
+            Assert.That(_owner.DrawsFor(_camera), Is.False);
+            _camera.cameraType = CameraType.Reflection;
+            Assert.That(_owner.DrawsFor(_camera), Is.False);
+            _camera.cameraType = CameraType.SceneView;
+            _owner.RenderInSceneView = true;
+            Assert.That(_owner.DrawsFor(_camera), Is.True);
+            _owner.RenderInSceneView = false;
+            Assert.That(_owner.DrawsFor(_camera), Is.False);
+            Assert.That(_owner.DrawsFor(null), Is.False);
         }
     }
 }

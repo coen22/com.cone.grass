@@ -16,49 +16,58 @@ namespace Cone.Grass.Tests
         private const float BladePixelWidth = 4f;
         private const float BladePixelHeight = Size * 0.5f;
         private const string ShaderPath = "Packages/com.cone.grass/Runtime/Shaders/GrassBladeShader.shader";
-        private Material material;
-        private GraphicsBuffer positions;
-        private Texture2D empty;
+        private Material _material;
+        private GraphicsBuffer _positions;
+        private Texture2D _empty;
 
         [SetUp]
         public void SetUp()
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || !SystemInfo.supportsComputeShaders ||
                 !SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Render))
+            {
                 Assert.Ignore("Blade coverage tests require a graphics device, structured buffers, and an RGBA8 render target.");
+            }
 
             Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(ShaderPath);
             Assert.That(shader, Is.Not.Null);
             Assert.That(shader.isSupported, Is.True, "The shipped blade shader must be supported on the tested graphics API.");
-            material = new Material(shader) { enableInstancing = true };
-            positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, sizeof(float) * 4);
-            empty = new Texture2D(1, 1, TextureFormat.RGBA32, false, true);
-            empty.SetPixel(0, 0, Color.clear);
-            empty.Apply(false, false);
+            _material = new Material(shader) { enableInstancing = true };
+            _positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, sizeof(float) * 4);
+            _empty = new Texture2D(1, 1, TextureFormat.RGBA32, false, true);
+            _empty.SetPixel(0, 0, Color.clear);
+            _empty.Apply(false, false);
 
-            material.SetColor("_Color", Color.white);
-            material.SetColor("_AOColor", Color.white);
-            material.SetFloat("_GrassHeight", 1f);
-            material.SetFloat("_GrassWidthRandomness", 0f);
-            material.SetFloat("_GrassHeightRandomness", 0f);
-            material.SetFloat("_GrassCurving", 0f);
-            material.SetFloat("_ExpandDistantGrassWidth", 0f);
-            material.SetFloat("_SubdivisionHeightBoost", 0f);
-            material.SetFloat("_WindStrength", 0f);
-            material.SetFloat("_GroundBlendStrength", 0f);
-            int pass = material.FindPass("GrassForward");
+            _material.SetColor("_Color", Color.white);
+            _material.SetColor("_AOColor", Color.white);
+            _material.SetFloat("_GrassHeight", 1f);
+            _material.SetFloat("_GrassWidthRandomness", 0f);
+            _material.SetFloat("_GrassHeightRandomness", 0f);
+            _material.SetFloat("_GrassCurving", 0f);
+            _material.SetFloat("_ExpandDistantGrassWidth", 0f);
+            _material.SetFloat("_SubdivisionHeightBoost", 0f);
+            _material.SetFloat("_WindStrength", 0f);
+            _material.SetFloat("_GroundBlendStrength", 0f);
+            int pass = _material.FindPass("GrassForward");
             Assert.That(pass, Is.GreaterThanOrEqualTo(0));
-            ShaderUtil.CompilePass(material, pass, true);
-            Assert.That(ShaderUtil.IsPassCompiled(material, pass), Is.True,
+            ShaderUtil.CompilePass(_material, pass, true);
+            Assert.That(ShaderUtil.IsPassCompiled(_material, pass), Is.True,
                 "Compile the actual forward pass synchronously before comparing its rendered coverage.");
         }
 
         [TearDown]
         public void TearDown()
         {
-            positions?.Dispose();
-            if (material) Object.DestroyImmediate(material);
-            if (empty) Object.DestroyImmediate(empty);
+            _positions?.Dispose();
+            if (_material)
+            {
+                Object.DestroyImmediate(_material);
+            }
+
+            if (_empty)
+            {
+                Object.DestroyImmediate(_empty);
+            }
         }
 
         [TestCase(0)]
@@ -112,12 +121,15 @@ namespace Cone.Grass.Tests
             // Use an eight-pixel witness so even .25 coverage has a four-pixel
             // base and a meaningful interior. Lower density may validly have no
             // multi-pixel interior; zero density must still stay absent.
-            const float solidDensityPixelWidth = BladePixelWidth * 2f;
+            const float SolidDensityPixelWidth = BladePixelWidth * 2f;
             foreach (int subdivisions in new[] { 0, 2, 5 })
             {
                 foreach (float coverage in new[] { .25f, .5f, .75f })
-                    AssertSolidRows(Render(subdivisions, 1, coverage, solidDensityPixelWidth, 0f));
-                Assert.That(CoveredArea(Render(subdivisions, 1, 0f, solidDensityPixelWidth, 0f)), Is.Zero,
+                {
+                    AssertSolidRows(Render(subdivisions, 1, coverage, SolidDensityPixelWidth, 0f));
+                }
+
+                Assert.That(CoveredArea(Render(subdivisions, 1, 0f, SolidDensityPixelWidth, 0f)), Is.Zero,
                     "The solid fractional-density witness cannot resurrect zero density.");
                 Color[] capped = Render(subdivisions, 1, 1f, .25f, BladePixelWidth);
                 AssertSolidRows(capped);
@@ -127,7 +139,7 @@ namespace Cone.Grass.Tests
                     "The cap cannot resurrect zero density.");
             }
 
-            material.SetFloat("_RandomNormal", 0f);
+            _material.SetFloat("_RandomNormal", 0f);
             Color[] unresolvedBase = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
             Color[] resolvedBase = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
             // Center the one-pixel base on a pixel center so its narrow triangular
@@ -135,7 +147,7 @@ namespace Cone.Grass.Tests
             Vector3 fadedRoot = new Vector3(1f / Size, -.5f, 2f);
             Color[] fadedBase = Render(0, 1, .0625f, BladePixelWidth, 0f,
                 rootPosition: fadedRoot, directionalAmbient: true);
-            material.SetFloat("_RandomNormal", 1f);
+            _material.SetFloat("_RandomNormal", 1f);
             Color[] unresolvedDetail = Render(0, 1, 1f, .25f, BladePixelWidth, directionalAmbient: true);
             Color[] resolvedDetail = Render(0, 1, 1f, BladePixelWidth, 0f, directionalAmbient: true);
             Color[] fadedDetail = Render(0, 1, .0625f, BladePixelWidth, 0f,
@@ -148,9 +160,14 @@ namespace Cone.Grass.Tests
                 "A widened quarter-pixel physical blade must filter its unresolved normal detail, rather than use the expanded width.");
             float resolvedDifference = 0f;
             for (int index = 0; index < resolvedBase.Length; index++)
+            {
                 if (resolvedBase[index].a > .5f && resolvedDetail[index].a > .5f)
+                {
                     resolvedDifference = Mathf.Max(resolvedDifference,
                         Mathf.Abs(resolvedBase[index].r - resolvedDetail[index].r));
+                }
+            }
+
             Assert.That(resolvedDifference, Is.GreaterThan(1f / 255f),
                 "Resolved physical blades must retain measurable seeded detail; globally disabling normal randomness is not filtering.");
         }
@@ -228,7 +245,7 @@ namespace Cone.Grass.Tests
             {
                 wind.SetPixel(0, 0, new Color(0.5f, 0f, 0f, 1f));
                 wind.Apply(false, false);
-                material.SetFloat("_WindStrength", 0.5f);
+                _material.SetFloat("_WindStrength", 0.5f);
                 Color[] bent = Render(subdivisions, 4, 1f, BladePixelWidth, 0f,
                     rootPosition: Vector3.zero, cameraToWorld: cameraToWorld, windTexture: wind);
                 Assert.That(CoveredArea(bent), Is.GreaterThan(4f),
@@ -251,7 +268,7 @@ namespace Cone.Grass.Tests
             }
             finally
             {
-                material.SetFloat("_WindStrength", 0f);
+                _material.SetFloat("_WindStrength", 0f);
                 Object.DestroyImmediate(wind);
             }
         }
@@ -259,61 +276,66 @@ namespace Cone.Grass.Tests
         [Test]
         public void GroundMatchedRootsUseNativeTerrainDielectricDiffuseEnergy()
         {
-            material.SetFloat("_GroundBlendStrength", 1f);
-            material.SetFloat("_GroundBlendHeight", 1f);
+            _material.SetFloat("_GroundBlendStrength", 1f);
+            _material.SetFloat("_GroundBlendHeight", 1f);
             Color[] pixels = Render(0, 1, 1f, BladePixelWidth, 0f, groundTexture: Texture2D.whiteTexture);
             float darkest = float.PositiveInfinity;
             foreach (Color pixel in pixels)
-                if (pixel.a > .5f) darkest = Mathf.Min(darkest, pixel.r);
+            {
+                if (pixel.a > .5f)
+                {
+                    darkest = Mathf.Min(darkest, pixel.r);
+                }
+            }
             // URP BRDF.hlsl uses dielectric reflectance .04. The first raster row
             // is at most 1/64 of this blade's height. Allow its gradient, one RGBA8
             // readback code and one half-float rounding step, rather than a fitted limit.
-            const float reflectance = .04f;
+            const float Reflectance = .04f;
             float tolerance = 1f / 255f + 1f / 2048f +
-                reflectance * Mathf.SmoothStep(0f, 1f, 1f / BladePixelHeight);
-            Assert.That(darkest, Is.EqualTo(1f - reflectance).Within(tolerance),
+                Reflectance * Mathf.SmoothStep(0f, 1f, 1f / BladePixelHeight);
+            Assert.That(darkest, Is.EqualTo(1f - Reflectance).Within(tolerance),
                 "A ground-matched root must not use the full albedo where TerrainLit uses dielectric diffuse energy.");
 
-            Assert.That(material.GetFloat("_GroundBlendFloor"), Is.Zero,
+            Assert.That(_material.GetFloat("_GroundBlendFloor"), Is.Zero,
                 "Existing materials must retain the original root-to-tip transition by default.");
-            material.SetColor("_Color", Color.black);
-            material.SetColor("_AOColor", Color.black);
-            const float lightingWidth = 32f;
-            Color[] legacy = Render(0, 1, 1f, lightingWidth, 0f, groundTexture: Texture2D.whiteTexture);
+            _material.SetColor("_Color", Color.black);
+            _material.SetColor("_AOColor", Color.black);
+            const float LightingWidth = 32f;
+            Color[] legacy = Render(0, 1, 1f, LightingWidth, 0f, groundTexture: Texture2D.whiteTexture);
             Vector2 legacyRange = CoveredColorRange(legacy);
             Assert.That(legacyRange.x, Is.LessThan(1f / BladePixelHeight),
                 "The wide blade must include covered tip pixels where the legacy ground fade approaches zero.");
 
-            const float floor = .9f;
-            material.SetFloat("_GroundBlendFloor", floor);
-            Vector2 bodyRange = CoveredColorRange(Render(0, 1, 1f, lightingWidth, 0f,
+            const float Floor = .9f;
+            _material.SetFloat("_GroundBlendFloor", Floor);
+            Vector2 bodyRange = CoveredColorRange(Render(0, 1, 1f, LightingWidth, 0f,
                 groundTexture: Texture2D.whiteTexture));
             // Black authored albedo isolates ground weight. Dielectric diffuse energy
             // is 1 - reflectance * weight; thus the minimum body response is derived
             // from floor * (1 - reflectance * floor), rather than a fitted image bound.
-            float bodyMinimum = floor * (1f - reflectance * floor);
-            const float readbackTolerance = 1f / 255f + 1f / 2048f;
-            Assert.That(bodyRange.x, Is.EqualTo(bodyMinimum).Within(readbackTolerance),
+            float bodyMinimum = Floor * (1f - Reflectance * Floor);
+            const float ReadbackTolerance = 1f / 255f + 1f / 2048f;
+            Assert.That(bodyRange.x, Is.EqualTo(bodyMinimum).Within(ReadbackTolerance),
                 "The body/tip must retain the requested ground colour and its matching diffuse energy.");
-            Assert.That(bodyRange.y, Is.EqualTo(1f - reflectance).Within(tolerance));
+            Assert.That(bodyRange.y, Is.EqualTo(1f - Reflectance).Within(tolerance));
             Assert.That(bodyRange.y - bodyRange.x,
-                Is.GreaterThan(((1f - reflectance) - bodyMinimum) * .5f),
+                Is.GreaterThan(((1f - Reflectance) - bodyMinimum) * .5f),
                 "The nonempty root and tip domains must still retain the height transition above the floor.");
 
-            material.SetFloat("_GroundBlendFloor", 1f);
-            AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
-                groundTexture: Texture2D.whiteTexture), 1f - reflectance, readbackTolerance);
-            material.SetFloat("_GroundBlendStrength", .25f);
-            AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
-                groundTexture: Texture2D.whiteTexture), .25f * (1f - reflectance * .25f), readbackTolerance);
-            material.SetFloat("_GroundBlendStrength", 0f);
-            AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
-                groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
-            material.SetFloat("_GroundBlendStrength", 1f);
-            AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f), 0f, readbackTolerance);
-            material.SetFloat("_GroundBlendHeight", 0f);
-            AssertConstantCoveredColor(Render(0, 1, 1f, lightingWidth, 0f,
-                groundTexture: Texture2D.whiteTexture), 0f, readbackTolerance);
+            _material.SetFloat("_GroundBlendFloor", 1f);
+            AssertConstantCoveredColor(Render(0, 1, 1f, LightingWidth, 0f,
+                groundTexture: Texture2D.whiteTexture), 1f - Reflectance, ReadbackTolerance);
+            _material.SetFloat("_GroundBlendStrength", .25f);
+            AssertConstantCoveredColor(Render(0, 1, 1f, LightingWidth, 0f,
+                groundTexture: Texture2D.whiteTexture), .25f * (1f - Reflectance * .25f), ReadbackTolerance);
+            _material.SetFloat("_GroundBlendStrength", 0f);
+            AssertConstantCoveredColor(Render(0, 1, 1f, LightingWidth, 0f,
+                groundTexture: Texture2D.whiteTexture), 0f, ReadbackTolerance);
+            _material.SetFloat("_GroundBlendStrength", 1f);
+            AssertConstantCoveredColor(Render(0, 1, 1f, LightingWidth, 0f), 0f, ReadbackTolerance);
+            _material.SetFloat("_GroundBlendHeight", 0f);
+            AssertConstantCoveredColor(Render(0, 1, 1f, LightingWidth, 0f,
+                groundTexture: Texture2D.whiteTexture), 0f, ReadbackTolerance);
         }
 
         private static Vector2 CoveredColorRange(Color[] pixels)
@@ -322,7 +344,11 @@ namespace Cone.Grass.Tests
             int covered = 0;
             foreach (Color pixel in pixels)
             {
-                if (pixel.a <= .5f) continue;
+                if (pixel.a <= .5f)
+                {
+                    continue;
+                }
+
                 covered++;
                 darkest = Mathf.Min(darkest, pixel.r);
                 brightest = Mathf.Max(brightest, pixel.r);
@@ -345,8 +371,15 @@ namespace Cone.Grass.Tests
             {
                 int left = Size, right = -1;
                 for (int x = 0; x < Size; x++)
+                {
                     if (pixels[y * Size + x].a > .5f) { left = Mathf.Min(left, x); right = Mathf.Max(right, x); }
-                if (right < left) continue;
+                }
+
+                if (right < left)
+                {
+                    continue;
+                }
+
                 coveredRows++;
                 for (int x = left + 1; x < right; x++)
                 {
@@ -367,10 +400,15 @@ namespace Cone.Grass.Tests
             var descriptor = new RenderTextureDescriptor(Size, Size)
             {
                 graphicsFormat = GraphicsFormat.R8G8B8A8_UNorm,
-                depthBufferBits = 0, msaaSamples = samples, sRGB = false, bindMS = false
+                depthBufferBits = 0,
+                msaaSamples = samples,
+                sRGB = false,
+                bindMS = false
             };
             if (SystemInfo.GetRenderTextureSupportedMSAASampleCount(descriptor) != samples)
+            {
                 Assert.Ignore("The active graphics device does not support the requested " + samples + "x MSAA target.");
+            }
 
             Mesh mesh = null;
             RenderTexture target = null;
@@ -391,15 +429,15 @@ namespace Cone.Grass.Tests
                 readback = new Texture2D(Size, Size, TextureFormat.RGBA32, false, true);
 
                 Vector3 root = rootPosition ?? new Vector3(0f, -0.5f * orthographicScale, 2f);
-                positions.SetData(new[] { new Vector4(root.x, root.y, root.z, coverage) });
+                _positions.SetData(new[] { new Vector4(root.x, root.y, root.z, coverage) });
                 // The shipped mesh's full base width is half of _GrassWidth. An
                 // orthographic two-unit viewport gives Size/2 pixels per world unit.
-                material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size * orthographicScale);
-                material.SetFloat("_GrassHeight", orthographicScale);
-                material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
-                material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
+                _material.SetFloat("_GrassWidth", originalPixelWidth * 4f / Size * orthographicScale);
+                _material.SetFloat("_GrassHeight", orthographicScale);
+                _material.SetFloat("_MinimumPixelWidth", minimumPixelWidth);
+                _material.SetFloat("_GrassAlphaToCoverage", samples > 1 ? 1f : 0f);
 
-                MaterialPropertyBlock properties = CreateDrawProperties(positions, empty, windTexture, groundTexture, time);
+                MaterialPropertyBlock properties = CreateDrawProperties(_positions, _empty, windTexture, groundTexture, time);
                 if (directionalAmbient)
                 {
                     // Identical grayscale SH channels isolate normal response with
@@ -421,13 +459,18 @@ namespace Cone.Grass.Tests
                 commands.SetViewport(new Rect(0f, 0f, Size, Size));
                 commands.ClearRenderTarget(false, true, Color.clear);
                 RenderingUtils.SetViewAndProjectionMatrices(commands, view, projection, false);
-                int pass = material.FindPass("GrassForward");
+                int pass = _material.FindPass("GrassForward");
                 Assert.That(pass, Is.GreaterThanOrEqualTo(0));
-                commands.DrawMesh(mesh, Matrix4x4.identity, material, 0, pass, properties);
+                commands.DrawMesh(mesh, Matrix4x4.identity, _material, 0, pass, properties);
                 if (samples > 1)
+                {
                     commands.ResolveAntiAliasedSurface(target, resolved);
+                }
                 else
+                {
                     commands.CopyTexture(target, resolved);
+                }
+
                 restoreGlobals();
                 GL.sRGBWrite = false;
                 Graphics.ExecuteCommandBuffer(commands);
@@ -449,10 +492,25 @@ namespace Cone.Grass.Tests
                 GL.sRGBWrite = previousSRGBWrite;
                 RenderTexture.active = previousTarget;
                 commands.Release();
-                if (mesh) Object.DestroyImmediate(mesh);
-                if (target) Object.DestroyImmediate(target);
-                if (resolved) Object.DestroyImmediate(resolved);
-                if (readback) Object.DestroyImmediate(readback);
+                if (mesh)
+                {
+                    Object.DestroyImmediate(mesh);
+                }
+
+                if (target)
+                {
+                    Object.DestroyImmediate(target);
+                }
+
+                if (resolved)
+                {
+                    Object.DestroyImmediate(resolved);
+                }
+
+                if (readback)
+                {
+                    Object.DestroyImmediate(readback);
+                }
             }
         }
 
@@ -489,7 +547,10 @@ namespace Cone.Grass.Tests
             string[] matrixNames = { "unity_MatrixV", "glstate_matrix_projection", "unity_MatrixVP" };
             var previousMatrices = new Matrix4x4[matrixNames.Length];
             for (int index = 0; index < matrixNames.Length; index++)
+            {
                 previousMatrices[index] = Shader.GetGlobalMatrix(matrixNames[index]);
+            }
+
             string[] vectorNames =
             {
                 "_WorldSpaceCameraPos", "_ScaledScreenParams", "unity_OrthoParams", "_ProjectionParams",
@@ -513,9 +574,14 @@ namespace Cone.Grass.Tests
             return () =>
             {
                 for (int index = 0; index < matrixNames.Length; index++)
+                {
                     commands.SetGlobalMatrix(matrixNames[index], previousMatrices[index]);
+                }
+
                 for (int index = 0; index < vectorNames.Length; index++)
+                {
                     commands.SetGlobalVector(vectorNames[index], previousVectors[index]);
+                }
             };
         }
 
@@ -523,7 +589,10 @@ namespace Cone.Grass.Tests
         {
             float area = 0f;
             foreach (Color pixel in pixels)
+            {
                 area += pixel.r;
+            }
+
             return area;
         }
 
@@ -531,7 +600,9 @@ namespace Cone.Grass.Tests
         {
             Assert.That(actual.Length, Is.EqualTo(expected.Length));
             for (int index = 0; index < actual.Length; index++)
+            {
                 Assert.That(actual[index].r, Is.EqualTo(expected[index].r).Within(1f / 255f), message + " Pixel " + index);
+            }
         }
     }
 }

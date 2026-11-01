@@ -34,7 +34,9 @@ namespace Cone.Grass
                 float densityFootprint = (2f * state.CaptureExtent) / state.Density.rt.width;
                 bool valid = TryGridBounds(bounds, spacing, out int minX, out int minZ, out int maxX, out int maxZ);
                 if (valid && !authored)
+                {
                     valid = AddDispatch(state, null, minX, minZ, maxX - minX, maxZ - minZ);
+                }
 
                 if (valid && authored)
                 {
@@ -52,7 +54,10 @@ namespace Cone.Grass
                             // the authored quad, including into an adjacent cell tile.
                             Bounds filteredBounds = GrassDispatchMath.ExpandXZ(source.Data.WorldBounds, densityFootprint);
                             if (!IntersectXZ(filteredBounds, bounds, out Bounds intersection))
+                            {
                                 continue;
+                            }
+
                             if (!TryGridBounds(intersection, spacing, out int x0, out int z0, out int x1, out int z1))
                             {
                                 valid = false;
@@ -68,27 +73,38 @@ namespace Cone.Grass
                                 break;
                             }
                             for (int tz = tz0; tz <= tz1 && valid; tz++)
-                            for (int tx = tx0; tx <= tx1; tx++)
                             {
-                                Vector2Int tile = new Vector2Int(tx, tz);
-                                if (group.Tiles.Contains(tile))
-                                    continue;
-                                if (!GrassDispatchMath.TryClipTile(cameraGrid, tx, tz, TileCells, out GrassGridRange clipped))
-                                    continue;
-                                if (!GrassDispatchMath.TryGetCandidateBounds(clipped, spacing, densityFootprint, out Bounds tileBounds))
+                                for (int tx = tx0; tx <= tx1; tx++)
                                 {
-                                    valid = false;
-                                    break;
-                                }
-                                if (!source.Data.IntersectsCoverage(tileBounds))
-                                    continue;
-                                if (!GrassDispatchMath.TryAddCandidateBudget(projectedCandidates, clipped.Width, clipped.Height,
+                                    Vector2Int tile = new Vector2Int(tx, tz);
+                                    if (group.Tiles.Contains(tile))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!GrassDispatchMath.TryClipTile(cameraGrid, tx, tz, TileCells, out GrassGridRange clipped))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!GrassDispatchMath.TryGetCandidateBounds(clipped, spacing, densityFootprint, out Bounds tileBounds))
+                                    {
+                                        valid = false;
+                                        break;
+                                    }
+                                    if (!source.Data.IntersectsCoverage(tileBounds))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!GrassDispatchMath.TryAddCandidateBudget(projectedCandidates, clipped.Width, clipped.Height,
                                         MaximumCandidates, out projectedCandidates))
-                                {
-                                    valid = false;
-                                    break;
+                                    {
+                                        valid = false;
+                                        break;
+                                    }
+                                    group.Tiles.Add(tile);
                                 }
-                                group.Tiles.Add(tile);
                             }
                         }
                         group.SortedTiles.Clear();
@@ -100,7 +116,10 @@ namespace Cone.Grass
                             int lastX = first.x;
                             while (i + 1 < group.SortedTiles.Count && group.SortedTiles[i + 1].y == first.y &&
                                 group.SortedTiles[i + 1].x == lastX + 1)
+                            {
                                 lastX = group.SortedTiles[++i].x;
+                            }
+
                             int x = Mathf.Max(minX, first.x * TileCells);
                             int z = Mathf.Max(minZ, first.y * TileCells);
                             int width = Mathf.Min(maxX, (lastX + 1) * TileCells) - x;
@@ -116,12 +135,17 @@ namespace Cone.Grass
                     // moving subset or allowing uint counters/dispatch dimensions to wrap.
                     state.RejectDispatches();
                     if (!state.WarnedBudget)
+                    {
                         Debug.LogWarning("Grass generation was skipped: the camera/source grid exceeds the safety budget of " +
                             MaximumCandidates + " candidate cells. Increase spacing, reduce draw distance, or use smaller authored areas.", owner);
+                    }
+
                     state.WarnedBudget = true;
                 }
                 else
+                {
                     state.WarnedBudget = false;
+                }
 
                 TextureHandle black = ImportTexture(graph, state, Texture2D.blackTexture);
                 TextureHandle white = ImportTexture(graph, state, Texture2D.whiteTexture);
@@ -144,23 +168,35 @@ namespace Cone.Grass
             private static bool AddDispatch(CameraState state, TerrainGroup group, int x, int z, int width, int height)
             {
                 if (width <= 0 || height <= 0)
+                {
                     return true;
+                }
+
                 if (!GrassDispatchMath.TryAddCandidateBudget(state.CandidateCount, width, height,
                         MaximumCandidates, out long updatedBudget))
+                {
                     return false;
+                }
+
                 state.CandidateCount = updatedBudget;
                 for (int dz = 0; dz < height; dz += MaximumDispatchCells)
-                for (int dx = 0; dx < width; dx += MaximumDispatchCells)
                 {
-                    if (state.DispatchCount == state.Dispatches.Count)
-                        state.Dispatches.Add(new DispatchData());
-                    DispatchData dispatch = state.Dispatches[state.DispatchCount++];
-                    dispatch.Group = group;
-                    dispatch.Start[0] = x + dx;
-                    dispatch.Start[1] = z + dz;
-                    dispatch.SizeInCells[0] = Mathf.Min(MaximumDispatchCells, width - dx);
-                    dispatch.SizeInCells[1] = Mathf.Min(MaximumDispatchCells, height - dz);
+                    for (int dx = 0; dx < width; dx += MaximumDispatchCells)
+                    {
+                        if (state.DispatchCount == state.Dispatches.Count)
+                        {
+                            state.Dispatches.Add(new DispatchData());
+                        }
+
+                        DispatchData dispatch = state.Dispatches[state.DispatchCount++];
+                        dispatch.Group = group;
+                        dispatch.Start[0] = x + dx;
+                        dispatch.Start[1] = z + dz;
+                        dispatch.SizeInCells[0] = Mathf.Min(MaximumDispatchCells, width - dx);
+                        dispatch.SizeInCells[1] = Mathf.Min(MaximumDispatchCells, height - dz);
+                    }
                 }
+
                 return true;
             }
 
@@ -174,10 +210,10 @@ namespace Cone.Grass
                 using (IComputeRenderGraphBuilder builder = graph.AddComputePass<GenerationPass>(
                            "Grass Cull And Generate", out GenerationPass pass))
                 {
-                    pass.Shader = generationShader;
-                    pass.ResetKernel = resetKernel;
-                    pass.GenerateKernel = generateKernel;
-                    pass.FinalizeKernel = finalizeKernel;
+                    pass.Shader = _generationShader;
+                    pass.ResetKernel = _resetKernel;
+                    pass.GenerateKernel = _generateKernel;
+                    pass.FinalizeKernel = _finalizeKernel;
                     pass.Positions = state.Positions;
                     pass.Counts = state.Counts;
                     pass.Arguments = state.Arguments;
@@ -199,18 +235,18 @@ namespace Cone.Grass
                     pass.Spacing = spacing;
                     pass.DrawDistance = distanceLimit;
                     pass.CapturePadding = capturePadding;
-                    pass.FullDensityDistance = Mathf.Clamp(FiniteOr(owner.fullDensityDistance, 30f), 0f, distanceLimit);
-                    pass.DensityExponent = Mathf.Max(0f, FiniteOr(owner.densityFalloffExponent, 4f));
-                    pass.DensityTransition = Mathf.Clamp01(FiniteOr(owner.densityTransition, 0.05f));
-                    float nearLod = Mathf.Max(0f, FiniteOr(owner.nearLodDistance, 30f));
-                    float farLod = Mathf.Max(nearLod, FiniteOr(owner.subdivisionDistance, 100f));
+                    pass.FullDensityDistance = Mathf.Clamp(FiniteOr(owner.FullDensityDistance, 30f), 0f, distanceLimit);
+                    pass.DensityExponent = Mathf.Max(0f, FiniteOr(owner.DensityFalloffExponent, 4f));
+                    pass.DensityTransition = Mathf.Clamp01(FiniteOr(owner.DensityTransition, 0.05f));
+                    float nearLod = Mathf.Max(0f, FiniteOr(owner.NearLodDistance, 30f));
+                    float farLod = Mathf.Max(nearLod, FiniteOr(owner.SubdivisionDistance, 100f));
                     pass.LodDistances = new Vector4(nearLod, farLod, 0f, 0f);
-                    pass.LodTransition = Mathf.Max(0f, FiniteOr(owner.lodTransitionWidth, 10f));
+                    pass.LodTransition = Mathf.Max(0f, FiniteOr(owner.LodTransitionWidth, 10f));
                     pass.BoundsRadius = radius;
                     pass.Authored = authored;
                     pass.DensityShortens = state.DensityShortens;
-                    pass.ArgumentStride = argumentStride;
-                    pass.ArgumentCountOffset = argumentCountOffset;
+                    pass.ArgumentStride = _argumentStride;
+                    pass.ArgumentCountOffset = _argumentCountOffset;
                     builder.UseTexture(height, AccessFlags.Read);
                     builder.UseTexture(density, AccessFlags.Read);
                     builder.UseTexture(mask, AccessFlags.Read);
@@ -287,9 +323,12 @@ namespace Cone.Grass
             private static void BuildReadback(RenderGraph graph, CameraState state, BufferHandle counts,
                 InfiniteGrassRenderer owner)
             {
-                if (!owner.previewVisibleGrassCount || !SystemInfo.supportsAsyncGPUReadback ||
+                if (!owner.PreviewVisibleGrassCount || !SystemInfo.supportsAsyncGPUReadback ||
                     state.ReadbackPending || Time.realtimeSinceStartup < state.NextReadbackTime)
+                {
                     return;
+                }
+
                 state.ReadbackPending = true;
                 state.NextReadbackTime = Time.realtimeSinceStartup + 0.25f;
                 state.ReadbackOwner = owner;
@@ -310,59 +349,79 @@ namespace Cone.Grass
 
             private bool EnsurePlacementMaterial()
             {
-                if (placementMaterial)
+                if (_placementMaterial)
+                {
                     return true;
+                }
+
                 Shader shader = Resources.Load<Shader>("InfiniteGrassPlacement");
                 if (!shader || !shader.isSupported)
                 {
-                    if (!missingPlacementWarning)
+                    if (!_missingPlacementWarning)
+                    {
                         Debug.LogWarning("Grass authored areas require the supported InfiniteGrassPlacement resource shader.");
-                    missingPlacementWarning = true;
+                    }
+
+                    _missingPlacementWarning = true;
                     return false;
                 }
-                placementMaterial = CoreUtils.CreateEngineMaterial(shader);
-                captureQuad = new Mesh { name = "Grass Capture Quad", hideFlags = HideFlags.HideAndDontSave };
-                captureQuad.vertices = new[]
+                _placementMaterial = CoreUtils.CreateEngineMaterial(shader);
+                _captureQuad = new Mesh { name = "Grass Capture Quad", hideFlags = HideFlags.HideAndDontSave };
+                _captureQuad.vertices = new[]
                 {
                     new Vector3(-0.5f, 0f, -0.5f), new Vector3(0.5f, 0f, -0.5f),
                     new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f)
                 };
-                captureQuad.uv = new[] { Vector2.zero, Vector2.right, Vector2.up, Vector2.one };
-                captureQuad.triangles = new[] { 0, 2, 1, 1, 2, 3 };
-                captureQuad.UploadMeshData(true);
+                _captureQuad.uv = new[] { Vector2.zero, Vector2.right, Vector2.up, Vector2.one };
+                _captureQuad.triangles = new[] { 0, 2, 1, 1, 2, 3 };
+                _captureQuad.UploadMeshData(true);
                 return true;
             }
 
             // The flower-head shader, loaded once; heads are skipped with a warning when it is missing or unsupported.
             private Shader EnsureHeadShader()
             {
-                if (headShader)
-                    return headShader;
+                if (_headShader)
+                {
+                    return _headShader;
+                }
+
                 Shader shader = Resources.Load<Shader>("InfiniteGrassHeads");
                 if (!shader || !shader.isSupported)
                 {
-                    if (!missingHeadWarning)
+                    if (!_missingHeadWarning)
+                    {
                         Debug.LogWarning("Grass flower heads require the supported InfiniteGrassHeads resource shader.");
-                    missingHeadWarning = true;
+                    }
+
+                    _missingHeadWarning = true;
                     return null;
                 }
-                headShader = shader;
-                return headShader;
+                _headShader = shader;
+                return _headShader;
             }
 
             private static int FindInstanceCountOffset()
             {
                 int size = Marshal.SizeOf<GraphicsBuffer.IndirectDrawIndexedArgs>();
                 if (size != GraphicsBuffer.IndirectDrawIndexedArgs.size || size % sizeof(uint) != 0)
+                {
                     throw new NotSupportedException("The managed and native indirect argument sizes differ.");
+                }
+
                 var probe = new GraphicsBuffer.IndirectDrawIndexedArgs { instanceCount = 123456789u };
                 IntPtr memory = Marshal.AllocHGlobal(size);
                 try
                 {
                     Marshal.StructureToPtr(probe, memory, false);
                     for (int offset = 0; offset < size; offset += sizeof(uint))
+                    {
                         if (Marshal.ReadInt32(memory, offset) == 123456789)
+                        {
                             return offset;
+                        }
+                    }
+
                     throw new NotSupportedException("The indirect instance-count field could not be located.");
                 }
                 finally
@@ -392,14 +451,14 @@ namespace Cone.Grass
             private static float CalculateBladeRadius(Material material, InfiniteGrassRenderer owner, Camera camera, float scaledHeight)
             {
                 // The tallest, widest and most curved kind, and a head on its tip, bound every root.
-                Vector4 kinds = owner.variants && owner.variants.KindCount > 0 ? owner.variants.MaximumScales() : new Vector4(1f, 1f, 1f, 0f);
-                float height = Mathf.Max(0f, material.GetFloat("_GrassHeight")) * kinds.x * (1f + Mathf.Max(0f, owner.subdivisionHeightBoost));
+                Vector4 kinds = owner.Variants && owner.Variants.KindCount > 0 ? owner.Variants.MaximumScales() : new Vector4(1f, 1f, 1f, 0f);
+                float height = Mathf.Max(0f, material.GetFloat("_GrassHeight")) * kinds.x * (1f + Mathf.Max(0f, owner.SubdivisionHeightBoost));
                 float width = Mathf.Max(0f, material.GetFloat("_GrassWidth")) * kinds.y + Mathf.Max(0f, material.GetFloat("_ExpandDistantGrassWidth"));
-                float pixelWidth = owner.minimumPixelWidth * 2f *
-                    (camera.orthographic ? 1f : Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f))) /
+                float pixelWidth = owner.MinimumPixelWidth * 2f *
+                    (camera.orthographic ? 1f : Mathf.Max(0.01f, FiniteOr(owner.DrawDistance, 300f))) /
                     (Mathf.Max(1f, scaledHeight) * Mathf.Max(0.001f, Mathf.Abs(camera.projectionMatrix.m11)));
                 return height + kinds.w + Mathf.Max(width * 0.25f, pixelWidth * 0.5f) +
-                    Mathf.Abs(material.GetFloat("_GrassCurving")) * kinds.z * 1.415f + Mathf.Max(0f, owner.cullingPadding);
+                    Mathf.Abs(material.GetFloat("_GrassCurving")) * kinds.z * 1.415f + Mathf.Max(0f, owner.CullingPadding);
             }
 
             private static Bounds CalculateCameraBounds(Camera camera, float drawDistance, float padding)
@@ -407,9 +466,16 @@ namespace Cone.Grass
                 float far = Mathf.Max(camera.nearClipPlane, Mathf.Min(drawDistance, camera.farClipPlane));
                 Bounds bounds = new Bounds(camera.transform.position, Vector3.zero);
                 for (int plane = 0; plane < 2; plane++)
-                for (int y = 0; y < 2; y++)
-                for (int x = 0; x < 2; x++)
-                    bounds.Encapsulate(camera.ViewportToWorldPoint(new Vector3(x, y, plane == 0 ? camera.nearClipPlane : far)));
+                {
+                    for (int y = 0; y < 2; y++)
+                    {
+                        for (int x = 0; x < 2; x++)
+                        {
+                            bounds.Encapsulate(camera.ViewportToWorldPoint(new Vector3(x, y, plane == 0 ? camera.nearClipPlane : far)));
+                        }
+                    }
+                }
+
                 bounds.Expand(padding * 2f);
                 Vector3 min = bounds.min;
                 Vector3 max = bounds.max;
@@ -427,7 +493,10 @@ namespace Cone.Grass
             {
                 minX = minZ = maxX = maxZ = 0;
                 if (!GrassDispatchMath.TryGetGridRange(bounds, spacing, out GrassGridRange range))
+                {
                     return false;
+                }
+
                 minX = range.MinX;
                 minZ = range.MinZ;
                 maxX = range.MaxX;
@@ -454,7 +523,10 @@ namespace Cone.Grass
             private static TextureHandle ImportTexture(RenderGraph graph, CameraState state, Texture texture)
             {
                 if (state.ImportedTextures.TryGetValue(texture, out TextureHandle imported))
+                {
                     return imported;
+                }
+
                 if (!state.TextureWrappers.TryGetValue(texture, out TextureWrapper wrapper))
                 {
                     wrapper = new TextureWrapper

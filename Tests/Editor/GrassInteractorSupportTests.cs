@@ -14,10 +14,10 @@ namespace Cone.Grass.Tests
 {
     public sealed class GrassInteractorSupportTests : GrassPhysicsFixtureTests
     {
-        private readonly List<Scene> scenes = new List<Scene>();
-        private readonly List<Object> assets = new List<Object>();
-        private readonly List<GrassPlacementArea> previousAreas = new List<GrassPlacementArea>();
-        private Scene scene;
+        private readonly List<Scene> _scenes = new List<Scene>();
+        private readonly List<Object> _assets = new List<Object>();
+        private readonly List<GrassPlacementArea> _previousAreas = new List<GrassPlacementArea>();
+        private Scene _scene;
 
         [SetUp]
         public void SetUp()
@@ -26,28 +26,51 @@ namespace Cone.Grass.Tests
             // captures. Preserve existing authored coverage while these fixtures own it.
             var active = GrassPlacementArea.ActiveAreas;
             for (int i = 0; i < active.Count; i++)
+            {
                 if (active[i] && active[i].enabled)
-                    previousAreas.Add(active[i]);
-            foreach (GrassPlacementArea area in previousAreas)
+                {
+                    _previousAreas.Add(active[i]);
+                }
+            }
+
+            foreach (GrassPlacementArea area in _previousAreas)
+            {
                 area.enabled = false;
-            scene = NewPhysicsScene();
+            }
+
+            _scene = NewPhysicsScene();
         }
 
         [TearDown]
         public void TearDown()
         {
-            for (int i = scenes.Count - 1; i >= 0; i--)
-                if (scenes[i].IsValid() && scenes[i].isLoaded)
-                    GrassPhysicsFixtureScenes.Close(scenes[i]);
-            for (int i = assets.Count - 1; i >= 0; i--)
-                if (assets[i])
-                    Object.DestroyImmediate(assets[i]);
-            scenes.Clear();
-            assets.Clear();
-            foreach (GrassPlacementArea area in previousAreas)
+            for (int i = _scenes.Count - 1; i >= 0; i--)
+            {
+                if (_scenes[i].IsValid() && _scenes[i].isLoaded)
+                {
+                    GrassPhysicsFixtureScenes.Close(_scenes[i]);
+                }
+            }
+
+            for (int i = _assets.Count - 1; i >= 0; i--)
+            {
+                if (_assets[i])
+                {
+                    Object.DestroyImmediate(_assets[i]);
+                }
+            }
+
+            _scenes.Clear();
+            _assets.Clear();
+            foreach (GrassPlacementArea area in _previousAreas)
+            {
                 if (area)
+                {
                     area.enabled = true;
-            previousAreas.Clear();
+                }
+            }
+
+            _previousAreas.Clear();
         }
 
         [TestCase(0)]
@@ -93,7 +116,7 @@ namespace Cone.Grass.Tests
             Assert.That(shape.LowerSphereCenter.y, Is.EqualTo(shape.Center.y - (kind == 2 ? 0f : 2f)).Within(0.0001f));
             Assert.That(shape.Actor, Is.SameAs(collider));
             Assert.That(shape.ActorRoot, Is.SameAs(actor.transform));
-            Assert.That(shape.PhysicsScene, Is.EqualTo(scene.GetPhysicsScene()));
+            Assert.That(shape.PhysicsScene, Is.EqualTo(_scene.GetPhysicsScene()));
         }
 
         [Test]
@@ -153,7 +176,9 @@ namespace Cone.Grass.Tests
             BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
             Collider actor;
             if (kind == 0)
+            {
                 actor = NewCapsule(Vector3.up);
+            }
             else if (kind == 1)
             {
                 var controller = NewObject("controller").AddComponent<CharacterController>();
@@ -191,13 +216,13 @@ namespace Cone.Grass.Tests
         [Test]
         public void GroundedSlopeUsesLowerSphereClearanceInsteadOfTheCenterlineBottomGap()
         {
-            const float radius = 0.5f;
+            const float Radius = 0.5f;
             Quaternion rotation = Quaternion.Euler(0f, 0f, 45f);
             Vector3 normal = rotation * Vector3.up;
             BoxCollider floor = NewFloor(Vector3.zero, new Vector2(20f, 20f));
             floor.transform.rotation = rotation;
             floor.transform.position = -normal * 0.25f;
-            float lowerSphereY = radius / normal.y;
+            float lowerSphereY = Radius / normal.y;
             CapsuleCollider actor = NewCapsule(new Vector3(0f, lowerSphereY + 0.5f, 0f));
             Physics.SyncTransforms();
             GrassInteractorShape shape = Shape(actor);
@@ -206,7 +231,7 @@ namespace Cone.Grass.Tests
             var resolver = new GrassInteractorSupport();
             Assert.That(resolver.TryResolve(shape, floor, 0.05f, 0.05f, out var sample, out _), Is.True);
             Assert.That(sample.Clearance, Is.EqualTo(0f).Within(0.002f));
-            Assert.That(sample.GroundPoint.x, Is.EqualTo(radius * -normal.x).Within(0.003f));
+            Assert.That(sample.GroundPoint.x, Is.EqualTo(Radius * -normal.x).Within(0.003f));
 
             shape = shape.WithPose(shape.Center + Vector3.up * 0.2f, shape.Radius, shape.Height);
             Assert.That(resolver.TryResolve(shape, floor, 0.05f, 0.05f, out _, out var status), Is.False);
@@ -220,7 +245,10 @@ namespace Cone.Grass.Tests
             BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
             GameObject actorRoot = NewObject("actor root");
             if (sharedBodySibling)
+            {
                 actorRoot.AddComponent<Rigidbody>().isKinematic = true;
+            }
+
             CapsuleCollider actor = NewCapsule(Vector3.up);
             actor.transform.SetParent(actorRoot.transform, true);
             GameObject helper = NewObject("actor helper");
@@ -463,7 +491,7 @@ namespace Cone.Grass.Tests
             BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
             GrassPlacementArea area = NewArea(floor, Vector3.zero, new Vector2(10f, 10f));
             var density = ScriptableObject.CreateInstance<GrassDensityAsset>();
-            assets.Add(density);
+            _assets.Add(density);
             density.Resize(16, 16, false);
             density.Fill(1f);
             area.SetDensityAsset(density, false);
@@ -489,7 +517,7 @@ namespace Cone.Grass.Tests
             GrassPlacementArea area = NewTerrainArea(terrain);
             TerrainCollider collider = terrain.GetComponent<TerrainCollider>();
             var other = new TerrainData { heightmapResolution = 33, size = new Vector3(10f, 1f, 10f) };
-            assets.Add(other);
+            _assets.Add(other);
             collider.terrainData = other;
             CapsuleCollider actor = NewCapsule(Vector3.up);
             Physics.SyncTransforms();
@@ -503,8 +531,8 @@ namespace Cone.Grass.Tests
             // assigned reference must itself prevent rebinding to that surface.
             BoxCollider fallback = NewFloor(Vector3.zero, new Vector2(10f, 10f));
             var local = new SerializedObject(area);
-            local.FindProperty("useTerrainBounds").boolValue = false;
-            local.FindProperty("paintSurface").objectReferenceValue = fallback;
+            local.FindProperty("_useTerrainBounds").boolValue = false;
+            local.FindProperty("_paintSurface").objectReferenceValue = fallback;
             local.ApplyModifiedPropertiesWithoutUndo();
             EntityId assigned = terrain.GetEntityId();
             Assert.That(assigned, Is.Not.EqualTo(EntityId.None));
@@ -547,7 +575,7 @@ namespace Cone.Grass.Tests
             Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.MissingSupport));
 
             var cleared = new SerializedObject(area);
-            cleared.FindProperty("terrain").objectReferenceValue = null;
+            cleared.FindProperty("_terrain").objectReferenceValue = null;
             cleared.ApplyModifiedPropertiesWithoutUndo();
             Assert.That(!area.Terrain, Is.True);
             Assert.That(area.PaintSurface, Is.SameAs(fallback));
@@ -579,7 +607,7 @@ namespace Cone.Grass.Tests
                 triangles = new[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 }
             };
             mesh.RecalculateBounds();
-            assets.Add(mesh);
+            _assets.Add(mesh);
             var floor = NewObject("floor with a gap").AddComponent<MeshCollider>();
             floor.sharedMesh = mesh;
             CapsuleCollider actor = NewCapsule(new Vector3(-2f, 1f, 0f));
@@ -614,14 +642,19 @@ namespace Cone.Grass.Tests
                     extras.Add(helper);
                 }
                 else
+                {
                     extras.Add(NewFloor(Vector3.down * (0.02f * (i + 1)), new Vector2(10f, 10f)).gameObject);
+                }
             }
             Physics.SyncTransforms();
             var resolver = new GrassInteractorSupport(4);
             Assert.That(resolver.TryResolve(Shape(actor), floor, 0.1f, 0.05f, out _, out var status), Is.False);
             Assert.That(status, Is.EqualTo(GrassInteractorSupportStatus.QueryOverflow));
             foreach (GameObject extra in extras)
+            {
                 Object.DestroyImmediate(extra);
+            }
+
             Physics.SyncTransforms();
             Assert.That(resolver.TryResolve(Shape(actor), floor, 0.1f, 0.05f, out var sample, out _), Is.True);
             Assert.That(sample.Support, Is.SameAs(floor));
@@ -644,7 +677,10 @@ namespace Cone.Grass.Tests
             BoxCollider floor = NewFloor(Vector3.zero, new Vector2(10f, 10f));
             var areas = new List<GrassPlacementArea>();
             for (int i = 0; i < 5; i++)
+            {
                 areas.Add(NewArea(floor, Vector3.zero, new Vector2(10f, 10f)));
+            }
+
             CapsuleCollider actor = NewCapsule(Vector3.up);
             Physics.SyncTransforms();
             var resolver = new GrassInteractorSupport(4);
@@ -672,7 +708,7 @@ namespace Cone.Grass.Tests
             SceneManager.MoveGameObjectToScene(floor.gameObject, NewPhysicsScene());
             Physics.SyncTransforms();
             AssertInvalidSupport();
-            SceneManager.MoveGameObjectToScene(floor.gameObject, scene);
+            SceneManager.MoveGameObjectToScene(floor.gameObject, _scene);
             Physics.SyncTransforms();
             Assert.That(resolver.TryResolve(shape, floor, 0.1f, 0.05f, out _, out _), Is.True);
             Object.DestroyImmediate(floor);
@@ -737,7 +773,7 @@ namespace Cone.Grass.Tests
             interactor.Configure(actor, floor, actor.transform);
             using (var serialized = new SerializedObject(interactor))
             {
-                serialized.FindProperty("explicitSupport").objectReferenceValue = null;
+                serialized.FindProperty("_explicitSupport").objectReferenceValue = null;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
             Collider empty = interactor.ExplicitSupport;
@@ -754,7 +790,7 @@ namespace Cone.Grass.Tests
 
             using (var serialized = new SerializedObject(area))
             {
-                serialized.FindProperty("paintSurface").objectReferenceValue = null;
+                serialized.FindProperty("_paintSurface").objectReferenceValue = null;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
             Assert.That(ReferenceEquals(area.PaintSurface, null), Is.False,
@@ -767,7 +803,7 @@ namespace Cone.Grass.Tests
             Assert.That(sample.Support, Is.SameAs(floor));
             using (var serialized = new SerializedObject(area))
             {
-                serialized.FindProperty("paintSurface").objectReferenceValue = floor;
+                serialized.FindProperty("_paintSurface").objectReferenceValue = floor;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
@@ -791,12 +827,20 @@ namespace Cone.Grass.Tests
             GrassInteractorShape shape = Shape(actor);
             var resolver = new GrassInteractorSupport();
             for (int i = 0; i < 8; i++)
+            {
                 Assert.That(resolver.TryResolve(shape, null, 0.1f, 0.05f, out _, out _), Is.True);
+            }
+
             int accepted = 0;
             long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 16; i++)
+            {
                 if (resolver.TryResolve(shape, null, 0.1f, 0.05f, out _, out _))
+                {
                     accepted++;
+                }
+            }
+
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.That(accepted, Is.EqualTo(16));
             Assert.That(allocated, Is.Zero);
@@ -805,14 +849,14 @@ namespace Cone.Grass.Tests
         private Scene NewPhysicsScene()
         {
             Scene created = GrassPhysicsFixtureScenes.Create("Grass support " + Guid.NewGuid().ToString("N"));
-            scenes.Add(created);
+            _scenes.Add(created);
             return created;
         }
 
         private GameObject NewObject(string name)
         {
             var item = new GameObject(name);
-            SceneManager.MoveGameObjectToScene(item, scene);
+            SceneManager.MoveGameObjectToScene(item, _scene);
             return item;
         }
 
@@ -830,7 +874,7 @@ namespace Cone.Grass.Tests
         {
             GameObject item = GameObject.CreatePrimitive(PrimitiveType.Cube);
             item.name = "support floor";
-            SceneManager.MoveGameObjectToScene(item, scene);
+            SceneManager.MoveGameObjectToScene(item, _scene);
             item.transform.position = topCenter - Vector3.up * 0.25f;
             item.transform.localScale = new Vector3(size.x, 0.5f, size.y);
             return item.GetComponent<BoxCollider>();
@@ -841,10 +885,10 @@ namespace Cone.Grass.Tests
             var area = NewObject("grass area").AddComponent<GrassPlacementArea>();
             area.transform.position = center;
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Box;
-            serialized.FindProperty("size").vector2Value = size;
-            serialized.FindProperty("edgeFalloff").floatValue = 0f;
-            serialized.FindProperty("paintSurface").objectReferenceValue = support;
+            serialized.FindProperty("_shape").enumValueIndex = (int)GrassPlacementShape.Box;
+            serialized.FindProperty("_size").vector2Value = size;
+            serialized.FindProperty("_edgeFalloff").floatValue = 0f;
+            serialized.FindProperty("_paintSurface").objectReferenceValue = support;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             return area;
         }
@@ -852,9 +896,9 @@ namespace Cone.Grass.Tests
         private Terrain NewTerrain(Vector3 origin, Vector3 size)
         {
             var data = new TerrainData { heightmapResolution = 33, size = size };
-            assets.Add(data);
+            _assets.Add(data);
             GameObject item = Terrain.CreateTerrainGameObject(data);
-            SceneManager.MoveGameObjectToScene(item, scene);
+            SceneManager.MoveGameObjectToScene(item, _scene);
             item.transform.position = origin;
             return item.GetComponent<Terrain>();
         }
@@ -869,8 +913,8 @@ namespace Cone.Grass.Tests
         private static void SetExternalCrop(GrassPlacementArea area, Rect crop)
         {
             var serialized = new SerializedObject(area);
-            serialized.FindProperty("shape").enumValueIndex = (int)GrassPlacementShape.Texture;
-            serialized.FindProperty("densityTexture").objectReferenceValue = Texture2D.whiteTexture;
+            serialized.FindProperty("_shape").enumValueIndex = (int)GrassPlacementShape.Texture;
+            serialized.FindProperty("_densityTexture").objectReferenceValue = Texture2D.whiteTexture;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             area.SetTextureCoverageBounds(crop);
         }
@@ -887,7 +931,7 @@ namespace Cone.Grass.Tests
     // all existing collision cases without paying for an entry per individual case.
     public abstract class GrassPhysicsFixtureTests
     {
-        private bool previousPause;
+        private bool _previousPause;
 
         [UnityOneTimeSetUp]
         public IEnumerator EnterPhysicsSession()
@@ -896,7 +940,7 @@ namespace Cone.Grass.Tests
             bool reload = !EditorSettings.enterPlayModeOptionsEnabled ||
                 (EditorSettings.enterPlayModeOptions & EnterPlayModeOptions.DisableDomainReload) == 0;
             yield return new EnterPlayMode(expectDomainReload: reload);
-            previousPause = EditorApplication.isPaused;
+            _previousPause = EditorApplication.isPaused;
             // These fixtures drive physics queries and sampling explicitly. Pausing
             // also preserves their original immediate Editor resource-release checks:
             // URP CoreUtils.Destroy uses DestroyImmediate in a paused Editor session.
@@ -910,7 +954,7 @@ namespace Cone.Grass.Tests
         {
             if (!Application.isPlaying)
             {
-                EditorApplication.isPaused = previousPause;
+                EditorApplication.isPaused = _previousPause;
                 Assert.Fail("The shared physics session ended before its owned-scene cleanup was verified.");
             }
             // Let runtime scene unloads progress without changing any Editor setting.
@@ -923,15 +967,18 @@ namespace Cone.Grass.Tests
                 try { next = drain.MoveNext(); }
                 catch (Exception error) { cleanupFailure = error.ToString(); break; }
                 if (!next)
+                {
                     break;
+                }
+
                 yield return drain.Current;
             }
             try { cleanupFailure = GrassPhysicsFixtureScenes.CheckCleanup() ?? cleanupFailure; }
             catch (Exception error) { cleanupFailure = error.ToString(); }
             // Even a cleanup assertion must return the Editor to its original mode.
-            EditorApplication.isPaused = previousPause;
+            EditorApplication.isPaused = _previousPause;
             yield return new ExitPlayMode();
-            EditorApplication.isPaused = previousPause;
+            EditorApplication.isPaused = _previousPause;
             Assert.That(cleanupFailure, Is.Null, cleanupFailure);
         }
     }
@@ -940,30 +987,37 @@ namespace Cone.Grass.Tests
     {
         private sealed class OwnedScene
         {
-            internal Scene Scene;
-            internal PhysicsScene Physics;
-            internal bool Local;
-            internal AsyncOperation Unload;
+            internal Scene _scene;
+            internal PhysicsScene _physics;
+            internal bool _local;
+            internal AsyncOperation _unload;
         }
 
-        private static readonly List<OwnedScene> owned = new List<OwnedScene>();
-        private static Scene active;
-        private static Scene[] existing;
-        private static HashSet<Object> nativeResources;
-        private static Dictionary<GrassColliderInteractor, bool> existingProducers;
+        private static readonly List<OwnedScene> s_owned = new List<OwnedScene>();
+        private static Scene s_active;
+        private static Scene[] s_existing;
+        private static HashSet<Object> s_nativeResources;
+        private static Dictionary<GrassColliderInteractor, bool> s_existingProducers;
 
         internal static void Begin()
         {
-            Assert.That(owned, Is.Empty, "The previous fixture must release all of its scenes.");
-            active = SceneManager.GetActiveScene();
-            existing = new Scene[SceneManager.sceneCount];
-            for (int i = 0; i < existing.Length; i++)
-                existing[i] = SceneManager.GetSceneAt(i);
-            nativeResources = InteractionResources();
-            existingProducers = new Dictionary<GrassColliderInteractor, bool>();
+            Assert.That(s_owned, Is.Empty, "The previous fixture must release all of its scenes.");
+            s_active = SceneManager.GetActiveScene();
+            s_existing = new Scene[SceneManager.sceneCount];
+            for (int i = 0; i < s_existing.Length; i++)
+            {
+                s_existing[i] = SceneManager.GetSceneAt(i);
+            }
+
+            s_nativeResources = InteractionResources();
+            s_existingProducers = new Dictionary<GrassColliderInteractor, bool>();
             foreach (GrassColliderInteractor producer in Resources.FindObjectsOfTypeAll<GrassColliderInteractor>())
+            {
                 if (producer && producer.gameObject.scene.IsValid() && producer.gameObject.scene.isLoaded)
-                    existingProducers.Add(producer, producer.enabled);
+                {
+                    s_existingProducers.Add(producer, producer.enabled);
+                }
+            }
         }
 
         internal static Scene Create(string name) => Create(name, LocalPhysicsMode.Physics3D);
@@ -972,18 +1026,22 @@ namespace Cone.Grass.Tests
         {
             Assert.That(Application.isPlaying, Is.True, "Enter the shared fixture Play session before creating a local physics world.");
             Scene scene = SceneManager.CreateScene(name, new CreateSceneParameters(mode));
-            var entry = new OwnedScene { Scene = scene, Physics = scene.GetPhysicsScene(), Local = mode == LocalPhysicsMode.Physics3D };
-            owned.Add(entry); // Own it before an assertion can fail.
+            var entry = new OwnedScene { _scene = scene, _physics = scene.GetPhysicsScene(), _local = mode == LocalPhysicsMode.Physics3D };
+            s_owned.Add(entry); // Own it before an assertion can fail.
             Assert.That(EditorSceneManager.IsPreviewScene(scene), Is.False);
-            Assert.That(entry.Physics.IsValid(), Is.True);
-            if (entry.Local)
+            Assert.That(entry._physics.IsValid(), Is.True);
+            if (entry._local)
             {
-                Assert.That(entry.Physics, Is.Not.EqualTo(Physics.defaultPhysicsScene));
-                foreach (OwnedScene other in owned)
-                    if (other != entry && other.Scene.IsValid() && other.Scene.isLoaded)
-                        Assert.That(entry.Physics, Is.Not.EqualTo(other.Physics), "Each fixture scene needs a distinct native physics world.");
+                Assert.That(entry._physics, Is.Not.EqualTo(Physics.defaultPhysicsScene));
+                foreach (OwnedScene other in s_owned)
+                {
+                    if (other != entry && other._scene.IsValid() && other._scene.isLoaded)
+                    {
+                        Assert.That(entry._physics, Is.Not.EqualTo(other._physics), "Each fixture scene needs a distinct native physics world.");
+                    }
+                }
             }
-            Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(active), "Creating a fixture must preserve the active scene.");
+            Assert.That(SceneManager.GetActiveScene(), Is.EqualTo(s_active), "Creating a fixture must preserve the active scene.");
             return scene;
         }
 
@@ -1028,46 +1086,76 @@ namespace Cone.Grass.Tests
 
         internal static void Close(Scene scene)
         {
-            OwnedScene entry = owned.Find(item => item.Scene == scene);
+            OwnedScene entry = s_owned.Find(item => item._scene == scene);
             Assert.That(entry, Is.Not.Null, "Only the current fixture's owned scene may be unloaded.");
-            if (entry.Unload != null || !scene.IsValid() || !scene.isLoaded)
+            if (entry._unload != null || !scene.IsValid() || !scene.isLoaded)
+            {
                 return;
+            }
             // Runtime scene unload is asynchronous. Remove components/registrations now,
             // then await the scene and deferred native-resource releases before exit.
             foreach (GameObject root in scene.GetRootGameObjects())
+            {
                 Object.DestroyImmediate(root);
-            entry.Unload = SceneManager.UnloadSceneAsync(scene);
-            Assert.That(entry.Unload, Is.Not.Null);
+            }
+
+            entry._unload = SceneManager.UnloadSceneAsync(scene);
+            Assert.That(entry._unload, Is.Not.Null);
         }
 
         internal static IEnumerator Drain()
         {
-            foreach (OwnedScene entry in owned)
-                Close(entry.Scene);
-            foreach (OwnedScene entry in owned)
-                if (entry.Unload != null)
-                    while (!entry.Unload.isDone)
+            foreach (OwnedScene entry in s_owned)
+            {
+                Close(entry._scene);
+            }
+
+            foreach (OwnedScene entry in s_owned)
+            {
+                if (entry._unload != null)
+                {
+                    while (!entry._unload.isDone)
+                    {
                         yield return null;
+                    }
+                }
+            }
+
             yield return null; // CoreUtils.Destroy uses runtime deferred destruction.
         }
 
         internal static string CheckCleanup()
         {
             string failure = null;
-            foreach (OwnedScene entry in owned)
-                if ((entry.Scene.IsValid() && entry.Scene.isLoaded) || (entry.Local && entry.Physics.IsValid()))
+            foreach (OwnedScene entry in s_owned)
+            {
+                if ((entry._scene.IsValid() && entry._scene.isLoaded) || (entry._local && entry._physics.IsValid()))
+                {
                     failure = "An owned scene or its isolated native physics world survived fixture teardown.";
-            if (SceneManager.GetActiveScene() != active || SceneManager.sceneCount != existing.Length)
+                }
+            }
+
+            if (SceneManager.GetActiveScene() != s_active || SceneManager.sceneCount != s_existing.Length)
+            {
                 failure = "Fixture teardown changed the pre-existing active scene or loaded scene count.";
-            for (int i = 0; i < existing.Length && i < SceneManager.sceneCount; i++)
-                if (SceneManager.GetSceneAt(i) != existing[i])
+            }
+
+            for (int i = 0; i < s_existing.Length && i < SceneManager.sceneCount; i++)
+            {
+                if (SceneManager.GetSceneAt(i) != s_existing[i])
+                {
                     failure = "Fixture teardown changed a pre-existing scene's identity/order.";
+                }
+            }
+
             var remaining = InteractionResources();
-            remaining.ExceptWith(nativeResources);
-            foreach (var previous in existingProducers)
+            remaining.ExceptWith(s_nativeResources);
+            foreach (var previous in s_existingProducers)
             {
                 if (!previous.Key || previous.Key.enabled != previous.Value)
+                {
                     failure = "Fixture teardown did not restore a pre-existing grass producer's enabled state.";
+                }
                 else
                 {
                     // Existing tests temporarily disable producers. Their own resources
@@ -1076,17 +1164,27 @@ namespace Cone.Grass.Tests
                         .GetValue(previous.Key) as GrassInteractionMesh;
                     if (resources != null)
                     {
-                        if (resources.Mesh) remaining.Remove(resources.Mesh);
-                        if (resources.Material) remaining.Remove(resources.Material);
+                        if (resources.Mesh)
+                        {
+                            remaining.Remove(resources.Mesh);
+                        }
+
+                        if (resources.Material)
+                        {
+                            remaining.Remove(resources.Material);
+                        }
                     }
                 }
             }
             if (remaining.Count != 0)
+            {
                 failure = "Fixture teardown leaked an unowned grass interaction mesh/material.";
-            owned.Clear();
-            existing = null;
-            nativeResources = null;
-            existingProducers = null;
+            }
+
+            s_owned.Clear();
+            s_existing = null;
+            s_nativeResources = null;
+            s_existingProducers = null;
             return failure;
         }
 
@@ -1094,11 +1192,21 @@ namespace Cone.Grass.Tests
         {
             var ids = new HashSet<Object>();
             foreach (Mesh mesh in Resources.FindObjectsOfTypeAll<Mesh>())
+            {
                 if (mesh.name == "Grass Collider Interaction")
+                {
                     ids.Add(mesh);
+                }
+            }
+
             foreach (Material material in Resources.FindObjectsOfTypeAll<Material>())
+            {
                 if (material.name == "Grass Collider Interaction")
+                {
                     ids.Add(material);
+                }
+            }
+
             return ids;
         }
     }

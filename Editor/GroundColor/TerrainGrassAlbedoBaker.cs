@@ -54,49 +54,49 @@ namespace Cone.Grass.Editor
         }
         private readonly struct BakedOutputState
         {
-            private readonly uint updateCount;
-            private readonly int width, height, mipCount, anisoLevel, dirtyCount;
-            private readonly TextureFormat format;
-            private readonly UnityEngine.Experimental.Rendering.GraphicsFormat graphicsFormat;
-            private readonly FilterMode filterMode;
-            private readonly TextureWrapMode wrapU, wrapV;
-            private readonly float mipBias;
-            private readonly bool isReadable, isDirty;
+            private readonly uint _updateCount;
+            private readonly int _width, _height, _mipCount, _anisoLevel, _dirtyCount;
+            private readonly TextureFormat _format;
+            private readonly UnityEngine.Experimental.Rendering.GraphicsFormat _graphicsFormat;
+            private readonly FilterMode _filterMode;
+            private readonly TextureWrapMode _wrapU, _wrapV;
+            private readonly float _mipBias;
+            private readonly bool _isReadable, _isDirty;
 
             public BakedOutputState(Texture2D texture)
             {
-                updateCount = texture.updateCount;
-                width = texture.width;
-                height = texture.height;
-                mipCount = texture.mipmapCount;
-                format = texture.format;
-                graphicsFormat = texture.graphicsFormat;
-                filterMode = texture.filterMode;
-                wrapU = texture.wrapModeU;
-                wrapV = texture.wrapModeV;
-                anisoLevel = texture.anisoLevel;
-                mipBias = texture.mipMapBias;
-                isReadable = texture.isReadable;
-                isDirty = EditorUtility.IsDirty(texture);
-                dirtyCount = EditorUtility.GetDirtyCount(texture);
+                _updateCount = texture.updateCount;
+                _width = texture.width;
+                _height = texture.height;
+                _mipCount = texture.mipmapCount;
+                _format = texture.format;
+                _graphicsFormat = texture.graphicsFormat;
+                _filterMode = texture.filterMode;
+                _wrapU = texture.wrapModeU;
+                _wrapV = texture.wrapModeV;
+                _anisoLevel = texture.anisoLevel;
+                _mipBias = texture.mipMapBias;
+                _isReadable = texture.isReadable;
+                _isDirty = EditorUtility.IsDirty(texture);
+                _dirtyCount = EditorUtility.GetDirtyCount(texture);
             }
 
             public bool Matches(Texture2D texture) => texture &&
-                updateCount == texture.updateCount && width == texture.width && height == texture.height &&
-                mipCount == texture.mipmapCount && format == texture.format && graphicsFormat == texture.graphicsFormat &&
-                filterMode == texture.filterMode && wrapU == texture.wrapModeU && wrapV == texture.wrapModeV &&
-                anisoLevel == texture.anisoLevel && mipBias == texture.mipMapBias && isReadable == texture.isReadable &&
-                isDirty == EditorUtility.IsDirty(texture) && dirtyCount == EditorUtility.GetDirtyCount(texture);
+                _updateCount == texture.updateCount && _width == texture.width && _height == texture.height &&
+                _mipCount == texture.mipmapCount && _format == texture.format && _graphicsFormat == texture.graphicsFormat &&
+                _filterMode == texture.filterMode && _wrapU == texture.wrapModeU && _wrapV == texture.wrapModeV &&
+                _anisoLevel == texture.anisoLevel && _mipBias == texture.mipMapBias && _isReadable == texture.isReadable &&
+                _isDirty == EditorUtility.IsDirty(texture) && _dirtyCount == EditorUtility.GetDirtyCount(texture);
         }
-        private static readonly Dictionary<EntityId, TerrainSourceState> terrainSources = new Dictionary<EntityId, TerrainSourceState>();
-        private static readonly Dictionary<string, SourceImportState> importRevisions =
+        private static readonly Dictionary<EntityId, TerrainSourceState> s_terrainSources = new Dictionary<EntityId, TerrainSourceState>();
+        private static readonly Dictionary<string, SourceImportState> s_importRevisions =
             new Dictionary<string, SourceImportState>(StringComparer.Ordinal);
-        private static readonly Dictionary<string, Texture2D> activeBakes =
+        private static readonly Dictionary<string, Texture2D> s_activeBakes =
             new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
-        private static readonly List<EntityId> expiredSources = new List<EntityId>();
-        private static uint sourceGeneration;
-        private static double nextSourceCleanup;
-        private static uint undoRevision;
+        private static readonly List<EntityId> s_expiredSources = new List<EntityId>();
+        private static uint s_sourceGeneration;
+        private static double s_nextSourceCleanup;
+        private static uint s_undoRevision;
 
         /// <summary>Raised after the texture asset has been updated and saved, even when its identity is unchanged.</summary>
         public static event Action<Terrain, Texture2D> Baked;
@@ -123,7 +123,9 @@ namespace Cone.Grass.Editor
         {
             signature = default;
             if (!TryGetInputs(terrain, resolution, out Material material, out TerrainLayer[] layers, out error))
+            {
                 return false;
+            }
 
             TerrainData data = terrain.terrainData;
             TerrainSourceState tracked = TrackTerrain(terrain);
@@ -132,7 +134,7 @@ namespace Cone.Grass.Editor
             Append(state, BakerVersion);
             Append(state, resolution);
             Append(state, (int)QualitySettings.activeColorSpace);
-            Append(state, undoRevision.GetHashCode());
+            Append(state, s_undoRevision.GetHashCode());
             AppendObject(state, terrain, tracked);
             AppendObject(state, data, tracked);
             Append(state, tracked.Generation.GetHashCode());
@@ -148,7 +150,10 @@ namespace Cone.Grass.Editor
             Append(state, material.GetFloat("_HeightTransition").GetHashCode());
             Append(state, layers.Length);
             for (int i = 0; i < data.alphamapTextureCount; i++)
+            {
                 AppendTexture(state, data.GetAlphamapTexture(i), tracked);
+            }
+
             foreach (TerrainLayer layer in layers)
             {
                 AppendObject(state, layer, tracked);
@@ -173,15 +178,23 @@ namespace Cone.Grass.Editor
         public static void Invalidate(Terrain terrain)
         {
             if (!terrain)
+            {
                 return;
+            }
+
             EntityId id = terrain.GetEntityId();
             // Terrains with no previous signature have no cache to invalidate.
             // Generation callbacks must not retain every terrain ever opened.
-            if (terrainSources.TryGetValue(id, out TerrainSourceState tracked) && tracked.Terrain == terrain)
+            if (s_terrainSources.TryGetValue(id, out TerrainSourceState tracked) && tracked.Terrain == terrain)
+            {
                 tracked.Revision = unchecked(tracked.Revision + 1);
+            }
+
             Action<Terrain> subscribers = SourceChanged;
             if (subscribers == null)
+            {
                 return;
+            }
             // Keep producer invalidation and the other consumers independent of a
             // failed observer, just as for notification of a completed bake.
             foreach (Action<Terrain> subscriber in subscribers.GetInvocationList())
@@ -206,18 +219,26 @@ namespace Cone.Grass.Editor
         {
             texture = null;
             if (!TryGetInputs(terrain, resolution, out Material source, out TerrainLayer[] layers, out error))
+            {
                 return false;
-            if (!TryValidateOutputPath(assetPath, layers, out assetPath, out Texture2D existing, out error))
-                return false;
-            if (!TryGetCaptureShader(out Shader shader, out error))
-                return false;
+            }
 
-            if (activeBakes.ContainsKey(assetPath) || IsActiveBakeOutput(existing))
+            if (!TryValidateOutputPath(assetPath, layers, out assetPath, out Texture2D existing, out error))
+            {
+                return false;
+            }
+
+            if (!TryGetCaptureShader(out Shader shader, out error))
+            {
+                return false;
+            }
+
+            if (s_activeBakes.ContainsKey(assetPath) || IsActiveBakeOutput(existing))
             {
                 error = "A ground-albedo bake already owns this output. Queue another bake after the current callback finishes.";
                 return false;
             }
-            activeBakes.Add(assetPath, existing);
+            s_activeBakes.Add(assetPath, existing);
             try
             {
                 return TryBakeOutput(terrain, resolution, assetPath, source, layers, existing, shader, out texture, out error);
@@ -226,7 +247,7 @@ namespace Cone.Grass.Editor
             {
                 // Hold ownership through saves and notifications: both can invoke
                 // authoring callbacks before the caller receives the completed bake.
-                activeBakes.Remove(assetPath);
+                s_activeBakes.Remove(assetPath);
             }
         }
 
@@ -239,10 +260,13 @@ namespace Cone.Grass.Editor
         /// <returns>Whether a bake currently owns that output.</returns>
         public static bool IsBakingOutput(string assetPath)
         {
-            if (activeBakes.Count == 0 || string.IsNullOrEmpty(assetPath))
+            if (s_activeBakes.Count == 0 || string.IsNullOrEmpty(assetPath))
+            {
                 return false;
+            }
+
             string normalized = assetPath.Replace('\\', '/');
-            return activeBakes.ContainsKey(normalized) ||
+            return s_activeBakes.ContainsKey(normalized) ||
                 IsActiveBakeOutput(AssetDatabase.LoadAssetAtPath<Texture2D>(normalized));
         }
 
@@ -257,13 +281,22 @@ namespace Cone.Grass.Editor
         {
             assetPath = null;
             if (!texture)
+            {
                 return false;
+            }
+
             string path = AssetDatabase.GetAssetPath(texture);
             if (string.IsNullOrEmpty(path))
+            {
                 return false;
+            }
+
             Object current = AssetDatabase.LoadMainAssetAtPath(path);
             if (!texture || current != texture)
+            {
                 return false;
+            }
+
             assetPath = path;
             return true;
         }
@@ -271,11 +304,19 @@ namespace Cone.Grass.Editor
         private static bool IsActiveBakeOutput(Texture2D texture)
         {
             if (!texture)
+            {
                 return false;
+            }
             // An observer can move an asset before requesting its new path. Its
             // identity still belongs to the operation that is notifying observers.
-            foreach (Texture2D active in activeBakes.Values)
-                if (active == texture) return true;
+            foreach (Texture2D active in s_activeBakes.Values)
+            {
+                if (active == texture)
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
@@ -283,7 +324,9 @@ namespace Cone.Grass.Editor
         {
             Action<Terrain, Texture2D> subscribers = Baked;
             if (subscribers == null)
+            {
                 return;
+            }
             // An observer exception must not prevent later observers from receiving
             // the notification. Any output edits are checked after all observers.
             foreach (Action<Terrain, Texture2D> subscriber in subscribers.GetInvocationList())
@@ -300,12 +343,20 @@ namespace Cone.Grass.Editor
             List<GrassPlacementArea> affected = new List<GrassPlacementArea>();
             IReadOnlyList<GrassPlacementArea> areas = GrassPlacementArea.ActiveAreas;
             for (int i = 0; i < areas.Count; i++)
+            {
                 if (areas[i] && areas[i].GroundColorTexture == texture)
+                {
                     affected.Add(areas[i]);
+                }
+            }
+
             foreach (GrassPlacementArea area in affected)
             {
                 if (!area)
+                {
                     continue;
+                }
+
                 try { area.MarkGroundColorDirty(); }
                 catch (Exception exception) { Debug.LogException(exception); }
             }
@@ -399,7 +450,10 @@ namespace Cone.Grass.Editor
             // its canonical path before checking whether this output is a source texture.
             string guid = AssetDatabase.AssetPathToGUID(normalized, AssetPathToGUIDOptions.OnlyExistingAssets);
             if (!string.IsNullOrEmpty(guid))
+            {
                 normalized = AssetDatabase.GUIDToAssetPath(guid);
+            }
+
             if (!AssetDatabase.IsValidFolder(Path.GetDirectoryName(normalized)?.Replace('\\', '/')))
             {
                 error = "Choose a Texture2D .asset path in an existing folder below Assets/.";
@@ -439,25 +493,37 @@ namespace Cone.Grass.Editor
         {
             Append(state, value ? value.GetEntityId().GetHashCode() : 0);
             if (!value)
+            {
                 return;
+            }
+
             Append(state, EditorUtility.GetDirtyCount(value));
             string path = AssetDatabase.GetAssetPath(value);
             if (string.IsNullOrEmpty(path))
+            {
                 return;
-            if (!importRevisions.TryGetValue(path, out SourceImportState imported))
+            }
+
+            if (!s_importRevisions.TryGetValue(path, out SourceImportState imported))
             {
                 imported = new SourceImportState();
-                importRevisions.Add(path, imported);
+                s_importRevisions.Add(path, imported);
             }
             if (tracked.CurrentPaths.Add(path) && !tracked.Paths.Contains(path))
+            {
                 imported.References++;
+            }
+
             Append(state, imported.Revision.GetHashCode());
         }
         private static void AppendTexture(StringBuilder state, Texture texture, TerrainSourceState tracked)
         {
             AppendObject(state, texture, tracked);
             if (!texture)
+            {
                 return;
+            }
+
             Append(state, texture.updateCount.GetHashCode());
             Append(state, texture.width); Append(state, texture.height);
             Append(state, (int)texture.filterMode);
@@ -470,15 +536,15 @@ namespace Cone.Grass.Editor
         private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
         private static bool Finite(Vector4 value) => Finite(value.x) && Finite(value.y) && Finite(value.z) && Finite(value.w);
         private static void OnTerrainTextureChanged(Terrain terrain, string textureName, RectInt region, bool synched) => Invalidate(terrain);
-        private static void OnUndoRedo() { unchecked { undoRevision++; } }
+        private static void OnUndoRedo() { unchecked { s_undoRevision++; } }
 
         private static TerrainSourceState TrackTerrain(Terrain terrain)
         {
             EntityId id = terrain.GetEntityId();
-            if (terrainSources.TryGetValue(id, out TerrainSourceState tracked) && tracked.Terrain != terrain)
+            if (s_terrainSources.TryGetValue(id, out TerrainSourceState tracked) && tracked.Terrain != terrain)
             {
                 ReleaseSourcePaths(tracked);
-                terrainSources.Remove(id);
+                s_terrainSources.Remove(id);
                 tracked = null;
             }
             if (tracked == null)
@@ -488,9 +554,9 @@ namespace Cone.Grass.Editor
                     Terrain = terrain,
                     // Recreating a dormant cache entry must change its signature,
                     // even if an unreported GPU edit left the object counters alone.
-                    Generation = unchecked(++sourceGeneration)
+                    Generation = unchecked(++s_sourceGeneration)
                 };
-                terrainSources.Add(id, tracked);
+                s_terrainSources.Add(id, tracked);
             }
             tracked.LastUsed = EditorApplication.timeSinceStartup;
             return tracked;
@@ -499,8 +565,13 @@ namespace Cone.Grass.Editor
         private static void FinishTrackingPaths(TerrainSourceState tracked)
         {
             foreach (string path in tracked.Paths)
+            {
                 if (!tracked.CurrentPaths.Contains(path))
+                {
                     ReleasePath(path);
+                }
+            }
+
             HashSet<string> old = tracked.Paths;
             tracked.Paths = tracked.CurrentPaths;
             tracked.CurrentPaths = old;
@@ -509,34 +580,51 @@ namespace Cone.Grass.Editor
 
         private static void ReleasePath(string path)
         {
-            if (importRevisions.TryGetValue(path, out SourceImportState imported) && --imported.References <= 0)
-                importRevisions.Remove(path);
+            if (s_importRevisions.TryGetValue(path, out SourceImportState imported) && --imported.References <= 0)
+            {
+                s_importRevisions.Remove(path);
+            }
         }
 
         private static void ReleaseSourcePaths(TerrainSourceState tracked)
         {
             foreach (string path in tracked.Paths)
+            {
                 ReleasePath(path);
+            }
+
             foreach (string path in tracked.CurrentPaths)
+            {
                 if (!tracked.Paths.Contains(path))
+                {
                     ReleasePath(path);
+                }
+            }
         }
 
         private static void CleanupSourceCache()
         {
             double now = EditorApplication.timeSinceStartup;
-            if (now < nextSourceCleanup)
-                return;
-            nextSourceCleanup = now + 30d;
-            foreach (KeyValuePair<EntityId, TerrainSourceState> entry in terrainSources)
-                if (!entry.Value.Terrain || now - entry.Value.LastUsed > SignatureRetentionSeconds)
-                    expiredSources.Add(entry.Key);
-            foreach (EntityId id in expiredSources)
+            if (now < s_nextSourceCleanup)
             {
-                ReleaseSourcePaths(terrainSources[id]);
-                terrainSources.Remove(id);
+                return;
             }
-            expiredSources.Clear();
+
+            s_nextSourceCleanup = now + 30d;
+            foreach (KeyValuePair<EntityId, TerrainSourceState> entry in s_terrainSources)
+            {
+                if (!entry.Value.Terrain || now - entry.Value.LastUsed > SignatureRetentionSeconds)
+                {
+                    s_expiredSources.Add(entry.Key);
+                }
+            }
+
+            foreach (EntityId id in s_expiredSources)
+            {
+                ReleaseSourcePaths(s_terrainSources[id]);
+                s_terrainSources.Remove(id);
+            }
+            s_expiredSources.Clear();
         }
 
         internal static void NotifyImportedAssets(string[] imported, string[] deleted, string[] moved, string[] movedFrom)
@@ -546,8 +634,12 @@ namespace Cone.Grass.Editor
         private static void BumpTrackedPaths(string[] paths)
         {
             foreach (string path in paths)
-                if (importRevisions.TryGetValue(path, out SourceImportState imported))
+            {
+                if (s_importRevisions.TryGetValue(path, out SourceImportState imported))
+                {
                     imported.Revision = unchecked(imported.Revision + 1);
+                }
+            }
         }
     }
 
