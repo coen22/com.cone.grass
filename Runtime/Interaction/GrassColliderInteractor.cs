@@ -143,7 +143,7 @@ namespace Cone.Grass
             InteractionState.NoGroundContact => "The collider has no unique, usable grass support within its grounding clearance.",
             InteractionState.PathReset => "The discontinuous or over-budget path was cleared; only the current footprint was retained.",
             InteractionState.TrailBudgetExceeded => "The current footprint exceeds the interaction budget. Increase grid spacing or reduce the collider footprint.",
-            InteractionState.MissingCaptureMaterial => ReferenceEquals(_captureShader, null)
+            InteractionState.MissingCaptureMaterial => !_captureShader
                 ? "The retained InfiniteGrassInteraction resource material is missing or has no GrassSlope pass."
                 : "The assigned interaction shader must provide a GrassSlope pass using premultiplied vertex RGBA.",
             InteractionState.InvalidTime => "The interaction clock must be finite and monotonic between observations.",

@@ -23,13 +23,10 @@ namespace Cone.Grass
             Mesh = new Mesh { name = "Grass Collider Interaction", hideFlags = HideFlags.HideAndDontSave };
             Mesh.MarkDynamic();
             Material candidate;
-            if (!object.ReferenceEquals(shader, null))
+            // An empty serialized field loads as Unity's null placeholder, not a C# null, so test with Unity's own null
+            // check: anything that is not a live shader uses the package's default producer.
+            if (shader)
             {
-                if (!shader)
-                {
-                    return;
-                }
-
                 candidate = new Material(shader);
             }
             else
