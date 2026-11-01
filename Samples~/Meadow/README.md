@@ -28,7 +28,7 @@ Leave the keyboard alone for a few seconds and the character walks a figure of e
 - **Plant Kinds > Variants** is the **Meadow Plant Kinds** profile. Open it to see the kinds: lawn grass, a darker undercoat, a broad herb, clover, and three flowers (puff, daisy, buttercup). The flowers share the lawn's height, so their heads sit at the tips of the grass; they are about 6 cm across and sparse.
 - Turn on **Preview Visible Grass Count** to see how many blades are drawn.
 
-**The Placement Area** on the terrain decides where grass grows and matches the root colour to the terrain through **Ground Layer** and **Ground Color Strength**.
+**The Placement Area** on Meadow Grass covers the terrain with a white coverage map; it decides where grass grows and matches the root colour to the terrain through **Ground Layer** and **Ground Color Strength**.
 
 **The character** has a CharacterController, a **Grass Collider Interactor** that bends the grass with that collider, and **Meadow Walker** (movement and autopilot). Try **Bend Strength** and **Recovery Duration** in Play mode.
 
@@ -40,4 +40,4 @@ Leave the keyboard alone for a few seconds and the character walks a figure of e
 - **The interactor.** Add **Cone > Grass > Collider Interactor** next to your own character's CharacterController, and compare its settings with the sample character's.
 - **The scripts.** `MeadowWalker`, `MeadowCamera` and `MeadowInput` are in the `Cone.Grass.Samples.Meadow` assembly and namespace. They are sample code: copy them into your project if you want to change them, rather than editing the imported sample.
 
-See the [manual](../../Documentation~/index.md) for every setting.
+See the [manual](https://github.com/coen22/com.cone.grass/blob/v2.0.0/Documentation~/index.md) for every setting.
