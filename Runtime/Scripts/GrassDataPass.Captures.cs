@@ -183,6 +183,18 @@ namespace Cone.Grass
                 // Custom capture passes can expose inputs beyond _MainTex. Reuse
                 // the list overload so discovering them does not allocate an array.
                 material.GetTexturePropertyNameIDs(textureIds);
+                // The list also holds textures saved for a previous shader. The
+                // current shader cannot sample them, so they are not dependencies.
+                int count = 0;
+                for (int i = 0; i < textureIds.Count; i++)
+                {
+                    if (material.HasProperty(textureIds[i]))
+                    {
+                        textureIds[count++] = textureIds[i];
+                    }
+                }
+
+                textureIds.RemoveRange(count, textureIds.Count - count);
                 if (textureIds.Count == 0)
                 {
                     return 0;

@@ -337,16 +337,20 @@ namespace Cone.Grass.Tests
             using (var fixture = new HistoryFixture())
             {
                 int originalLimit = QualitySettings.globalTextureMipmapLimit;
-                var source = new Texture2D(6, 4, TextureFormat.RGBA32, true, false)
+                // Script-created textures ignore mipmap limits unless they opt in when
+                // created; toggling ignoreMipmapLimit afterwards leaves the limit at 0.
+                var source = new Texture2D(6, 4, TextureFormat.RGBA32, 3, false, false,
+                    new MipmapLimitDescriptor(true, null))
                 {
                     filterMode = FilterMode.Bilinear,
                     wrapModeU = TextureWrapMode.Repeat,
-                    wrapModeV = TextureWrapMode.Clamp,
-                    ignoreMipmapLimit = false
+                    wrapModeV = TextureWrapMode.Clamp
                 };
                 try
                 {
                     Assert.That(source.graphicsFormat, Is.EqualTo(GraphicsFormat.R8G8B8A8_SRGB));
+                    Assert.That(source.mipmapCount, Is.EqualTo(3));
+                    Assert.That(source.ignoreMipmapLimit, Is.False);
                     QualitySettings.globalTextureMipmapLimit = 0;
                     source.SetPixels(new Color[24], 0);
                     source.SetPixels(new[]
@@ -362,7 +366,8 @@ namespace Cone.Grass.Tests
                     // Unity re-uploads imported textures when the limit changes. A
                     // script-created texture applies the new limit on its next upload.
                     source.Apply(false, false);
-                    Assert.That(source.activeMipmapLimit, Is.EqualTo(1));
+                    Assert.That(source.activeMipmapLimit, Is.EqualTo(1),
+                        "The opted-in texture must upload without its full-resolution mip.");
                     Assert.That(fixture.EnsureAllocation(source), Is.True);
                     RTHandle snapshot = (RTHandle)GetField(fixture.Snapshots.GetValue(0), "Wind");
                     Assert.That(snapshot.rt.width, Is.EqualTo(3));
