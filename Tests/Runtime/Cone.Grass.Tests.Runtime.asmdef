@@ -1,0 +1,17 @@
+{
+  "name": "Cone.Grass.Tests.Runtime",
+  "rootNamespace": "Cone.Grass.Tests",
+  "references": [
+    "Cone.Grass",
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner"
+  ],
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "overrideReferences": true,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "autoReferenced": false
+}

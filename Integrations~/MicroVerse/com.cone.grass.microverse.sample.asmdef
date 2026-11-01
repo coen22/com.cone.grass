@@ -1,7 +1,0 @@
-{
-  "name": "com.cone.grass.microverse.sample",
-  "references": [
-    "com.cone.grass"
-  ],
-  "autoReferenced": true
-}

@@ -1,0 +1,198 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4c0361b2cb4b474994bb5437c2aa6482, type: 3}
+  m_Name: Meadow Plant Kinds
+  m_EditorClassIdentifier: Cone.Grass::Cone.Grass.GrassVariantProfile
+  _seed: 1
+  _clumpSize: 12
+  _clusterSize: 1.5
+  _habitatSize: 40
+  _budFraction: 0.05
+  _seedFraction: 0.02
+  _headDrawDistance: 50
+  _headFade: 0.4
+  _distantTipColour: 0.35
+  _headMesh: {fileID: 0}
+  _kinds:
+  - _name: Lawn grass
+    _weight: 0.62
+    _clumping: 0
+    _driftArea: 0.25
+    _clusterArea: 1
+    _moisture: 0
+    _slope: 0
+    _heightScale: 0.62
+    _widthScale: 1.5
+    _curvingScale: 1.2
+    _stemWidth: 0
+    _heightRandomness: -1
+    _tint: {r: 0.95, g: 1.15, b: 0.75, a: 1}
+    _variationTint: {r: 1.1, g: 1.1, b: 0.7, a: 1}
+    _instanceVariation: 0.2
+    _clumpVariation: 0.25
+    _head: 0
+    _headSize: 0.04
+    _headSizeRandomness: 0.3
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 1, b: 1, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 0.95, g: 0.75, b: 0.15, a: 1}
+  - _name: Undercoat
+    _weight: 0.3
+    _clumping: 0
+    _driftArea: 0.25
+    _clusterArea: 1
+    _moisture: 0
+    _slope: 0
+    _heightScale: 0.35
+    _widthScale: 1.8
+    _curvingScale: 1
+    _stemWidth: 0
+    _heightRandomness: -1
+    _tint: {r: 0.55, g: 0.68, b: 0.45, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.2
+    _clumpVariation: 0.2
+    _head: 0
+    _headSize: 0.04
+    _headSizeRandomness: 0.3
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 1, b: 1, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 0.95, g: 0.75, b: 0.15, a: 1}
+  - _name: Broad herb
+    _weight: 0.06
+    _clumping: 0.5
+    _driftArea: 0.3
+    _clusterArea: 0.5
+    _moisture: 0
+    _slope: 0
+    _heightScale: 0.3
+    _widthScale: 3
+    _curvingScale: 2
+    _stemWidth: 0
+    _heightRandomness: -1
+    _tint: {r: 0.75, g: 0.95, b: 0.7, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.25
+    _clumpVariation: 0.25
+    _head: 0
+    _headSize: 0.04
+    _headSizeRandomness: 0.3
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 1, b: 1, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 0.95, g: 0.75, b: 0.15, a: 1}
+  - _name: Clover
+    _weight: 0.015
+    _clumping: 0.7
+    _driftArea: 0.3
+    _clusterArea: 0.5
+    _moisture: 0.3
+    _slope: 0
+    _heightScale: 0.25
+    _widthScale: 0.5
+    _curvingScale: 1
+    _stemWidth: 0.6
+    _heightRandomness: -1
+    _tint: {r: 0.8, g: 0.95, b: 0.8, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.25
+    _clumpVariation: 0.25
+    _head: 5
+    _headSize: 0.04
+    _headSizeRandomness: 0.3
+    _sideways: 0.25
+    _palette:
+    - {r: 0.28, g: 0.5, b: 0.2, a: 1}
+    - {r: 0.32, g: 0.55, b: 0.24, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 0.55, g: 0.7, b: 0.45, a: 1}
+  - _name: Meadow puff
+    _weight: 0.003
+    _clumping: 0
+    _driftArea: 0.25
+    _clusterArea: 1
+    _moisture: 0
+    _slope: 0
+    _heightScale: 0.62
+    _widthScale: 0.18
+    _curvingScale: 1
+    _stemWidth: 0.5
+    _heightRandomness: 0.1
+    _tint: {r: 0.62, g: 0.8, b: 0.55, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.25
+    _clumpVariation: 0.25
+    _head: 7
+    _headSize: 0.06
+    _headSizeRandomness: 0.1
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 0.38, b: 0.68, a: 1}
+    - {r: 0.68, g: 0.45, b: 1, a: 1}
+    - {r: 1, g: 0.84, b: 0.08, a: 1}
+    - {r: 1, g: 1, b: 1, a: 1}
+    _paletteClumping: 0
+    _centre: {r: 0.95, g: 0.85, b: 0.9, a: 1}
+  - _name: Daisy
+    _weight: 0.0012
+    _clumping: 0
+    _driftArea: 0.25
+    _clusterArea: 1
+    _moisture: 0
+    _slope: -0.3
+    _heightScale: 0.62
+    _widthScale: 0.18
+    _curvingScale: 1
+    _stemWidth: 0.5
+    _heightRandomness: 0.1
+    _tint: {r: 0.62, g: 0.8, b: 0.55, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.25
+    _clumpVariation: 0.25
+    _head: 1
+    _headSize: 0.062
+    _headSizeRandomness: 0.1
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 1, b: 1, a: 1}
+    - {r: 1, g: 0.85, b: 0.92, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 1, g: 0.78, b: 0.05, a: 1}
+  - _name: Buttercup
+    _weight: 0.0012
+    _clumping: 0
+    _driftArea: 0.25
+    _clusterArea: 1
+    _moisture: 0.4
+    _slope: 0
+    _heightScale: 0.62
+    _widthScale: 0.18
+    _curvingScale: 1
+    _stemWidth: 0.5
+    _heightRandomness: 0.1
+    _tint: {r: 0.62, g: 0.8, b: 0.55, a: 1}
+    _variationTint: {r: 1.15, g: 1.05, b: 0.7, a: 1}
+    _instanceVariation: 0.25
+    _clumpVariation: 0.25
+    _head: 2
+    _headSize: 0.056
+    _headSizeRandomness: 0.1
+    _sideways: 0.25
+    _palette:
+    - {r: 1, g: 0.82, b: 0, a: 1}
+    _paletteClumping: 0.6
+    _centre: {r: 0.95, g: 0.6, b: 0, a: 1}

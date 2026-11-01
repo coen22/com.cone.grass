@@ -1,0 +1,21 @@
+{
+  "name": "Cone.Grass.MicroVerse.Tests",
+  "rootNamespace": "Cone.Grass.MicroVerse",
+  "references": [
+    "Cone.Grass",
+    "Cone.Grass.MicroVerse",
+    "Cone.Grass.MicroVerse.Editor",
+    "Cone.Grass.Editor",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "autoReferenced": false
+}

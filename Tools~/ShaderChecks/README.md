@@ -19,12 +19,12 @@ For CI, add an Ubuntu 24.04 job with the repository checkout, Python 3.12, and t
 
 ## What is compiled
 
-The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **53 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **106 compiler invocations**.
+The script discovers every `.compute` and `.shader` file beneath `Runtime` and `Editor/GroundColor`. It compiles each declared compute kernel and each shader pass's vertex and fragment entry points. The current baseline contains **57 entry-point/keyword configurations**, compiled once to DXIL and once to SPIR-V: **114 compiler invocations**.
 
 Coverage includes:
 
 - All seven generation and motion-history compute kernels.
-- Every grass capture, placement, contact-depth, contact-shadow, motion-copy, and motion-vector pass.
+- Every grass capture, placement (including the plant-kind weights), flower-head, contact-depth, contact-shadow, motion-copy, and motion-vector pass.
 - Six grass forward-lighting configurations, covering main-light shadows, cascades, screen shadows, soft shadows, additional lights, clustered lights, ground normals, and the three fog modes.
 - Four terrain-albedo configurations: baseline, mask maps, height blending, and both together.
 
@@ -45,4 +45,4 @@ The Unity version macro is `60060000`, representing 6000.6.0 in Unity 6's [docum
 
 A passing result verifies that DXC accepts and produces code for these specific HLSL entry points and keyword combinations. It can catch undeclared symbols, invalid overloads, incompatible types, missing includes, and backend code-generation errors that text checks cannot catch.
 
-It does **not** establish Unity ShaderLab import, variant stripping, material/pass state, C# API compilation, GPU resource bindings, execution correctness, camera or RenderGraph integration, motion-vector image quality, timing improvements, or memory behavior. Shader Model 6.0 success also does not prove compatibility with the original Shader Model 3.5/4.5 targets, FXC, Metal, GLES, or every Unity-generated keyword combination. Changes to those acceptance claims still require the licensed Unity and graphics-device tests in `Documentation~/Validation.md`.
+It does **not** establish Unity ShaderLab import, variant stripping, material/pass state, C# API compilation, GPU resource bindings, execution correctness, camera or RenderGraph integration, motion-vector image quality, timing improvements, or memory behavior. Shader Model 6.0 success also does not prove compatibility with the original Shader Model 3.5/4.5 targets, FXC, Metal, GLES, or every Unity-generated keyword combination. Changes to those acceptance claims still require the Unity and graphics-device tests described in [Tools~/README.md](../README.md).

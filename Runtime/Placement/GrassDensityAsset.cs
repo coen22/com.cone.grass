@@ -1,531 +1,664 @@
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
-/// <summary>
-/// Persistent, linear grass coverage. Zero means no grass; 255 means full authored density.
-/// The serialized bytes are the source of truth so editor Undo also restores GPU coverage.
-/// </summary>
-[CreateAssetMenu(menuName = "Cone/Grass/Density Map", fileName = "GrassDensity")]
-public sealed class GrassDensityAsset : ScriptableObject
+namespace Cone.Grass
 {
-    public const int MinimumResolution = 16;
-    public const int MaximumResolution = 4096;
-
-    [SerializeField, HideInInspector] private int width = 512;
-    [SerializeField, HideInInspector] private int height = 512;
-    [SerializeField, HideInInspector] private byte[] samples;
-
-    [NonSerialized] private Texture2D texture;
-    [NonSerialized] private Texture2D uploadTexture;
-    [NonSerialized] private byte[] uploadSamples;
-    [NonSerialized] private bool textureDirty = true;
-    [NonSerialized] private bool fullTextureUpload = true;
-    [NonSerialized] private bool regionalCopyUnavailable;
-    [NonSerialized] private RectInt dirtyPixels;
-    [NonSerialized] private bool coverageDirty = true;
-    [NonSerialized] private bool coverageBoundsDirty;
-    [NonSerialized] private int coveredSampleCount;
-    [NonSerialized] private ushort[] occupiedBlocks;
-    [NonSerialized] private RectInt occupiedPixels;
-    private const int CoverageBlockSize = 16;
-    [NonSerialized] private uint revision = 1;
-
-    public event Action Changed;
-    /// <summary>Changed pixels in map coordinates. Undo and resizing report the complete map.</summary>
-    public event Action<RectInt> RegionChanged;
-
-    public int Width => width;
-    public int Height => height;
-    public uint Revision => revision;
-    /// <summary>Texels uploaded by the last texture refresh, including staging texture padding.</summary>
-    public int LastUploadedTexelCount { get; private set; }
-    public uint TextureUploadCount { get; private set; }
-    public bool LastUploadWasPartial { get; private set; }
-
-    public RectInt PendingUploadRegion => !textureDirty ? default : fullTextureUpload
-        ? new RectInt(0, 0, width, height) : dirtyPixels;
-
-    public bool HasCoverage
-    {
-        get
-        {
-            EnsureStorage();
-            RefreshCoverageState();
-            return coveredSampleCount != 0;
-        }
-    }
-
-    public Texture2D Texture
-    {
-        get
-        {
-            EnsureStorage();
-            if (!texture || texture.width != width || texture.height != height)
-            {
-                ReleaseTexture();
-                texture = new Texture2D(width, height, TextureFormat.R8, false, true)
-                {
-                    name = name + " (Density)",
-                    hideFlags = HideFlags.HideAndDontSave,
-                    filterMode = FilterMode.Bilinear,
-                    wrapMode = TextureWrapMode.Clamp
-                };
-                textureDirty = true;
-                fullTextureUpload = true;
-            }
-
-            if (textureDirty)
-                UploadChanges();
-
-            return texture;
-        }
-    }
-
-    /// <summary>Resize the map. New maps and newly cleared regions contain no grass.</summary>
-    public void Resize(int newWidth, int newHeight, bool preserveCoverage = true)
-    {
-        EnsureStorage();
-        newWidth = Mathf.Clamp(newWidth, MinimumResolution, MaximumResolution);
-        newHeight = Mathf.Clamp(newHeight, MinimumResolution, MaximumResolution);
-        if (newWidth == width && newHeight == height)
-            return;
-
-        byte[] previous = samples;
-        int previousWidth = width;
-        int previousHeight = height;
-        samples = new byte[newWidth * newHeight];
-        width = newWidth;
-        height = newHeight;
-        if (preserveCoverage)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    float value = SampleBilinear(previous, previousWidth, previousHeight,
-                        new Vector2((x + 0.5f) / width, (y + 0.5f) / height));
-                    samples[y * width + x] = (byte)Mathf.RoundToInt(value * 255f);
-                }
-            }
-        }
-
-        NotifyChanged();
-    }
-
-    public void Fill(float density)
-    {
-        EnsureStorage();
-        if (!IsFinite(density))
-            density = 0f;
-        byte value = (byte)Mathf.RoundToInt(Mathf.Clamp01(density) * 255f);
-        bool changed = false;
-        for (int i = 0; i < samples.Length; i++)
-        {
-            changed |= samples[i] != value;
-            samples[i] = value;
-        }
-        if (!changed)
-            return;
-
-        EnsureCoverageBlocks();
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        int blockHeight = (height + CoverageBlockSize - 1) / CoverageBlockSize;
-        for (int y = 0; y < blockHeight; y++)
-            for (int x = 0; x < blockWidth; x++)
-                occupiedBlocks[y * blockWidth + x] = value == 0 ? (ushort)0 : (ushort)(
-                    Mathf.Min(CoverageBlockSize, width - x * CoverageBlockSize) *
-                    Mathf.Min(CoverageBlockSize, height - y * CoverageBlockSize));
-        coveredSampleCount = value == 0 ? 0 : samples.Length;
-        occupiedPixels = value == 0 ? default : new RectInt(0, 0, width, height);
-        coverageDirty = coverageBoundsDirty = false;
-        RecordChanges(new RectInt(0, 0, width, height));
-    }
-
     /// <summary>
-    /// Apply a round world-space brush represented as an ellipse in map UVs.
-    /// Hardness is the radius fraction with full brush strength. Callers record Undo first.
+    /// Persistent, linear grass coverage. Zero means no grass; 255 means full authored density.
+    /// The serialized bytes are the source of truth so editor Undo also restores GPU coverage.
     /// </summary>
-    public bool Paint(Vector2 centerUV, Vector2 radiusUV, float strength, float hardness, bool erase)
+    [CreateAssetMenu(menuName = "Cone/Grass/Density Map", fileName = "GrassDensity")]
+    public sealed class GrassDensityAsset : ScriptableObject
     {
-        if (!IsFinite(centerUV.x) || !IsFinite(centerUV.y) ||
-            !IsFinite(radiusUV.x) || !IsFinite(radiusUV.y) ||
-            !IsFinite(strength) || !IsFinite(hardness) ||
-            radiusUV.x <= 0f || radiusUV.y <= 0f || strength <= 0f)
-            return false;
+        /// <summary>The smallest map width or height.</summary>
+        public const int MinimumResolution = 16;
+        /// <summary>The largest map width or height.</summary>
+        public const int MaximumResolution = 4096;
 
-        EnsureStorage();
-        if (centerUV.x + radiusUV.x < 0f || centerUV.y + radiusUV.y < 0f ||
-            centerUV.x - radiusUV.x > 1f || centerUV.y - radiusUV.y > 1f)
-            return false;
-        RefreshCoverageState();
-        strength = Mathf.Clamp01(strength);
-        hardness = Mathf.Clamp01(hardness);
-        int xMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(centerUV.x - radiusUV.x) * width), 0, width - 1);
-        int xMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(centerUV.x + radiusUV.x) * width), 0, width - 1);
-        int yMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(centerUV.y - radiusUV.y) * height), 0, height - 1);
-        int yMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(centerUV.y + radiusUV.y) * height), 0, height - 1);
-        int changedXMin = width, changedYMin = height, changedXMax = -1, changedYMax = -1;
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
+        [SerializeField, HideInInspector, FormerlySerializedAs("width")] private int _width = 512;
+        [SerializeField, HideInInspector, FormerlySerializedAs("height")] private int _height = 512;
+        [SerializeField, HideInInspector, FormerlySerializedAs("samples")] private byte[] _samples;
 
-        for (int y = yMin; y <= yMax; y++)
+        [NonSerialized] private Texture2D _texture;
+        [NonSerialized] private Texture2D _uploadTexture;
+        [NonSerialized] private byte[] _uploadSamples;
+        [NonSerialized] private bool _textureDirty = true;
+        [NonSerialized] private bool _fullTextureUpload = true;
+        [NonSerialized] private bool _regionalCopyUnavailable;
+        [NonSerialized] private RectInt _dirtyPixels;
+        [NonSerialized] private bool _coverageDirty = true;
+        [NonSerialized] private bool _coverageBoundsDirty;
+        [NonSerialized] private int _coveredSampleCount;
+        [NonSerialized] private ushort[] _occupiedBlocks;
+        [NonSerialized] private RectInt _occupiedPixels;
+        private const int CoverageBlockSize = 16;
+        [NonSerialized] private uint _revision = 1;
+
+        /// <summary>Raised after the map changes.</summary>
+        public event Action Changed;
+        /// <summary>Changed pixels in map coordinates. Undo and resizing report the complete map.</summary>
+        public event Action<RectInt> RegionChanged;
+
+        /// <summary>Map width in texels.</summary>
+        public int Width => _width;
+        /// <summary>Map height in texels.</summary>
+        public int Height => _height;
+        /// <summary>Advances on every change to the map.</summary>
+        public uint Revision => _revision;
+        /// <summary>Texels uploaded by the last texture refresh, including staging texture padding.</summary>
+        public int LastUploadedTexelCount { get; private set; }
+        /// <summary>Number of texture uploads so far.</summary>
+        public uint TextureUploadCount { get; private set; }
+        /// <summary>Whether the last texture upload covered only the changed region.</summary>
+        public bool LastUploadWasPartial { get; private set; }
+
+        /// <summary>Map region the next texture refresh uploads; empty when the texture is current.</summary>
+        public RectInt PendingUploadRegion => !_textureDirty ? default : _fullTextureUpload
+            ? new RectInt(0, 0, _width, _height) : _dirtyPixels;
+
+        /// <summary>Whether any texel contains grass.</summary>
+        public bool HasCoverage
         {
-            float dy = ((y + 0.5f) / height - centerUV.y) / radiusUV.y;
-            for (int x = xMin; x <= xMax; x++)
+            get
             {
-                float dx = ((x + 0.5f) / width - centerUV.x) / radiusUV.x;
-                float squaredDistance = dx * dx + dy * dy;
-                if (squaredDistance > 1f)
-                    continue;
+                EnsureStorage();
+                RefreshCoverageState();
+                return _coveredSampleCount != 0;
+            }
+        }
 
-                float distance = Mathf.Sqrt(squaredDistance);
-                float falloff = hardness >= 1f ? 1f :
-                    1f - Mathf.SmoothStep(0f, 1f, (distance - hardness) / (1f - hardness));
-                int index = y * width + x;
-                byte previousValue = samples[index];
-                float previous = previousValue / 255f;
-                float next = erase ? previous - strength * falloff : previous + strength * falloff;
-                byte quantized = (byte)Mathf.RoundToInt(Mathf.Clamp01(next) * 255f);
-                if (previousValue == quantized)
-                    continue;
-                samples[index] = quantized;
-                if (previousValue == 0 || quantized == 0)
+        /// <summary>
+        /// The linear R8 density texture, uploaded on access when the map changed. The asset owns it.
+        /// </summary>
+        public Texture2D Texture
+        {
+            get
+            {
+                EnsureStorage();
+                if (!_texture || _texture.width != _width || _texture.height != _height)
                 {
-                    int block = y / CoverageBlockSize * blockWidth + x / CoverageBlockSize;
-                    if (previousValue == 0)
+                    ReleaseTexture();
+                    _texture = new Texture2D(_width, _height, TextureFormat.R8, false, true)
                     {
-                        occupiedBlocks[block]++;
-                        coveredSampleCount++;
-                        occupiedPixels = coveredSampleCount == 1 ? new RectInt(x, y, 1, 1) :
-                            Union(occupiedPixels, new RectInt(x, y, 1, 1));
-                    }
-                    else
-                    {
-                        occupiedBlocks[block]--;
-                        coveredSampleCount--;
-                        if (x == occupiedPixels.xMin || x == occupiedPixels.xMax - 1 ||
-                            y == occupiedPixels.yMin || y == occupiedPixels.yMax - 1)
-                            coverageBoundsDirty = true;
-                    }
-                }
-                changedXMin = Mathf.Min(changedXMin, x);
-                changedYMin = Mathf.Min(changedYMin, y);
-                changedXMax = Mathf.Max(changedXMax, x);
-                changedYMax = Mathf.Max(changedYMax, y);
-            }
-        }
-
-        if (changedXMax < changedXMin)
-            return false;
-        if (coveredSampleCount == 0)
-        {
-            occupiedPixels = default;
-            coverageBoundsDirty = false;
-        }
-        RecordChanges(new RectInt(changedXMin, changedYMin,
-            changedXMax - changedXMin + 1, changedYMax - changedYMin + 1));
-        return true;
-    }
-
-    public float Sample(Vector2 uv)
-    {
-        if (!IsFinite(uv.x) || !IsFinite(uv.y) || uv.x < 0f || uv.x > 1f || uv.y < 0f || uv.y > 1f)
-            return 0f;
-        EnsureStorage();
-        return SampleBilinear(samples, width, height, uv);
-    }
-
-    /// <summary>Conservative occupancy query including the bilinear filter footprint.</summary>
-    public bool HasCoverageIn(Rect uvBounds)
-    {
-        if (!IsFinite(uvBounds.xMin) || !IsFinite(uvBounds.xMax) ||
-            !IsFinite(uvBounds.yMin) || !IsFinite(uvBounds.yMax) ||
-            uvBounds.xMax < uvBounds.xMin || uvBounds.yMax < uvBounds.yMin ||
-            uvBounds.xMax < 0f || uvBounds.yMax < 0f || uvBounds.xMin > 1f || uvBounds.yMin > 1f || !HasCoverage)
-            return false;
-
-        int xMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(uvBounds.xMin) * width - 0.5f), 0, width - 1);
-        int xMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(uvBounds.xMax) * width - 0.5f), 0, width - 1);
-        int yMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(uvBounds.yMin) * height - 0.5f), 0, height - 1);
-        int yMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(uvBounds.yMax) * height - 0.5f), 0, height - 1);
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        for (int blockY = yMin / CoverageBlockSize; blockY <= yMax / CoverageBlockSize; blockY++)
-        {
-            for (int blockX = xMin / CoverageBlockSize; blockX <= xMax / CoverageBlockSize; blockX++)
-            {
-                if (occupiedBlocks[blockY * blockWidth + blockX] == 0)
-                    continue;
-                int left = Mathf.Max(xMin, blockX * CoverageBlockSize);
-                int right = Mathf.Min(xMax, (blockX + 1) * CoverageBlockSize - 1);
-                int bottom = Mathf.Max(yMin, blockY * CoverageBlockSize);
-                int top = Mathf.Min(yMax, (blockY + 1) * CoverageBlockSize - 1);
-                if (left == blockX * CoverageBlockSize && right == Mathf.Min(width - 1, (blockX + 1) * CoverageBlockSize - 1) &&
-                    bottom == blockY * CoverageBlockSize && top == Mathf.Min(height - 1, (blockY + 1) * CoverageBlockSize - 1))
-                    return true;
-                for (int y = bottom; y <= top; y++)
-                    for (int x = left; x <= right; x++)
-                        if (samples[y * width + x] != 0)
-                            return true;
-            }
-        }
-        return false;
-    }
-
-    /// <summary>Tight occupied UV bounds, expanded for bilinear sampling and clipped to this map.</summary>
-    public bool TryGetCoverageBounds(out Rect uvBounds)
-    {
-        uvBounds = default;
-        if (!HasCoverage)
-            return false;
-        RefreshCoverageBounds();
-        uvBounds = Rect.MinMaxRect(Mathf.Max(0f, (occupiedPixels.xMin - 0.5f) / width),
-            Mathf.Max(0f, (occupiedPixels.yMin - 0.5f) / height),
-            Mathf.Min(1f, (occupiedPixels.xMax + 0.5f) / width),
-            Mathf.Min(1f, (occupiedPixels.yMax + 0.5f) / height));
-        return true;
-    }
-
-    /// <summary>Call after a serialized edit or Undo to invalidate all dependent captures.</summary>
-    public void NotifyChanged()
-    {
-        textureDirty = true;
-        fullTextureUpload = true;
-        coverageDirty = true;
-        unchecked { revision++; }
-        Changed?.Invoke();
-        RegionChanged?.Invoke(new RectInt(0, 0, width, height));
-    }
-
-    private void OnEnable() => NotifyChanged();
-    private void OnValidate() => NotifyChanged();
-    private void OnDisable() => ReleaseTexture();
-
-    private void EnsureStorage()
-    {
-        width = Mathf.Clamp(width, MinimumResolution, MaximumResolution);
-        height = Mathf.Clamp(height, MinimumResolution, MaximumResolution);
-        if (samples != null && samples.Length == width * height)
-            return;
-        samples = new byte[width * height];
-        textureDirty = true;
-        fullTextureUpload = true;
-        coverageDirty = true;
-    }
-
-    private void RecordChanges(RectInt region)
-    {
-        dirtyPixels = textureDirty ? Union(dirtyPixels, region) : region;
-        textureDirty = true;
-        unchecked { revision++; }
-        Changed?.Invoke();
-        RegionChanged?.Invoke(region);
-    }
-
-    private void EnsureCoverageBlocks()
-    {
-        int blockCount = ((width + CoverageBlockSize - 1) / CoverageBlockSize) *
-            ((height + CoverageBlockSize - 1) / CoverageBlockSize);
-        if (occupiedBlocks == null || occupiedBlocks.Length != blockCount)
-            occupiedBlocks = new ushort[blockCount];
-    }
-
-    private void RefreshCoverageState()
-    {
-        if (!coverageDirty)
-            return;
-        coveredSampleCount = 0;
-        occupiedPixels = default;
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        EnsureCoverageBlocks();
-        Array.Clear(occupiedBlocks, 0, occupiedBlocks.Length);
-        int xMin = width, yMin = height, xMax = -1, yMax = -1;
-        for (int y = 0; y < height; y++)
-        {
-            int blockRow = y / CoverageBlockSize * blockWidth;
-            for (int x = 0; x < width; x++)
-            {
-                if (samples[y * width + x] == 0)
-                    continue;
-                coveredSampleCount++;
-                occupiedBlocks[blockRow + x / CoverageBlockSize]++;
-                xMin = Mathf.Min(xMin, x);
-                yMin = Mathf.Min(yMin, y);
-                xMax = Mathf.Max(xMax, x);
-                yMax = Mathf.Max(yMax, y);
-            }
-        }
-        if (coveredSampleCount != 0)
-            occupiedPixels = new RectInt(xMin, yMin, xMax - xMin + 1, yMax - yMin + 1);
-        coverageDirty = false;
-        coverageBoundsDirty = false;
-    }
-
-    private void RefreshCoverageBounds()
-    {
-        if (!coverageBoundsDirty)
-            return;
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        int blockHeight = (height + CoverageBlockSize - 1) / CoverageBlockSize;
-        int minBlockX = blockWidth, minBlockY = blockHeight, maxBlockX = -1, maxBlockY = -1;
-        for (int y = 0; y < blockHeight; y++)
-            for (int x = 0; x < blockWidth; x++)
-                if (occupiedBlocks[y * blockWidth + x] != 0)
-                {
-                    minBlockX = Mathf.Min(minBlockX, x);
-                    minBlockY = Mathf.Min(minBlockY, y);
-                    maxBlockX = Mathf.Max(maxBlockX, x);
-                    maxBlockY = Mathf.Max(maxBlockY, y);
+                        name = name + " (Density)",
+                        hideFlags = HideFlags.HideAndDontSave,
+                        filterMode = FilterMode.Bilinear,
+                        wrapMode = TextureWrapMode.Clamp
+                    };
+                    _textureDirty = true;
+                    _fullTextureUpload = true;
                 }
 
-        // Only boundary block strips need a texel scan when an erase shrinks the occupied extent.
-        int left = FindOccupiedColumn(minBlockX, false);
-        int right = FindOccupiedColumn(maxBlockX, true);
-        int bottom = FindOccupiedRow(minBlockY, false);
-        int top = FindOccupiedRow(maxBlockY, true);
-        occupiedPixels = new RectInt(left, bottom, right - left + 1, top - bottom + 1);
-        coverageBoundsDirty = false;
-    }
-
-    private int FindOccupiedColumn(int blockX, bool reverse)
-    {
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        int start = blockX * CoverageBlockSize;
-        int end = Mathf.Min(start + CoverageBlockSize, width) - 1;
-        for (int step = 0; step <= end - start; step++)
-        {
-            int x = reverse ? end - step : start + step;
-            for (int blockY = 0; blockY < (height + CoverageBlockSize - 1) / CoverageBlockSize; blockY++)
-            {
-                if (occupiedBlocks[blockY * blockWidth + blockX] == 0)
-                    continue;
-                int top = Mathf.Min((blockY + 1) * CoverageBlockSize, height);
-                for (int y = blockY * CoverageBlockSize; y < top; y++)
-                    if (samples[y * width + x] != 0)
-                        return x;
-            }
-        }
-        return start;
-    }
-
-    private int FindOccupiedRow(int blockY, bool reverse)
-    {
-        int blockWidth = (width + CoverageBlockSize - 1) / CoverageBlockSize;
-        int start = blockY * CoverageBlockSize;
-        int end = Mathf.Min(start + CoverageBlockSize, height) - 1;
-        for (int step = 0; step <= end - start; step++)
-        {
-            int y = reverse ? end - step : start + step;
-            for (int blockX = 0; blockX < blockWidth; blockX++)
-            {
-                if (occupiedBlocks[blockY * blockWidth + blockX] == 0)
-                    continue;
-                int right = Mathf.Min((blockX + 1) * CoverageBlockSize, width);
-                for (int x = blockX * CoverageBlockSize; x < right; x++)
-                    if (samples[y * width + x] != 0)
-                        return y;
-            }
-        }
-        return start;
-    }
-
-    private void UploadChanges()
-    {
-        int stagingWidth = Mathf.Min(width, Mathf.Max(16, Mathf.NextPowerOfTwo(dirtyPixels.width)));
-        int stagingHeight = Mathf.Min(height, Mathf.Max(16, Mathf.NextPowerOfTwo(dirtyPixels.height)));
-        bool partial = !fullTextureUpload && dirtyPixels.width > 0 && dirtyPixels.height > 0 &&
-            !regionalCopyUnavailable && stagingWidth * stagingHeight < samples.Length / 2 &&
-            (SystemInfo.copyTextureSupport & CopyTextureSupport.Basic) != 0;
-        LastUploadWasPartial = false;
-        LastUploadedTexelCount = 0;
-        if (partial)
-        {
-            if (!uploadTexture || uploadTexture.width != stagingWidth || uploadTexture.height != stagingHeight)
-            {
-                Release(uploadTexture);
-                uploadTexture = new Texture2D(stagingWidth, stagingHeight, TextureFormat.R8, false, true)
+                if (_textureDirty)
                 {
-                    name = name + " (Density upload)",
-                    hideFlags = HideFlags.HideAndDontSave,
-                    filterMode = FilterMode.Point,
-                    wrapMode = TextureWrapMode.Clamp
-                };
-                uploadSamples = new byte[stagingWidth * stagingHeight];
-            }
-            for (int y = 0; y < dirtyPixels.height; y++)
-                Array.Copy(samples, (dirtyPixels.y + y) * width + dirtyPixels.x,
-                    uploadSamples, y * stagingWidth, dirtyPixels.width);
-            uploadTexture.LoadRawTextureData(uploadSamples);
-            uploadTexture.Apply(false, false);
-            LastUploadedTexelCount = stagingWidth * stagingHeight;
-            try
-            {
-                // Both R8 textures stay readable: CopyTexture updates their CPU copies as well.
-                // Do not Apply the destination after this copy; it would upload the complete map.
-                Graphics.CopyTexture(uploadTexture, 0, 0, 0, 0, dirtyPixels.width, dirtyPixels.height,
-                    texture, 0, 0, dirtyPixels.x, dirtyPixels.y);
-                LastUploadWasPartial = true;
-            }
-            catch (UnityException)
-            {
-                // Some backends expose CopyTexture but cannot copy this format regionally.
-                // Reloading authoritative bytes also repairs the CPU copy after a failed copy.
-                partial = false;
-                regionalCopyUnavailable = true;
+                    UploadChanges();
+                }
+
+                return _texture;
             }
         }
-        if (!partial)
+
+        /// <summary>Resize the map. New maps and newly cleared regions contain no grass.</summary>
+        /// <param name="newWidth">The new width, clamped to the resolution limits.</param>
+        /// <param name="newHeight">The new height, clamped to the resolution limits.</param>
+        /// <param name="preserveCoverage">Whether to resample the existing coverage instead of clearing it.</param>
+        public void Resize(int newWidth, int newHeight, bool preserveCoverage = true)
         {
-            texture.LoadRawTextureData(samples);
-            texture.Apply(false, false);
-            LastUploadedTexelCount += samples.Length;
+            EnsureStorage();
+            newWidth = Mathf.Clamp(newWidth, MinimumResolution, MaximumResolution);
+            newHeight = Mathf.Clamp(newHeight, MinimumResolution, MaximumResolution);
+            if (newWidth == _width && newHeight == _height)
+            {
+                return;
+            }
+
+            byte[] previous = _samples;
+            int previousWidth = _width;
+            int previousHeight = _height;
+            _samples = new byte[newWidth * newHeight];
+            _width = newWidth;
+            _height = newHeight;
+            if (preserveCoverage)
+            {
+                for (int y = 0; y < _height; y++)
+                {
+                    for (int x = 0; x < _width; x++)
+                    {
+                        float value = SampleBilinear(previous, previousWidth, previousHeight,
+                            new Vector2((x + 0.5f) / _width, (y + 0.5f) / _height));
+                        _samples[y * _width + x] = (byte)Mathf.RoundToInt(value * 255f);
+                    }
+                }
+            }
+
+            NotifyChanged();
         }
-        unchecked { TextureUploadCount++; }
-        textureDirty = fullTextureUpload = false;
-        dirtyPixels = default;
-    }
 
-    private void ReleaseTexture()
-    {
-        Release(texture);
-        Release(uploadTexture);
-        texture = null;
-        uploadTexture = null;
-        uploadSamples = null;
-        textureDirty = fullTextureUpload = true;
-    }
+        /// <summary>Sets every texel to one density.</summary>
+        /// <param name="density">The density, clamped to 0 to 1; non-finite values clear the map.</param>
+        public void Fill(float density)
+        {
+            EnsureStorage();
+            if (!IsFinite(density))
+            {
+                density = 0f;
+            }
 
-    private static void Release(Texture2D value)
-    {
-        if (!value)
-            return;
-        if (Application.isPlaying)
-            Destroy(value);
-        else
-            DestroyImmediate(value);
-    }
+            byte value = (byte)Mathf.RoundToInt(Mathf.Clamp01(density) * 255f);
+            bool changed = false;
+            for (int i = 0; i < _samples.Length; i++)
+            {
+                changed |= _samples[i] != value;
+                _samples[i] = value;
+            }
+            if (!changed)
+            {
+                return;
+            }
 
-    private static RectInt Union(RectInt left, RectInt right)
-    {
-        if (left.width <= 0 || left.height <= 0)
-            return right;
-        if (right.width <= 0 || right.height <= 0)
-            return left;
-        int x = Mathf.Min(left.xMin, right.xMin), y = Mathf.Min(left.yMin, right.yMin);
-        return new RectInt(x, y, Mathf.Max(left.xMax, right.xMax) - x, Mathf.Max(left.yMax, right.yMax) - y);
-    }
+            EnsureCoverageBlocks();
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            int blockHeight = (_height + CoverageBlockSize - 1) / CoverageBlockSize;
+            for (int y = 0; y < blockHeight; y++)
+            {
+                for (int x = 0; x < blockWidth; x++)
+                {
+                    _occupiedBlocks[y * blockWidth + x] = value == 0 ? (ushort)0 : (ushort)(
+                        Mathf.Min(CoverageBlockSize, _width - x * CoverageBlockSize) *
+                        Mathf.Min(CoverageBlockSize, _height - y * CoverageBlockSize));
+                }
+            }
 
-    private static float SampleBilinear(byte[] values, int sampleWidth, int sampleHeight, Vector2 uv)
-    {
-        float x = Mathf.Clamp(uv.x * sampleWidth - 0.5f, 0f, sampleWidth - 1);
-        float y = Mathf.Clamp(uv.y * sampleHeight - 0.5f, 0f, sampleHeight - 1);
-        int x0 = Mathf.FloorToInt(x);
-        int y0 = Mathf.FloorToInt(y);
-        int x1 = Mathf.Min(x0 + 1, sampleWidth - 1);
-        int y1 = Mathf.Min(y0 + 1, sampleHeight - 1);
-        float lower = Mathf.Lerp(values[y0 * sampleWidth + x0], values[y0 * sampleWidth + x1], x - x0);
-        float upper = Mathf.Lerp(values[y1 * sampleWidth + x0], values[y1 * sampleWidth + x1], x - x0);
-        return Mathf.Lerp(lower, upper, y - y0) / 255f;
-    }
+            _coveredSampleCount = value == 0 ? 0 : _samples.Length;
+            _occupiedPixels = value == 0 ? default : new RectInt(0, 0, _width, _height);
+            _coverageDirty = _coverageBoundsDirty = false;
+            RecordChanges(new RectInt(0, 0, _width, _height));
+        }
 
-    private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+        /// <summary>
+        /// Apply a round world-space brush represented as an ellipse in map UVs.
+        /// Hardness is the radius fraction with full brush strength. Callers record Undo first.
+        /// </summary>
+        /// <param name="centerUV">The brush centre in map UVs.</param>
+        /// <param name="radiusUV">The brush radii in map UVs.</param>
+        /// <param name="strength">How much density one dab adds or removes, clamped to 0 to 1.</param>
+        /// <param name="hardness">The radius fraction with full brush strength, clamped to 0 to 1.</param>
+        /// <param name="erase">Whether to remove density instead of adding it.</param>
+        /// <returns>Whether any texel changed.</returns>
+        public bool Paint(Vector2 centerUV, Vector2 radiusUV, float strength, float hardness, bool erase)
+        {
+            if (!IsFinite(centerUV.x) || !IsFinite(centerUV.y) ||
+                !IsFinite(radiusUV.x) || !IsFinite(radiusUV.y) ||
+                !IsFinite(strength) || !IsFinite(hardness) ||
+                radiusUV.x <= 0f || radiusUV.y <= 0f || strength <= 0f)
+            {
+                return false;
+            }
+
+            EnsureStorage();
+            if (centerUV.x + radiusUV.x < 0f || centerUV.y + radiusUV.y < 0f ||
+                centerUV.x - radiusUV.x > 1f || centerUV.y - radiusUV.y > 1f)
+            {
+                return false;
+            }
+
+            RefreshCoverageState();
+            strength = Mathf.Clamp01(strength);
+            hardness = Mathf.Clamp01(hardness);
+            int xMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(centerUV.x - radiusUV.x) * _width), 0, _width - 1);
+            int xMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(centerUV.x + radiusUV.x) * _width), 0, _width - 1);
+            int yMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(centerUV.y - radiusUV.y) * _height), 0, _height - 1);
+            int yMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(centerUV.y + radiusUV.y) * _height), 0, _height - 1);
+            int changedXMin = _width, changedYMin = _height, changedXMax = -1, changedYMax = -1;
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+
+            for (int y = yMin; y <= yMax; y++)
+            {
+                float dy = ((y + 0.5f) / _height - centerUV.y) / radiusUV.y;
+                for (int x = xMin; x <= xMax; x++)
+                {
+                    float dx = ((x + 0.5f) / _width - centerUV.x) / radiusUV.x;
+                    float squaredDistance = dx * dx + dy * dy;
+                    if (squaredDistance > 1f)
+                    {
+                        continue;
+                    }
+
+                    float distance = Mathf.Sqrt(squaredDistance);
+                    float falloff = hardness >= 1f ? 1f :
+                        1f - Mathf.SmoothStep(0f, 1f, (distance - hardness) / (1f - hardness));
+                    int index = y * _width + x;
+                    byte previousValue = _samples[index];
+                    float previous = previousValue / 255f;
+                    float next = erase ? previous - strength * falloff : previous + strength * falloff;
+                    byte quantized = (byte)Mathf.RoundToInt(Mathf.Clamp01(next) * 255f);
+                    if (previousValue == quantized)
+                    {
+                        continue;
+                    }
+
+                    _samples[index] = quantized;
+                    if (previousValue == 0 || quantized == 0)
+                    {
+                        int block = y / CoverageBlockSize * blockWidth + x / CoverageBlockSize;
+                        if (previousValue == 0)
+                        {
+                            _occupiedBlocks[block]++;
+                            _coveredSampleCount++;
+                            _occupiedPixels = _coveredSampleCount == 1 ? new RectInt(x, y, 1, 1) :
+                                Union(_occupiedPixels, new RectInt(x, y, 1, 1));
+                        }
+                        else
+                        {
+                            _occupiedBlocks[block]--;
+                            _coveredSampleCount--;
+                            if (x == _occupiedPixels.xMin || x == _occupiedPixels.xMax - 1 ||
+                                y == _occupiedPixels.yMin || y == _occupiedPixels.yMax - 1)
+                            {
+                                _coverageBoundsDirty = true;
+                            }
+                        }
+                    }
+                    changedXMin = Mathf.Min(changedXMin, x);
+                    changedYMin = Mathf.Min(changedYMin, y);
+                    changedXMax = Mathf.Max(changedXMax, x);
+                    changedYMax = Mathf.Max(changedYMax, y);
+                }
+            }
+
+            if (changedXMax < changedXMin)
+            {
+                return false;
+            }
+
+            if (_coveredSampleCount == 0)
+            {
+                _occupiedPixels = default;
+                _coverageBoundsDirty = false;
+            }
+            RecordChanges(new RectInt(changedXMin, changedYMin,
+                changedXMax - changedXMin + 1, changedYMax - changedYMin + 1));
+            return true;
+        }
+
+        /// <summary>Bilinearly samples the density at a map UV; zero outside the map.</summary>
+        /// <param name="uv">The map UV, from 0 to 1.</param>
+        public float Sample(Vector2 uv)
+        {
+            if (!IsFinite(uv.x) || !IsFinite(uv.y) || uv.x < 0f || uv.x > 1f || uv.y < 0f || uv.y > 1f)
+            {
+                return 0f;
+            }
+
+            EnsureStorage();
+            return SampleBilinear(_samples, _width, _height, uv);
+        }
+
+        /// <summary>Conservative occupancy query including the bilinear filter footprint.</summary>
+        /// <param name="uvBounds">The query rectangle in map UVs.</param>
+        public bool HasCoverageIn(Rect uvBounds)
+        {
+            if (!IsFinite(uvBounds.xMin) || !IsFinite(uvBounds.xMax) ||
+                !IsFinite(uvBounds.yMin) || !IsFinite(uvBounds.yMax) ||
+                uvBounds.xMax < uvBounds.xMin || uvBounds.yMax < uvBounds.yMin ||
+                uvBounds.xMax < 0f || uvBounds.yMax < 0f || uvBounds.xMin > 1f || uvBounds.yMin > 1f || !HasCoverage)
+            {
+                return false;
+            }
+
+            int xMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(uvBounds.xMin) * _width - 0.5f), 0, _width - 1);
+            int xMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(uvBounds.xMax) * _width - 0.5f), 0, _width - 1);
+            int yMin = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(uvBounds.yMin) * _height - 0.5f), 0, _height - 1);
+            int yMax = Mathf.Clamp(Mathf.CeilToInt(Mathf.Clamp01(uvBounds.yMax) * _height - 0.5f), 0, _height - 1);
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            for (int blockY = yMin / CoverageBlockSize; blockY <= yMax / CoverageBlockSize; blockY++)
+            {
+                for (int blockX = xMin / CoverageBlockSize; blockX <= xMax / CoverageBlockSize; blockX++)
+                {
+                    if (_occupiedBlocks[blockY * blockWidth + blockX] == 0)
+                    {
+                        continue;
+                    }
+
+                    int left = Mathf.Max(xMin, blockX * CoverageBlockSize);
+                    int right = Mathf.Min(xMax, (blockX + 1) * CoverageBlockSize - 1);
+                    int bottom = Mathf.Max(yMin, blockY * CoverageBlockSize);
+                    int top = Mathf.Min(yMax, (blockY + 1) * CoverageBlockSize - 1);
+                    if (left == blockX * CoverageBlockSize && right == Mathf.Min(_width - 1, (blockX + 1) * CoverageBlockSize - 1) &&
+                        bottom == blockY * CoverageBlockSize && top == Mathf.Min(_height - 1, (blockY + 1) * CoverageBlockSize - 1))
+                    {
+                        return true;
+                    }
+
+                    for (int y = bottom; y <= top; y++)
+                    {
+                        for (int x = left; x <= right; x++)
+                        {
+                            if (_samples[y * _width + x] != 0)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Tight occupied UV bounds, expanded for bilinear sampling and clipped to this map.</summary>
+        /// <param name="uvBounds">The occupied bounds, or default when the map is empty.</param>
+        /// <returns>Whether the map contains any grass.</returns>
+        public bool TryGetCoverageBounds(out Rect uvBounds)
+        {
+            uvBounds = default;
+            if (!HasCoverage)
+            {
+                return false;
+            }
+
+            RefreshCoverageBounds();
+            uvBounds = Rect.MinMaxRect(Mathf.Max(0f, (_occupiedPixels.xMin - 0.5f) / _width),
+                Mathf.Max(0f, (_occupiedPixels.yMin - 0.5f) / _height),
+                Mathf.Min(1f, (_occupiedPixels.xMax + 0.5f) / _width),
+                Mathf.Min(1f, (_occupiedPixels.yMax + 0.5f) / _height));
+            return true;
+        }
+
+        /// <summary>Call after a serialized edit or Undo to invalidate all dependent captures.</summary>
+        public void NotifyChanged()
+        {
+            _textureDirty = true;
+            _fullTextureUpload = true;
+            _coverageDirty = true;
+            unchecked { _revision++; }
+            Changed?.Invoke();
+            RegionChanged?.Invoke(new RectInt(0, 0, _width, _height));
+        }
+
+        private void OnEnable() => NotifyChanged();
+        private void OnValidate() => NotifyChanged();
+        private void OnDisable() => ReleaseTexture();
+
+        private void EnsureStorage()
+        {
+            _width = Mathf.Clamp(_width, MinimumResolution, MaximumResolution);
+            _height = Mathf.Clamp(_height, MinimumResolution, MaximumResolution);
+            if (_samples != null && _samples.Length == _width * _height)
+            {
+                return;
+            }
+
+            _samples = new byte[_width * _height];
+            _textureDirty = true;
+            _fullTextureUpload = true;
+            _coverageDirty = true;
+        }
+
+        private void RecordChanges(RectInt region)
+        {
+            _dirtyPixels = _textureDirty ? Union(_dirtyPixels, region) : region;
+            _textureDirty = true;
+            unchecked { _revision++; }
+            Changed?.Invoke();
+            RegionChanged?.Invoke(region);
+        }
+
+        private void EnsureCoverageBlocks()
+        {
+            int blockCount = ((_width + CoverageBlockSize - 1) / CoverageBlockSize) *
+                ((_height + CoverageBlockSize - 1) / CoverageBlockSize);
+            if (_occupiedBlocks == null || _occupiedBlocks.Length != blockCount)
+            {
+                _occupiedBlocks = new ushort[blockCount];
+            }
+        }
+
+        private void RefreshCoverageState()
+        {
+            if (!_coverageDirty)
+            {
+                return;
+            }
+
+            _coveredSampleCount = 0;
+            _occupiedPixels = default;
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            EnsureCoverageBlocks();
+            Array.Clear(_occupiedBlocks, 0, _occupiedBlocks.Length);
+            int xMin = _width, yMin = _height, xMax = -1, yMax = -1;
+            for (int y = 0; y < _height; y++)
+            {
+                int blockRow = y / CoverageBlockSize * blockWidth;
+                for (int x = 0; x < _width; x++)
+                {
+                    if (_samples[y * _width + x] == 0)
+                    {
+                        continue;
+                    }
+
+                    _coveredSampleCount++;
+                    _occupiedBlocks[blockRow + x / CoverageBlockSize]++;
+                    xMin = Mathf.Min(xMin, x);
+                    yMin = Mathf.Min(yMin, y);
+                    xMax = Mathf.Max(xMax, x);
+                    yMax = Mathf.Max(yMax, y);
+                }
+            }
+            if (_coveredSampleCount != 0)
+            {
+                _occupiedPixels = new RectInt(xMin, yMin, xMax - xMin + 1, yMax - yMin + 1);
+            }
+
+            _coverageDirty = false;
+            _coverageBoundsDirty = false;
+        }
+
+        private void RefreshCoverageBounds()
+        {
+            if (!_coverageBoundsDirty)
+            {
+                return;
+            }
+
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            int blockHeight = (_height + CoverageBlockSize - 1) / CoverageBlockSize;
+            int minBlockX = blockWidth, minBlockY = blockHeight, maxBlockX = -1, maxBlockY = -1;
+            for (int y = 0; y < blockHeight; y++)
+            {
+                for (int x = 0; x < blockWidth; x++)
+                {
+                    if (_occupiedBlocks[y * blockWidth + x] != 0)
+                    {
+                        minBlockX = Mathf.Min(minBlockX, x);
+                        minBlockY = Mathf.Min(minBlockY, y);
+                        maxBlockX = Mathf.Max(maxBlockX, x);
+                        maxBlockY = Mathf.Max(maxBlockY, y);
+                    }
+                }
+            }
+
+            // Only boundary block strips need a texel scan when an erase shrinks the occupied extent.
+            int left = FindOccupiedColumn(minBlockX, false);
+            int right = FindOccupiedColumn(maxBlockX, true);
+            int bottom = FindOccupiedRow(minBlockY, false);
+            int top = FindOccupiedRow(maxBlockY, true);
+            _occupiedPixels = new RectInt(left, bottom, right - left + 1, top - bottom + 1);
+            _coverageBoundsDirty = false;
+        }
+
+        private int FindOccupiedColumn(int blockX, bool reverse)
+        {
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            int start = blockX * CoverageBlockSize;
+            int end = Mathf.Min(start + CoverageBlockSize, _width) - 1;
+            for (int step = 0; step <= end - start; step++)
+            {
+                int x = reverse ? end - step : start + step;
+                for (int blockY = 0; blockY < (_height + CoverageBlockSize - 1) / CoverageBlockSize; blockY++)
+                {
+                    if (_occupiedBlocks[blockY * blockWidth + blockX] == 0)
+                    {
+                        continue;
+                    }
+
+                    int top = Mathf.Min((blockY + 1) * CoverageBlockSize, _height);
+                    for (int y = blockY * CoverageBlockSize; y < top; y++)
+                    {
+                        if (_samples[y * _width + x] != 0)
+                        {
+                            return x;
+                        }
+                    }
+                }
+            }
+            return start;
+        }
+
+        private int FindOccupiedRow(int blockY, bool reverse)
+        {
+            int blockWidth = (_width + CoverageBlockSize - 1) / CoverageBlockSize;
+            int start = blockY * CoverageBlockSize;
+            int end = Mathf.Min(start + CoverageBlockSize, _height) - 1;
+            for (int step = 0; step <= end - start; step++)
+            {
+                int y = reverse ? end - step : start + step;
+                for (int blockX = 0; blockX < blockWidth; blockX++)
+                {
+                    if (_occupiedBlocks[blockY * blockWidth + blockX] == 0)
+                    {
+                        continue;
+                    }
+
+                    int right = Mathf.Min((blockX + 1) * CoverageBlockSize, _width);
+                    for (int x = blockX * CoverageBlockSize; x < right; x++)
+                    {
+                        if (_samples[y * _width + x] != 0)
+                        {
+                            return y;
+                        }
+                    }
+                }
+            }
+            return start;
+        }
+
+        private void UploadChanges()
+        {
+            int stagingWidth = Mathf.Min(_width, Mathf.Max(16, Mathf.NextPowerOfTwo(_dirtyPixels.width)));
+            int stagingHeight = Mathf.Min(_height, Mathf.Max(16, Mathf.NextPowerOfTwo(_dirtyPixels.height)));
+            bool partial = !_fullTextureUpload && _dirtyPixels.width > 0 && _dirtyPixels.height > 0 &&
+                !_regionalCopyUnavailable && stagingWidth * stagingHeight < _samples.Length / 2 &&
+                (SystemInfo.copyTextureSupport & CopyTextureSupport.Basic) != 0;
+            LastUploadWasPartial = false;
+            LastUploadedTexelCount = 0;
+            if (partial)
+            {
+                if (!_uploadTexture || _uploadTexture.width != stagingWidth || _uploadTexture.height != stagingHeight)
+                {
+                    Release(_uploadTexture);
+                    _uploadTexture = new Texture2D(stagingWidth, stagingHeight, TextureFormat.R8, false, true)
+                    {
+                        name = name + " (Density upload)",
+                        hideFlags = HideFlags.HideAndDontSave,
+                        filterMode = FilterMode.Point,
+                        wrapMode = TextureWrapMode.Clamp
+                    };
+                    _uploadSamples = new byte[stagingWidth * stagingHeight];
+                }
+                for (int y = 0; y < _dirtyPixels.height; y++)
+                {
+                    Array.Copy(_samples, (_dirtyPixels.y + y) * _width + _dirtyPixels.x,
+                        _uploadSamples, y * stagingWidth, _dirtyPixels.width);
+                }
+
+                _uploadTexture.LoadRawTextureData(_uploadSamples);
+                _uploadTexture.Apply(false, false);
+                LastUploadedTexelCount = stagingWidth * stagingHeight;
+                try
+                {
+                    // Both R8 textures stay readable: CopyTexture updates their CPU copies as well.
+                    // Do not Apply the destination after this copy; it would upload the complete map.
+                    Graphics.CopyTexture(_uploadTexture, 0, 0, 0, 0, _dirtyPixels.width, _dirtyPixels.height,
+                        _texture, 0, 0, _dirtyPixels.x, _dirtyPixels.y);
+                    LastUploadWasPartial = true;
+                }
+                catch (UnityException)
+                {
+                    // Some backends expose CopyTexture but cannot copy this format regionally.
+                    // Reloading authoritative bytes also repairs the CPU copy after a failed copy.
+                    partial = false;
+                    _regionalCopyUnavailable = true;
+                }
+            }
+            if (!partial)
+            {
+                _texture.LoadRawTextureData(_samples);
+                _texture.Apply(false, false);
+                LastUploadedTexelCount += _samples.Length;
+            }
+            unchecked { TextureUploadCount++; }
+            _textureDirty = _fullTextureUpload = false;
+            _dirtyPixels = default;
+        }
+
+        private void ReleaseTexture()
+        {
+            Release(_texture);
+            Release(_uploadTexture);
+            _texture = null;
+            _uploadTexture = null;
+            _uploadSamples = null;
+            _textureDirty = _fullTextureUpload = true;
+        }
+
+        private static void Release(Texture2D value)
+        {
+            if (!value)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(value);
+            }
+            else
+            {
+                DestroyImmediate(value);
+            }
+        }
+
+        private static RectInt Union(RectInt left, RectInt right)
+        {
+            if (left.width <= 0 || left.height <= 0)
+            {
+                return right;
+            }
+
+            if (right.width <= 0 || right.height <= 0)
+            {
+                return left;
+            }
+
+            int x = Mathf.Min(left.xMin, right.xMin), y = Mathf.Min(left.yMin, right.yMin);
+            return new RectInt(x, y, Mathf.Max(left.xMax, right.xMax) - x, Mathf.Max(left.yMax, right.yMax) - y);
+        }
+
+        private static float SampleBilinear(byte[] values, int sampleWidth, int sampleHeight, Vector2 uv)
+        {
+            float x = Mathf.Clamp(uv.x * sampleWidth - 0.5f, 0f, sampleWidth - 1);
+            float y = Mathf.Clamp(uv.y * sampleHeight - 0.5f, 0f, sampleHeight - 1);
+            int x0 = Mathf.FloorToInt(x);
+            int y0 = Mathf.FloorToInt(y);
+            int x1 = Mathf.Min(x0 + 1, sampleWidth - 1);
+            int y1 = Mathf.Min(y0 + 1, sampleHeight - 1);
+            float lower = Mathf.Lerp(values[y0 * sampleWidth + x0], values[y0 * sampleWidth + x1], x - x0);
+            float upper = Mathf.Lerp(values[y1 * sampleWidth + x0], values[y1 * sampleWidth + x1], x - x0);
+            return Mathf.Lerp(lower, upper, y - y0) / 255f;
+        }
+
+        private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+    }
 }

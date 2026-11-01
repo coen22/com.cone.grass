@@ -82,18 +82,7 @@ Shader "InfiniteGrass/GrassBladeShader"
 
             #include "GrassBladeCommon.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-
-            half3 GrassAmbientLight(half3 normalWS)
-            {
-                // Explicit scene ambient probe: these indirect commands do not
-                // populate the per-object unity_SH* values used by SampleSH.
-                half3 ambient = SHEvalLinearL0L1(normalWS, _GrassSHAr, _GrassSHAg, _GrassSHAb);
-                ambient += SHEvalLinearL2(normalWS, _GrassSHBr, _GrassSHBg, _GrassSHBb, _GrassSHC);
-                #if defined(UNITY_COLORSPACE_GAMMA)
-                    ambient = LinearToSRGB(ambient);
-                #endif
-                return max(half3(0, 0, 0), ambient);
-            }
+            #include "GrassForwardLighting.hlsl"
 
             struct GrassForwardVaryings
             {
@@ -149,6 +138,19 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // The blade keeps the ground's colour to its tip; light, not a tint, shades it.
                 if (_GroundAlbedoAlongBlade > 0.5)
                     output.grassAlbedo = lerp(output.groundColor.rgb, colorModifier.rgb, saturate(colorModifier.a));
+                // The plant kind's tint and its per-plant and per-clump variation (white without a profile).
+                // The root still blends to the unmodified ground colour: heads never take it.
+                output.grassAlbedo *= GrassKindTint(blade.kind, blade.seed, blade.pivotWS);
+                // As a flower's head shrinks away (under about three pixels, or near its draw distance), the top of its
+                // stem takes the mean petal colour, so a cluster reads as a soft patch rather than specks.
+                float4 farTip = _GrassKindFar[blade.kind];
+                UNITY_BRANCH if (farTip.w > 0.0)
+                {
+                    half headShows = GrassHeadVisibility(_GrassKindHead[blade.kind].x, blade.cameraDistance,
+                        blade.worldUnitsPerPixel);
+                    half farWeight = farTip.w * (1.0h - headShows) * smoothstep(0.45, 0.9, blade.height);
+                    output.grassAlbedo = lerp(output.grassAlbedo, farTip.rgb, farWeight);
+                }
                 // The canopy over this root: the population the compute thinned the blades to.
                 // Keep the existing serialized toggle; no keyword migration or extra variants.
                 UNITY_BRANCH if (_CanopyOcclusion > 0.5)
@@ -236,30 +238,6 @@ Shader "InfiniteGrass/GrassBladeShader"
                 // Flooring only the denominator darkens it even when bareLight == seenLight.
                 // Equal floors retain the existing compensation above the low-light threshold.
                 return max(bareLight, 1e-4) / max(seenLight, 1e-4);
-            }
-
-            Light GrassMainLight(float3 positionWS)
-            {
-                #if defined(_MAIN_LIGHT_SHADOWS_SCREEN)
-                    // URP creates its screen shadow texture before this indirect draw.
-                    // That texture represents the opaque surface behind a blade, so
-                    // sample the shadow atlas at the blade's actual position instead.
-                    Light mainLight = GetMainLight();
-                    half cascadeIndex = _GrassMainLightShadowCascades > 1
-                        ? ComputeCascadeIndex(positionWS) : half(0.0);
-                    float4 shadowCoord = float4(mul(_MainLightWorldToShadow[cascadeIndex],
-                        float4(positionWS, 1.0)).xyz, 0.0);
-                    half shadow = SampleShadowmap(
-                        TEXTURE2D_SHADOW_ARGS(_MainLightShadowmapTexture, sampler_LinearClampCompare),
-                        shadowCoord, GetMainLightShadowSamplingData(), GetMainLightShadowParams(), false);
-                    mainLight.shadowAttenuation = lerp(shadow, 1.0h, GetMainLightShadowFade(positionWS));
-                #else
-                    Light mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS),
-                        positionWS, half4(1, 1, 1, 1));
-                #endif
-                // These indirect draws have no MeshRenderer per-object light mask.
-                mainLight.distanceAttenuation = 1.0;
-                return mainLight;
             }
 
             half4 GrassForwardFragment(GrassForwardVaryings input) : SV_Target

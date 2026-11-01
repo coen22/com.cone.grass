@@ -1,0 +1,8 @@
+{
+  "name": "Cone.Grass.MicroVerse",
+  "rootNamespace": "Cone.Grass.MicroVerse",
+  "references": [
+    "Cone.Grass"
+  ],
+  "autoReferenced": true
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Cone.Grass.MicroVerse.Editor",
+  "rootNamespace": "Cone.Grass.MicroVerse",
+  "references": [
+    "Cone.Grass",
+    "Cone.Grass.MicroVerse",
+    "Cone.Grass.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}
