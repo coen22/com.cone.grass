@@ -12,5 +12,5 @@
       "define": "CONE_GRASS_SAMPLE_INPUT_SYSTEM"
     }
   ],
-  "autoReferenced": false
+  "autoReferenced": true
 }
