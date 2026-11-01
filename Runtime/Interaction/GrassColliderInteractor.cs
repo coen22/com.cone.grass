@@ -72,7 +72,7 @@ namespace Cone.Grass
         [SerializeField, FormerlySerializedAs("uncoveredSupportLayers")] private LayerMask _uncoveredSupportLayers;
         [SerializeField, FormerlySerializedAs("updateMode")] private UpdateMode _updateMode = UpdateMode.LateUpdate;
         [SerializeField, Min(0f), FormerlySerializedAs("groundClearance")] private float _groundClearance = 0.15f;
-        [SerializeField, Min(0f), FormerlySerializedAs("allowedPenetration")] private readonly float _allowedPenetration = 0.1f;
+        [SerializeField, Min(0f), FormerlySerializedAs("allowedPenetration")] private float _allowedPenetration = 0.1f;
         [SerializeField, FormerlySerializedAs("attenuateWithClearance")] private bool _attenuateWithClearance;
 
         [Header("Interaction and recovery")]
@@ -82,11 +82,11 @@ namespace Cone.Grass
         [Tooltip("Extra horizontal interaction influence. Support casts always use the actual collider radius.")]
         [SerializeField, Min(0f), FormerlySerializedAs("footprintPadding")] private float _footprintPadding;
         [Tooltip("Fixed world-grid spacing for this history. Smaller values need more nodes and finer grass capture resolution.")]
-        [SerializeField, Min(0.01f), FormerlySerializedAs("gridSpacing")] private readonly float _gridSpacing = 0.15f;
+        [SerializeField, Min(0.01f), FormerlySerializedAs("gridSpacing")] private float _gridSpacing = 0.15f;
         [Tooltip("Maximum retained contact nodes. Overflow clears the path and attempts the complete current footprint only.")]
-        [SerializeField, Range(16, 2048), FormerlySerializedAs("nodeCapacity")] private readonly int _nodeCapacity = 1024;
+        [SerializeField, Range(16, 2048), FormerlySerializedAs("nodeCapacity")] private int _nodeCapacity = 1024;
         [Tooltip("Motion farther than this between observations clears the old field instead of joining the positions.")]
-        [SerializeField, Min(0.01f), FormerlySerializedAs("teleportDistance")] private readonly float _teleportDistance = 5f;
+        [SerializeField, Min(0.01f), FormerlySerializedAs("teleportDistance")] private float _teleportDistance = 5f;
 
         private GrassInteractionField _field;
         private GrassInteractionMesh _interactionMesh;

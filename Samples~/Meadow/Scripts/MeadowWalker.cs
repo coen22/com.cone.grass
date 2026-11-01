@@ -13,16 +13,16 @@ namespace Cone.Grass.Samples.Meadow
     public sealed class MeadowWalker : MonoBehaviour
     {
         [Tooltip("Camera whose yaw turns the keyboard directions. Empty uses world axes.")]
-        [SerializeField, FormerlySerializedAs("cameraTransform")] private readonly Transform _cameraTransform;
-        [SerializeField, Min(0f), FormerlySerializedAs("walkSpeed")] private readonly float _walkSpeed = 1.6f;
-        [SerializeField, Min(0f), FormerlySerializedAs("runSpeed")] private readonly float _runSpeed = 4.5f;
-        [SerializeField, Min(0f), FormerlySerializedAs("turnSpeed")] private readonly float _turnSpeed = 540f;
+        [SerializeField, FormerlySerializedAs("cameraTransform")] private Transform _cameraTransform;
+        [SerializeField, Min(0f), FormerlySerializedAs("walkSpeed")] private float _walkSpeed = 1.6f;
+        [SerializeField, Min(0f), FormerlySerializedAs("runSpeed")] private float _runSpeed = 4.5f;
+        [SerializeField, Min(0f), FormerlySerializedAs("turnSpeed")] private float _turnSpeed = 540f;
         [Tooltip("Walk a figure of eight while there is no input.")]
-        [SerializeField, FormerlySerializedAs("autopilot")] private readonly bool _autopilot = true;
+        [SerializeField, FormerlySerializedAs("autopilot")] private bool _autopilot = true;
         [Tooltip("Half the width of the autopilot's figure of eight, in metres.")]
-        [SerializeField, Min(1f), FormerlySerializedAs("autopilotRadius")] private readonly float _autopilotRadius = 9f;
+        [SerializeField, Min(1f), FormerlySerializedAs("autopilotRadius")] private float _autopilotRadius = 9f;
         [Tooltip("Seconds without input before the autopilot takes over again.")]
-        [SerializeField, Min(0f), FormerlySerializedAs("autopilotDelay")] private readonly float _autopilotDelay = 4f;
+        [SerializeField, Min(0f), FormerlySerializedAs("autopilotDelay")] private float _autopilotDelay = 4f;
 
         private CharacterController _controller;
         private Vector3 _autopilotCentre;

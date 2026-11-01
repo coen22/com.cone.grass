@@ -600,11 +600,11 @@ namespace Cone.Grass.Tests
                 second.AssertReleased();
                 Assert.That(fixture.States.Count, Is.Zero);
                 Assert.That(fixture.Histories.Count, Is.Zero);
-                Assert.That(GetField(fixture.Pass, "disposed"), Is.False);
+                Assert.That(GetField(fixture.Pass, "_disposed"), Is.False);
 
                 fixture.Feature.SetActive(true);
                 InvokePrivate(fixture.Feature, "OnBeginContextRendering", default(ScriptableRenderContext), null);
-                Assert.That(GetField(fixture.Feature, "grassPass"), Is.SameAs(fixture.Pass));
+                Assert.That(GetField(fixture.Feature, "_grassPass"), Is.SameAs(fixture.Pass));
                 // Model the next supported camera's state registration, then execute
                 // the real allocator. This verifies recreation, not a rendered frame.
                 fixture.RecreateCameraState(0);
@@ -692,7 +692,7 @@ namespace Cone.Grass.Tests
                     "Packages/com.cone.grass/Runtime/Materials/Grass Blade.mat");
                 ComputeShader shader = missingMaterial ? AssetDatabase.LoadAssetAtPath<ComputeShader>(
                     "Packages/com.cone.grass/Runtime/Compute/GrassPositionsCompute.compute") : null;
-                SetField(fixture.Feature, "computeShader", shader);
+                SetField(fixture.Feature, "_computeShader", shader);
                 Assert.That(missingMaterial ? shader != null : fixture.Owner.GrassMaterial != null, Is.True);
                 RenderingData renderingData = default;
 
@@ -809,14 +809,14 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.Histories.Count, Is.EqualTo(remaining));
                 Assert.That(GetField(fixture.CameraStates[0], "Disposed"), Is.True);
                 Assert.That(GetField(fixture.CameraStates[1], "Disposed"), Is.EqualTo(inactiveFeature));
-                Assert.That(GetField(fixture.Pass, "disposed"), Is.False,
+                Assert.That(GetField(fixture.Pass, "_disposed"), Is.False,
                     "Feature inactivity only releases camera resources; helper materials remain reusable.");
                 Assert.That(fixture.Owner.VisibleGrassCount, Is.EqualTo(123u),
                     "Cleanup cannot overwrite diagnostics another active renderer may have supplied.");
 
                 feature.SetActive(true);
                 beginContext.Invoke(feature, new object[] { default(UnityEngine.Rendering.ScriptableRenderContext), null });
-                Assert.That(GetField(fixture.Feature, "grassPass"), Is.SameAs(fixture.Pass));
+                Assert.That(GetField(fixture.Feature, "_grassPass"), Is.SameAs(fixture.Pass));
                 Assert.That(fixture.States.Count, Is.EqualTo(remaining));
             }
         }
@@ -828,7 +828,7 @@ namespace Cone.Grass.Tests
             {
                 Object.DestroyImmediate(fixture.Feature);
 
-                Assert.That(GetField(fixture.Pass, "disposed"), Is.True);
+                Assert.That(GetField(fixture.Pass, "_disposed"), Is.True);
                 Assert.That(fixture.States.Count, Is.Zero);
                 Assert.That(fixture.Histories.Count, Is.Zero);
                 foreach (object state in fixture.CameraStates)
@@ -854,7 +854,7 @@ namespace Cone.Grass.Tests
                     Renderer renderer = modifierObject.GetComponent<Renderer>();
                     renderer.sharedMaterial = material;
                     InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
-                    object inventory = GetField(fixture.Pass, "modifierInventory");
+                    object inventory = GetField(fixture.Pass, "_modifierInventory");
                     Assert.That(((IList)inventory).Contains(renderer), Is.True,
                         "Initial discovery must retain an existing inactive modifier for later activation.");
                     object state = fixture.CameraStates[0];
@@ -864,15 +864,15 @@ namespace Cone.Grass.Tests
                         new[] { state.GetType(), typeof(Bounds), typeof(bool), typeof(bool), typeof(bool) }, null);
                     object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 20f), false, true, false };
                     IList draws = (IList)GetField(state, "MaskDraws");
-                    uint inventoryRevision = (uint)GetField(fixture.Pass, "inventoryRevision");
+                    uint inventoryRevision = (uint)GetField(fixture.Pass, "_inventoryRevision");
                     collect.Invoke(fixture.Pass, arguments);
                     Assert.That(ContainsDraw(draws, renderer), Is.False);
 
                     modifierObject.SetActive(true);
                     collect.Invoke(fixture.Pass, arguments);
                     Assert.That(ContainsDraw(draws, renderer), Is.True);
-                    Assert.That(GetField(fixture.Pass, "modifierInventory"), Is.SameAs(inventory));
-                    Assert.That(GetField(fixture.Pass, "inventoryRevision"), Is.EqualTo(inventoryRevision),
+                    Assert.That(GetField(fixture.Pass, "_modifierInventory"), Is.SameAs(inventory));
+                    Assert.That(GetField(fixture.Pass, "_inventoryRevision"), Is.EqualTo(inventoryRevision),
                         "Activation must be handled by capture eligibility without another scene search.");
 
                     renderer.enabled = false;
@@ -905,12 +905,12 @@ namespace Cone.Grass.Tests
                     terrainObject.SetActive(disabledComponent);
                     Assert.That(terrain.isActiveAndEnabled, Is.False);
                     InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
-                    object inventory = GetField(fixture.Pass, "terrainInventory");
+                    object inventory = GetField(fixture.Pass, "_terrainInventory");
                     Assert.That(((IList)inventory).Contains(terrain), Is.True);
                     object state = fixture.CameraStates[0];
                     object[] arguments = { state, new Bounds(Vector3.zero, Vector3.one * 40f), false };
                     IList surfaces = (IList)GetField(state, "SurfaceTerrains");
-                    uint inventoryRevision = (uint)GetField(fixture.Pass, "inventoryRevision");
+                    uint inventoryRevision = (uint)GetField(fixture.Pass, "_inventoryRevision");
                     InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
                     Assert.That(surfaces.Contains(terrain), Is.False);
 
@@ -918,8 +918,8 @@ namespace Cone.Grass.Tests
                     terrain.enabled = true;
                     InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
                     Assert.That(surfaces.Contains(terrain), Is.True);
-                    Assert.That(GetField(fixture.Pass, "terrainInventory"), Is.SameAs(inventory));
-                    Assert.That(GetField(fixture.Pass, "inventoryRevision"), Is.EqualTo(inventoryRevision));
+                    Assert.That(GetField(fixture.Pass, "_terrainInventory"), Is.SameAs(inventory));
+                    Assert.That(GetField(fixture.Pass, "_inventoryRevision"), Is.EqualTo(inventoryRevision));
 
                     terrain.enabled = false;
                     InvokePrivate(fixture.Pass, "CollectSurfaceTerrains", arguments);
@@ -955,7 +955,7 @@ namespace Cone.Grass.Tests
                     }
 
                     InvokePrivate(fixture.Pass, "EnsureInventory", fixture.Owner);
-                    IList inventory = (IList)GetField(fixture.Pass, "terrainInventory");
+                    IList inventory = (IList)GetField(fixture.Pass, "_terrainInventory");
                     int retained = 0;
                     foreach (Terrain source in inventory)
                     {
@@ -1005,7 +1005,7 @@ namespace Cone.Grass.Tests
                     renderer.sharedMaterials = new Material[1];
                     Collider collider = surfaceObject.AddComponent<BoxCollider>();
                     GrassPlacementArea area = areaObject.AddComponent<GrassPlacementArea>();
-                    SetField(area, "paintSurface", collider);
+                    SetField(area, "_paintSurface", collider);
                     area.MarkDirty();
                     Assert.That(area.TryGetCaptureData(out _), Is.True);
                     Bounds bounds = renderer.bounds;
@@ -1103,7 +1103,7 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.Owner.GetGrassMeshCache(), Is.SameAs(mesh));
                 Assert.That(InvokePrivate(state, "UpdateArgumentData", (object)meshes), Is.True,
                     "Changing a native index range must refresh arguments even when its Mesh identity is unchanged.");
-                var arguments = (GraphicsBuffer.IndirectDrawIndexedArgs[])GetField(state, "argumentData");
+                var arguments = (GraphicsBuffer.IndirectDrawIndexedArgs[])GetField(state, "_argumentData");
                 Assert.That(arguments[0].indexCountPerInstance, Is.EqualTo(mesh.GetIndexCount(0)));
                 Assert.That(arguments[0].startIndex, Is.EqualTo(mesh.GetIndexStart(0)));
                 Assert.That(arguments[0].baseVertexIndex, Is.EqualTo(mesh.GetBaseVertex(0)));
@@ -1450,11 +1450,11 @@ namespace Cone.Grass.Tests
                         Owner.CaptureResolution = 128;
                     }
                     Feature = ScriptableObject.CreateInstance<GrassDataRendererFeature>();
-                    SetField(Feature, "heightMapLayer", (LayerMask)surfaceLayerMask);
+                    SetField(Feature, "_heightMapLayer", (LayerMask)surfaceLayerMask);
                     Feature.Create();
-                    Pass = GetField(Feature, "grassPass");
-                    States = (IDictionary)GetField(Pass, "cameras");
-                    Histories = (IDictionary)GetField(GetField(Pass, "motion"), "cameras");
+                    Pass = GetField(Feature, "_grassPass");
+                    States = (IDictionary)GetField(Pass, "_cameras");
+                    Histories = (IDictionary)GetField(GetField(Pass, "_motion"), "_cameras");
                     Type stateType = Pass.GetType().GetNestedType("CameraState", BindingFlags.NonPublic);
                     Type historyType = typeof(GrassMotionVectors).GetNestedType("CameraHistory", BindingFlags.NonPublic);
                     for (int i = 0; i < Cameras.Length; i++)

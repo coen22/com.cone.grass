@@ -64,8 +64,8 @@ namespace Cone.Grass.Tests
                 Assert.That(interactor.RecoverySeconds, Is.EqualTo(0.55f));
                 using (var serialized = new SerializedObject(interactor))
                 {
-                    foreach (string name in new[] { "body", "interactionShader", "groundLayers", "radiusPadding",
-                                 "bladeHeight", "strength", "attackSeconds", "recoverySeconds" })
+                    foreach (string name in new[] { "_body", "_interactionShader", "_groundLayers", "_radiusPadding",
+                                 "_bladeHeight", "_strength", "_attackSeconds", "_recoverySeconds" })
                     {
                         Assert.That(serialized.FindProperty(name), Is.Not.Null, name);
                     }

@@ -12,13 +12,13 @@ namespace Cone.Grass.Samples.Meadow
     {
         [SerializeField, FormerlySerializedAs("target")] private Transform _target;
         [Tooltip("Height of the orbit pivot above the target's feet.")]
-        [SerializeField, FormerlySerializedAs("pivotHeight")] private readonly float _pivotHeight = 1.45f;
-        [SerializeField, Min(0.5f), FormerlySerializedAs("distance")] private readonly float _distance = 3.6f;
+        [SerializeField, FormerlySerializedAs("pivotHeight")] private float _pivotHeight = 1.45f;
+        [SerializeField, Min(0.5f), FormerlySerializedAs("distance")] private float _distance = 3.6f;
         [SerializeField, Range(-30f, 80f), FormerlySerializedAs("pitch")] private float _pitch = 18f;
         [Tooltip("Degrees per pixel of mouse movement.")]
-        [SerializeField, Min(0f), FormerlySerializedAs("sensitivity")] private readonly float _sensitivity = 0.15f;
+        [SerializeField, Min(0f), FormerlySerializedAs("sensitivity")] private float _sensitivity = 0.15f;
         [Tooltip("How quickly the camera swings behind the character while the player is not orbiting.")]
-        [SerializeField, Min(0f), FormerlySerializedAs("followYaw")] private readonly float _followYaw = 1.5f;
+        [SerializeField, Min(0f), FormerlySerializedAs("followYaw")] private float _followYaw = 1.5f;
 
         private float _yaw;
         private float _lastLookTime = float.NegativeInfinity;

@@ -401,7 +401,7 @@ namespace Cone.Grass.Tests
         {
             using (var fixture = new InteractorFixture())
             {
-                Set(fixture.Interactor, "nodeCapacity", 16);
+                Set(fixture.Interactor, "_nodeCapacity", 16);
                 fixture.Advance(0.0);
                 Assert.That(fixture.Interactor.ActiveNodeCount, Is.InRange(1, 16));
                 fixture.Actor.transform.position += Vector3.right;
@@ -430,7 +430,7 @@ namespace Cone.Grass.Tests
         {
             using (var fixture = new InteractorFixture())
             {
-                Set(fixture.Interactor, "nodeCapacity", 16);
+                Set(fixture.Interactor, "_nodeCapacity", 16);
                 fixture.Advance(0.0);
                 Assert.That(fixture.Interactor.TryGetDraw(out Mesh mesh, out _, out _), Is.True);
                 fixture.Collider.height = 4f;
@@ -454,7 +454,7 @@ namespace Cone.Grass.Tests
         {
             using (var fixture = new InteractorFixture())
             {
-                Set(fixture.Interactor, "gridSpacing", 0.05f);
+                Set(fixture.Interactor, "_gridSpacing", 0.05f);
                 fixture.Collider.radius = 0.1f;
                 fixture.Advance(0.0);
                 fixture.Actor.transform.position += Vector3.right * 4f;
@@ -496,7 +496,7 @@ namespace Cone.Grass.Tests
                     fixture.Collider.radius = 1f / 256f;
                     fixture.Actor.transform.position = new Vector3(-1f / 256f, 0.9f, 0f);
                     fixture.Interactor.Configure(fixture.Collider, supportingCollider);
-                    Set(fixture.Interactor, "gridSpacing", 0.01f);
+                    Set(fixture.Interactor, "_gridSpacing", 0.01f);
                     fixture.Advance(0.0);
                     Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
 
@@ -558,11 +558,11 @@ namespace Cone.Grass.Tests
                         fixture.Ground.gameObject.AddComponent<MeshFilter>().sharedMesh = surfaceMesh;
                         fixture.Ground.gameObject.AddComponent<MeshRenderer>().sharedMaterials = new Material[1];
                         area = fixture.Ground.gameObject.AddComponent<GrassPlacementArea>();
-                        Set(area, "shape", GrassPlacementShape.Box);
-                        Set(area, "paintSurface", fixture.Ground);
+                        Set(area, "_shape", GrassPlacementShape.Box);
+                        Set(area, "_paintSurface", fixture.Ground);
                         Invoke(area, "RefreshState");
                     }
-                    Set(fixture.Interactor, "attackDuration", 0.2f);
+                    Set(fixture.Interactor, "_attackDuration", 0.2f);
                     fixture.Advance(0.0);
                     Assert.That(fixture.Interactor.ContactStrength, Is.Zero);
                     Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
@@ -664,7 +664,7 @@ namespace Cone.Grass.Tests
                 Assert.That(fixture.Interactor.ActiveNodeCount, Is.Zero);
                 Assert.That(CountRegistration(fixture.Interactor), Is.Zero);
                 Assert.That(mesh == null && material == null, Is.True);
-                Assert.That(Get(fixture.Interactor, "supportResolver"), Is.Null);
+                Assert.That(Get(fixture.Interactor, "_supportResolver"), Is.Null);
                 Assert.That(template != null, Is.True, "The consumer owns a clone, never the retained resource asset.");
 
                 fixture.Interactor.enabled = true;
@@ -706,7 +706,7 @@ namespace Cone.Grass.Tests
             using (var nearCapture = new CameraCaptureFixture(Vector3.zero))
             using (var farCapture = new CameraCaptureFixture(Vector3.right * 1000f))
             {
-                Set(near.Interactor, "attackDuration", 0.2f);
+                Set(near.Interactor, "_attackDuration", 0.2f);
                 near.Advance(0.0);
                 near.Advance(0.1);
                 far.Advance(0.0);
@@ -807,9 +807,9 @@ namespace Cone.Grass.Tests
                         SceneManager.MoveGameObjectToScene(areaObjects[i], fixture.Scene);
                         areaObjects[i].transform.position = new Vector3(i == 0 ? -2f : 2f, 0f, 0f);
                         areas[i] = areaObjects[i].AddComponent<GrassPlacementArea>();
-                        Set(areas[i], "shape", GrassPlacementShape.Box);
-                        Set(areas[i], "size", new Vector2(4f, 4f));
-                        Set(areas[i], "paintSurface", colliders[i]);
+                        Set(areas[i], "_shape", GrassPlacementShape.Box);
+                        Set(areas[i], "_size", new Vector2(4f, 4f));
+                        Set(areas[i], "_paintSurface", colliders[i]);
                         areaObjects[i].SetActive(true);
                         Assert.That(areas[i].TryGetCaptureData(out _), Is.True);
                     }
@@ -819,7 +819,7 @@ namespace Cone.Grass.Tests
                     fixture.Actor.transform.position = new Vector3(1f, 0.9f, 0f);
                     fixture.Advance(0.1);
                     Assert.That(fixture.Interactor.LastSupportStatus, Is.EqualTo(GrassInteractorSupportStatus.Supported));
-                    Assert.That(Get(fixture.Interactor, "lastGroundSupport"), Is.SameAs(colliders[1]));
+                    Assert.That(Get(fixture.Interactor, "_lastGroundSupport"), Is.SameAs(colliders[1]));
                     Assert.That(fixture.Field.TryGetNode(new Vector2Int(-7, 0), 0.1, 2f, out _, out _), Is.True);
                     Assert.That(fixture.Interactor.TryGetDraw(out Mesh retainedMesh, out _, out _), Is.True);
                     ulong populatedVersion = capture.Collect();
@@ -904,7 +904,7 @@ namespace Cone.Grass.Tests
             {
                 Shader invalidShader = Shader.Find("InfiniteGrass/GrassHeightMapShader");
                 Assert.That(invalidShader, Is.Not.Null);
-                Set(fixture.Interactor, "captureShader", invalidShader);
+                Set(fixture.Interactor, "_captureShader", invalidShader);
                 LogAssert.Expect(LogType.Warning,
                     "The assigned interaction shader must provide a GrassSlope pass using premultiplied vertex RGBA.");
                 fixture.Advance(0.0);
@@ -1059,7 +1059,7 @@ namespace Cone.Grass.Tests
             public readonly CapsuleCollider Collider;
             public readonly BoxCollider Ground;
             public readonly GrassColliderInteractor Interactor;
-            public GrassInteractionField Field => (GrassInteractionField)Get(Interactor, "field");
+            public GrassInteractionField Field => (GrassInteractionField)Get(Interactor, "_field");
 
             public InteractorFixture(Vector3 origin = default)
             {

@@ -205,7 +205,7 @@ namespace Cone.Grass
         [Tooltip("Map the texture over this terrain's complete XZ extent. Object position, scale and rotation are then ignored.")]
         [SerializeField, FormerlySerializedAs("useTerrainBounds")] private bool _useTerrainBounds;
         [Tooltip("Optional mesh surface and Scene brush collider. Its visible Renderer, or a parent Renderer, needs geometry and at least one material slot.")]
-        [SerializeField, FormerlySerializedAs("paintSurface")] private readonly Collider _paintSurface;
+        [SerializeField, FormerlySerializedAs("paintSurface")] private Collider _paintSurface;
 
         [Header("Texture coverage")]
         [Tooltip("Optional paintable asset. Takes precedence over Density Texture. Black contains no grass.")]

@@ -21,22 +21,22 @@ namespace Cone.Grass.MicroVerse
 #if UNITY_EDITOR
         // Keep the producer asset reference out of the player. Runtime rendering only
         // needs the Texture2D reference serialized on the adjacent placement area.
-        [SerializeField, FormerlySerializedAs("maskTarget")] private readonly ScriptableObject _maskTarget;
+        [SerializeField, FormerlySerializedAs("maskTarget")] private ScriptableObject _maskTarget;
         [SerializeField, FormerlySerializedAs("terrain")] private Terrain _terrain;
-        [SerializeField, FormerlySerializedAs("textureSubAssetName")] private readonly string _textureSubAssetName;
-        [SerializeField, FormerlySerializedAs("groundLayer")] private readonly TerrainLayer _groundLayer;
-        [SerializeField, FormerlySerializedAs("groundColorOverride")] private readonly Texture2D _groundColorOverride;
-        [SerializeField, FormerlySerializedAs("bakeTerrainGroundColor")] private readonly bool _bakeTerrainGroundColor;
-        [SerializeField, Range(64, 4096), FormerlySerializedAs("groundBakeResolution")] private readonly int _groundBakeResolution = 1024;
+        [SerializeField, FormerlySerializedAs("textureSubAssetName")] private string _textureSubAssetName;
+        [SerializeField, FormerlySerializedAs("groundLayer")] private TerrainLayer _groundLayer;
+        [SerializeField, FormerlySerializedAs("groundColorOverride")] private Texture2D _groundColorOverride;
+        [SerializeField, FormerlySerializedAs("bakeTerrainGroundColor")] private bool _bakeTerrainGroundColor;
+        [SerializeField, Range(64, 4096), FormerlySerializedAs("groundBakeResolution")] private int _groundBakeResolution = 1024;
         [SerializeField, FormerlySerializedAs("groundBakeAssetPath")] private string _groundBakeAssetPath;
         [SerializeField, HideInInspector, FormerlySerializedAs("bakedGroundColor")] private Texture2D _bakedGroundColor;
         [SerializeField, HideInInspector, FormerlySerializedAs("groundBakeSourceKey")] private string _groundBakeSourceKey;
         [SerializeField, HideInInspector, FormerlySerializedAs("groundBakeOutputKey")] private string _groundBakeOutputKey;
         [SerializeField, FormerlySerializedAs("groundTint")] private Color _groundTint = Color.white;
-        [SerializeField, Range(0f, 1f), FormerlySerializedAs("groundColorStrength")] private readonly float _groundColorStrength = 1f;
-        [SerializeField, FormerlySerializedAs("autoRefresh")] private readonly bool _autoRefresh = true;
-        [SerializeField, FormerlySerializedAs("pollWhileEditing")] private readonly bool _pollWhileEditing = true;
-        [SerializeField, Range(0.25f, 10f), FormerlySerializedAs("pollInterval")] private readonly float _pollInterval = 1f;
+        [SerializeField, Range(0f, 1f), FormerlySerializedAs("groundColorStrength")] private float _groundColorStrength = 1f;
+        [SerializeField, FormerlySerializedAs("autoRefresh")] private bool _autoRefresh = true;
+        [SerializeField, FormerlySerializedAs("pollWhileEditing")] private bool _pollWhileEditing = true;
+        [SerializeField, Range(0.25f, 10f), FormerlySerializedAs("pollInterval")] private float _pollInterval = 1f;
 
         private static readonly HashSet<GrassMicroVerseBridge> s_activeBridges =
             new HashSet<GrassMicroVerseBridge>();

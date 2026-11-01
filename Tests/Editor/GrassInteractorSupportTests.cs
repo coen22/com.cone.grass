@@ -1160,7 +1160,7 @@ namespace Cone.Grass.Tests
                 {
                     // Existing tests temporarily disable producers. Their own resources
                     // may be recreated, but a fixture must leave no unowned native pair.
-                    var resources = typeof(GrassColliderInteractor).GetField("interactionMesh", BindingFlags.Instance | BindingFlags.NonPublic)
+                    var resources = typeof(GrassColliderInteractor).GetField("_interactionMesh", BindingFlags.Instance | BindingFlags.NonPublic)
                         .GetValue(previous.Key) as GrassInteractionMesh;
                     if (resources != null)
                     {

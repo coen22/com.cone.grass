@@ -1746,7 +1746,7 @@ namespace Cone.Grass.Tests
                     Is.EqualTo(1f), "The complete crossing must retain its painted center strip.");
             }
 
-            Assert.That(GetEditorField(editor, "lastDab"), Is.EqualTo(last),
+            Assert.That(GetEditorField(editor, "_lastDab"), Is.EqualTo(last),
                 "Continuation must start at the actual cursor endpoint outside the map.");
         }
 
@@ -1783,7 +1783,7 @@ namespace Cone.Grass.Tests
         {
             GrassPlacementArea area = NewStrokeArea(out GrassDensityAsset density, out UnityEditor.Editor editor);
             Undo.IncrementCurrentGroup();
-            SetEditorField(editor, "strokeUndoGroup", Undo.GetCurrentGroup());
+            SetEditorField(editor, "_strokeUndoGroup", Undo.GetCurrentGroup());
             Undo.RegisterCompleteObjectUndo(density, "Paint active grass stroke");
             Vector3 center = area.transform.position;
             InvokeEditor(editor, "PaintAlongStroke", area, center, false);
@@ -1795,9 +1795,9 @@ namespace Cone.Grass.Tests
             {
                 Undo.PerformUndo();
                 Assert.That(density.HasCoverage, Is.False);
-                Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
-                Assert.That(GetEditorField(editor, "hasLastDab"), Is.False);
-                Assert.That(GetEditorField(editor, "strokeUndoGroup"), Is.EqualTo(-1));
+                Assert.That(GetEditorField(editor, "_strokeAsset"), Is.Null);
+                Assert.That(GetEditorField(editor, "_hasLastDab"), Is.False);
+                Assert.That(GetEditorField(editor, "_strokeUndoGroup"), Is.EqualTo(-1));
                 uint revision = density.Revision;
 
                 InvokeEditor(editor, "PaintAlongStroke", area, center + Vector3.right, false);
@@ -1808,7 +1808,7 @@ namespace Cone.Grass.Tests
                 Undo.PerformRedo();
                 Assert.That(ReadDensitySamples(density), Is.EqualTo(painted),
                     "Stroke teardown during Undo must not collapse or replace the already-replayed history.");
-                Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
+                Assert.That(GetEditorField(editor, "_strokeAsset"), Is.Null);
             }
             finally
             {
@@ -1825,10 +1825,10 @@ namespace Cone.Grass.Tests
             GrassDensityAsset density = NewDensity();
             area.SetDensityAsset(density, false);
             UnityEditor.Editor editor = NewPlacementEditor(area);
-            SetEditorField(editor, "strokeAsset", density);
-            SetEditorField(editor, "brushRadius", 1f);
-            SetEditorField(editor, "brushStrength", 1f);
-            SetEditorField(editor, "brushHardness", 1f);
+            SetEditorField(editor, "_strokeAsset", density);
+            SetEditorField(editor, "_brushRadius", 1f);
+            SetEditorField(editor, "_brushStrength", 1f);
+            SetEditorField(editor, "_brushHardness", 1f);
             Physics.SyncTransforms();
 
             Assert.That(BrushPoint(editor, area, new Ray(new Vector3(-8f, 5f, 0f), Vector3.down), out Vector3 first), Is.True);
@@ -1852,9 +1852,9 @@ namespace Cone.Grass.Tests
             GrassDensityAsset density = NewDensity();
             area.SetDensityAsset(density, false);
             UnityEditor.Editor editor = NewPlacementEditor(area);
-            SetEditorField(editor, "paintEnabled", true);
-            SetEditorField(editor, "strokeAsset", density);
-            SetEditorField(editor, "hasLastDab", true);
+            SetEditorField(editor, "_paintEnabled", true);
+            SetEditorField(editor, "_strokeAsset", density);
+            SetEditorField(editor, "_hasLastDab", true);
 
             if (clearAsset)
             {
@@ -1867,9 +1867,9 @@ namespace Cone.Grass.Tests
 
             InvokeEditor(editor, "OnSceneGUI");
 
-            Assert.That(GetEditorField(editor, "strokeAsset"), Is.Null);
-            Assert.That(GetEditorField(editor, "hasLastDab"), Is.False);
-            Assert.That(GetEditorField(editor, "strokeUndoGroup"), Is.EqualTo(-1));
+            Assert.That(GetEditorField(editor, "_strokeAsset"), Is.Null);
+            Assert.That(GetEditorField(editor, "_hasLastDab"), Is.False);
+            Assert.That(GetEditorField(editor, "_strokeUndoGroup"), Is.EqualTo(-1));
         }
 
         [TestCase(false)]
@@ -2223,10 +2223,10 @@ namespace Cone.Grass.Tests
             density = NewDensity();
             area.SetDensityAsset(density, false);
             editor = NewPlacementEditor(area);
-            SetEditorField(editor, "strokeAsset", density);
-            SetEditorField(editor, "brushRadius", 0.5f);
-            SetEditorField(editor, "brushStrength", 1f);
-            SetEditorField(editor, "brushHardness", 1f);
+            SetEditorField(editor, "_strokeAsset", density);
+            SetEditorField(editor, "_brushRadius", 0.5f);
+            SetEditorField(editor, "_brushStrength", 1f);
+            SetEditorField(editor, "_brushHardness", 1f);
             return area;
         }
 

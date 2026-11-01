@@ -435,10 +435,10 @@ namespace Cone.Grass.Tests
         {
             using (var fixture = new HistoryFixture())
             {
-                SetField(fixture.Renderer, "unormSnapshotsSupported", false);
-                SetField(fixture.Renderer, "srgbSnapshotsSupported", false);
-                SetField(fixture.Renderer, "rg32SnapshotsSupported", false);
-                SetField(fixture.Renderer, "rgba32SnapshotsSupported", false);
+                SetField(fixture.Renderer, "_unormSnapshotsSupported", false);
+                SetField(fixture.Renderer, "_srgbSnapshotsSupported", false);
+                SetField(fixture.Renderer, "_rg32SnapshotsSupported", false);
+                SetField(fixture.Renderer, "_rgba32SnapshotsSupported", false);
                 GraphicsBuffer[] buffers = fixture.Buffers;
                 RTHandle[] textures = fixture.Textures;
                 LogAssert.Expect(LogType.Warning,
@@ -601,7 +601,7 @@ namespace Cone.Grass.Tests
                 Camera = new GameObject("Grass motion lifetime test").AddComponent<Camera>();
                 try
                 {
-                    Histories = (IDictionary)GetField(Renderer, "cameras");
+                    Histories = (IDictionary)GetField(Renderer, "_cameras");
                     Type historyType = typeof(GrassMotionVectors).GetNestedType("CameraHistory", BindingFlags.NonPublic);
                     History = Activator.CreateInstance(historyType, true);
                     Snapshots = (Array)GetField(History, "Snapshots");

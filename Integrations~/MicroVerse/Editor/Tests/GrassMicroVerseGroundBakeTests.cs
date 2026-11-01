@@ -911,7 +911,7 @@ namespace Cone.Grass.MicroVerse
                     // Invoke the real update handler once, without relying on a
                     // wall-clock debounce or an unrelated editor repaint sequence.
                     Type watcher = typeof(GrassMicroVerseBridgeWatcher);
-                    FieldInfo debounce = watcher.GetField("refreshAfter", BindingFlags.Static | BindingFlags.NonPublic);
+                    FieldInfo debounce = watcher.GetField("s_refreshAfter", BindingFlags.Static | BindingFlags.NonPublic);
                     double previousDebounce = (double)debounce.GetValue(null);
                     try
                     {
