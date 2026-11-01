@@ -71,14 +71,16 @@ namespace Cone.Grass.Tests
             interactor.Configure(controller);
 
             bool contact = false;
+            var seen = new System.Collections.Generic.HashSet<string>();
             for (int frame = 0; frame < 60; frame++)
             {
                 controller.Move(new Vector3(0.05f, -0.01f, 0.03f));
                 yield return null;
                 contact |= interactor.State == GrassColliderInteractor.InteractionState.Active;
+                seen.Add(interactor.State + "/" + interactor.LastSupportStatus);
             }
 
-            Assert.That(contact, Is.True, "The character never touched the grass: " + interactor.Diagnostic);
+            Assert.That(contact, Is.True, "The character never touched the grass. States seen: " + string.Join(", ", seen));
             Assert.That(interactor.ActiveNodeCount, Is.GreaterThan(0));
 
             // Lift the character clear of the grass; the trail recovers and its nodes are released.

@@ -44,6 +44,12 @@ namespace Cone.Grass
         // material, so it works without further setup.
         private void AssignPackageDefaults()
         {
+            // Only features saved in a renderer asset; a feature built in code keeps exactly what its creator assigned.
+            if (!UnityEditor.EditorUtility.IsPersistent(this))
+            {
+                return;
+            }
+
             if (!_computeShader)
             {
                 _computeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(
