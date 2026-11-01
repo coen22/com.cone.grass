@@ -133,6 +133,7 @@ public partial class GrassDataRendererFeature
                 {
                     Counts?.Dispose();
                     Counts = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 6, sizeof(uint)) { name = "Grass Counts" };
+                    Counts.SetData(new uint[6]);
                 }
                 bool uploadArguments = Arguments == null || !Arguments.IsValid();
                 if (uploadArguments)

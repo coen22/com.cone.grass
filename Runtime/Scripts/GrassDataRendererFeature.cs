@@ -321,7 +321,8 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             bool variantsChanged = state.Variants.Update(owner.variants, owner.variants && owner.variants.headMesh);
             bool mixesKinds = authored && state.Variants.KindCount > 1;
             state.EnsureVariantWeights(mixesKinds, owner);
-            bool drawsHeads = state.UpdateHeadMaterial(EnsureHeadShader(), state.Variants.HeadQueues > 0);
+            bool headsNeeded = state.Variants.HeadQueues > 0;
+            bool drawsHeads = state.UpdateHeadMaterial(headsNeeded ? EnsureHeadShader() : null, headsNeeded);
 
             float spacing = Mathf.Max(0.001f, FiniteOr(owner.spacing, 0.1f));
             float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.drawDistance, 300f));
@@ -432,10 +433,14 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
             }
             BuildPlacementCapture(graph, state, density, ground, captureVP, authored, groundDirty,
                 captureMappingChanged || state.HadDensitySources != (state.ActiveGroups.Count > 0));
-            // Kind weights follow the ground colour's sources and revisions.
+            // Kind weights follow the ground colour's sources and revisions. Each weight texture is imported once per
+            // frame so the graph orders the capture's writes before the generation's reads.
+            TextureHandle variantWeights0 = mixesKinds ? graph.ImportTexture(state.VariantWeights0) :
+                ImportTexture(graph, state, Texture2D.whiteTexture);
+            TextureHandle variantWeights1 = mixesKinds ? graph.ImportTexture(state.VariantWeights1) : variantWeights0;
             if (mixesKinds && EnsurePlacementMaterial() && (groundDirty || !state.VariantWeightsCaptured))
             {
-                BuildVariantCapture(graph, state, captureVP);
+                BuildVariantCapture(graph, state, captureVP, variantWeights0, variantWeights1);
                 state.VariantWeightsCaptured = true;
             }
             if (recaptureModifiers)
@@ -482,9 +487,6 @@ public partial class GrassDataRendererFeature : ScriptableRendererFeature
                     state.Planes[i].normal.z, state.Planes[i].distance);
 
             BuildDispatches(graph, state, owner, cameraBounds, spacing, authored, density);
-            TextureHandle variantWeights0 = mixesKinds ? graph.ImportTexture(state.VariantWeights0) :
-                ImportTexture(graph, state, Texture2D.whiteTexture);
-            TextureHandle variantWeights1 = mixesKinds ? graph.ImportTexture(state.VariantWeights1) : variantWeights0;
             BuildGeneration(graph, state, owner, height, density, mask, variantWeights0, variantWeights1,
                 positions, counts, arguments,
                 center, cameraPosition, spacing, distanceLimit, capturePadding, bladeRadius, authored);

@@ -288,9 +288,11 @@ public partial class GrassDataRendererFeature
             }
         }
 
-        // Each area's per-kind weight multipliers over its footprint, at the largest of overlapping areas. A texel no
-        // area reaches stays zero, which the generation reads as the profile's own mix.
-        private void BuildVariantCapture(RenderGraph graph, CameraState state, Matrix4x4 captureVP)
+        // The per-kind weight multipliers of the areas that override them, over their footprints, at the largest of
+        // overlapping overrides. Weights are stored as 0.5 + 0.5 w so an explicit zero differs from a texel no override
+        // reaches, which stays zero and keeps the profile's own mix (or the mix of a surrounding area without one).
+        private void BuildVariantCapture(RenderGraph graph, CameraState state, Matrix4x4 captureVP,
+            TextureHandle weights0, TextureHandle weights1)
         {
             int passIndex = placementMaterial ? placementMaterial.FindPass("PlacementVariants") : -1;
             using (IRasterRenderGraphBuilder builder = graph.AddRasterRenderPass<VariantCapturePass>(
@@ -307,8 +309,8 @@ public partial class GrassDataRendererFeature
                     if (densityTexture)
                         builder.UseTexture(ImportTexture(graph, state, densityTexture), AccessFlags.Read);
                 }
-                builder.SetRenderAttachment(graph.ImportTexture(state.VariantWeights0), 0, AccessFlags.Write);
-                builder.SetRenderAttachment(graph.ImportTexture(state.VariantWeights1), 1, AccessFlags.Write);
+                builder.SetRenderAttachment(weights0, 0, AccessFlags.Write);
+                builder.SetRenderAttachment(weights1, 1, AccessFlags.Write);
                 builder.AllowGlobalStateModification(true);
                 builder.SetRenderFunc(static (VariantCapturePass data, RasterGraphContext context) =>
                 {
@@ -319,6 +321,8 @@ public partial class GrassDataRendererFeature
                     for (int i = 0; i < data.Sources.Count; i++)
                     {
                         GrassPlacementDrawData source = data.Sources[i].Data;
+                        if (!source.OverridesVariants)
+                            continue;
                         MaterialPropertyBlock properties = context.renderGraphPool.GetTempMaterialPropertyBlock();
                         properties.SetMatrix(Id.PlacementMapping, source.WorldToMask);
                         properties.SetVector(Id.PlacementTerrain, source.TerrainRect);

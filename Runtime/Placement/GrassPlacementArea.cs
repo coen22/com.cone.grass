@@ -52,6 +52,8 @@ public struct GrassPlacementDrawData
     public Vector4 GroundLayerRemapMin;
     public Vector4 GroundLayerRemapMax;
     /// <summary>Per-kind weight multipliers for kinds 0-3 and 4-7; all zero (a manual snapshot) keeps the profile's mix.</summary>
+    /// <summary>Whether the area reweights the plant kinds; areas without an override keep the profile's mix.</summary>
+    public bool OverridesVariants;
     public Vector4 VariantWeights0;
     public Vector4 VariantWeights1;
 
@@ -412,6 +414,7 @@ public sealed class GrassPlacementArea : MonoBehaviour
         GetVariantWeights(out Vector4 variantWeights0, out Vector4 variantWeights1);
         data = new GrassPlacementDrawData
         {
+            OverridesVariants = overrideVariantWeights,
             VariantWeights0 = variantWeights0,
             VariantWeights1 = variantWeights1,
             LocalToWorld = CropFrame(localToWorld, coverageUV),

@@ -163,7 +163,8 @@ Shader "Hidden/InfiniteGrass/Placement"
 
         Pass
         {
-            // Overlapping areas keep each kind's largest weight, as density keeps the largest coverage.
+            // Overlapping overrides keep each kind's largest weight, as density keeps the largest coverage. Weights are
+            // stored as 0.5 + 0.5 w, so a texel no override reaches (zero) differs from an explicit zero weight.
             Name "PlacementVariants"
             Blend One One
             BlendOp Max
@@ -181,8 +182,8 @@ Shader "Hidden/InfiniteGrass/Placement"
                 // The whole footprint the area grows on keeps its weights, including a soft edge.
                 clip(Coverage(input) > 0 ? 1 : -1);
                 VariantOutput output;
-                output.kinds0 = saturate(_PlacementVariantWeights0);
-                output.kinds1 = saturate(_PlacementVariantWeights1);
+                output.kinds0 = 0.5 + 0.5 * saturate(_PlacementVariantWeights0);
+                output.kinds1 = 0.5 + 0.5 * saturate(_PlacementVariantWeights1);
                 return output;
             }
             ENDHLSL

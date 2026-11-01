@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using NUnit.Framework;
 using Unity.Collections;
 using UnityEditor;
@@ -164,10 +163,10 @@ public sealed class GrassHeadPassTests
         // The wind turned from calm to +x: the head moved right since the previous frame.
         Assert.That(swayMean, Is.GreaterThan(0.005f), "A swaying head writes motion.");
         Assert.That(moving, Is.GreaterThanOrEqualTo((int)(covered * 0.9f)), "The head moves with the wind, to +x.");
-        SaveMotionEvidence(windy, calm);
     }
 
-    [Test]
+    [Test, Explicit("Benchmark: renders at 1080p for several seconds. Run it on its own to measure the head passes.")]
+    [Category("Performance")]
     public void ContactDepthAndMotionPassCostsForTenThousandHeads()
     {
         const int Count = 10000, Draws = 20, Rounds = 7;
@@ -184,7 +183,6 @@ public sealed class GrassHeadPassTests
         TestContext.Out.WriteLine($"GPU-synced wall clock per draw of {Count} heads at {Width}x{Height} " +
             $"({SystemInfo.graphicsDeviceName}, {SystemInfo.graphicsDeviceType}): head contact depth {contact:F3} ms, " +
             $"head motion {motion:F3} ms; blade contact depth for as many blades {bladeContact:F3} ms.");
-        UnityEngine.Debug.Log($"GrassHeadPassCost contact={contact:F3}ms motion={motion:F3}ms bladeContact={bladeContact:F3}ms heads={Count}");
         Assert.That(double.IsNaN(contact) || double.IsNaN(motion), Is.False);
     }
 
@@ -443,37 +441,6 @@ public sealed class GrassHeadPassTests
             Object.DestroyImmediate(target);
         }
     }
-
-    // With GRASS_HEAD_EVIDENCE set to a folder: colour, then blade-only motion (before #90), then blades and heads.
-    private void SaveMotionEvidence(Texture wind, Texture previousWind)
-    {
-        string folder = Environment.GetEnvironmentVariable("GRASS_HEAD_EVIDENCE");
-        if (string.IsNullOrEmpty(folder))
-            return;
-        var roots = new Vector4[5];
-        for (int i = 0; i < roots.Length; i++)
-            roots[i] = new Vector4(-0.8f + 0.4f * i, -0.5f - 0.1f * (i % 2), 2f + 0.3f * (i % 2), GrassVariantSelectionTestsPack(1f, 1));
-        Color[] colour = RenderForward(roots, wind);
-        Vector2[] before = RenderMotion(roots, wind, previousWind, false, true);
-        Vector2[] after = RenderMotion(roots, wind, previousWind, true, true);
-        var image = new Texture2D(Size * 3, Size, TextureFormat.RGBA32, false, false);
-        for (int y = 0; y < Size; y++)
-        for (int x = 0; x < Size; x++)
-        {
-            int i = y * Size + x;
-            image.SetPixel(x, y, colour[i].a > 0.5f ? colour[i] : new Color(0.1f, 0.1f, 0.1f, 1f));
-            image.SetPixel(Size + x, y, Visualise(before[i]));
-            image.SetPixel(2 * Size + x, y, Visualise(after[i]));
-        }
-        image.Apply();
-        Directory.CreateDirectory(folder);
-        File.WriteAllBytes(Path.Combine(folder, "head-motion-vectors.png"), image.EncodeToPNG());
-        Object.DestroyImmediate(image);
-    }
-
-    // Motion as colour: red for +x, blue for -x, green for vertical, scaled so 0.05 UV is full brightness.
-    private static Color Visualise(Vector2 v) =>
-        new Color(Mathf.Clamp01(v.x * 20f), Mathf.Clamp01(Mathf.Abs(v.y) * 20f), Mathf.Clamp01(-v.x * 20f), 1f);
 
     private static Vector2[] ReadRG(RenderTexture target)
     {

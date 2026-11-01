@@ -234,8 +234,8 @@ uint GrassSelectLod(float distanceToCamera, float randomValue)
 [numthreads(8, 1, 1)]
 void ResetCounts(uint3 id : SV_DispatchThreadID)
 {
-    // With any head queue both head counters reset, so an unused queue never keeps a stale count.
-    if (id.x < (_GrassHeadQueues > 0 ? 6u : 4u))
+    // Every counter resets, the head counters too, so no queue starts from a stale or uninitialised count.
+    if (id.x < 6u)
         _GrassCounts[id.x] = 0;
 }
 
@@ -318,9 +318,14 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out ui
         {
             areaWeights0 = _GrassVariantWeightsRT0.SampleLevel(linearClampSampler, uv, 0);
             areaWeights1 = _GrassVariantWeightsRT1.SampleLevel(linearClampSampler, uv, 0);
-            // No area wrote weights here (filtering at a far edge): keep the profile's mix.
-            if (dot(areaWeights0, 1.0) + dot(areaWeights1, 1.0) <= 0.0)
+            // Overrides store 0.5 + 0.5 w; below the marker no override reaches this root and the profile's mix applies.
+            if (areaWeights0.x < 0.25)
                 areaWeights0 = areaWeights1 = 1.0;
+            else
+            {
+                areaWeights0 = saturate(areaWeights0 * 2.0 - 1.0);
+                areaWeights1 = saturate(areaWeights1 * 2.0 - 1.0);
+            }
         }
         // The ground's slope, only when a kind prefers flat ground or slopes: two height samples half a metre away.
         float slope = 0.0;
