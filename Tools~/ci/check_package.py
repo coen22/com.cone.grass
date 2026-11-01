@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 # SHA-256 of lanes-1101/templates/.editorconfig, the shared Cone C# style (owner, 2026-11-01).
-EDITORCONFIG_SHA256 = "df2e42e4a1bb778908c8507d7e3422825ebd435ba06ab2c5d63d7783f77a056c"
+EDITORCONFIG_SHA256 = "516f22e6b2b78647d503789ca96f984abcc93f046201ee955c64656de067583a"
 
 REQUIRED_MANIFEST = ["name", "displayName", "version", "unity", "description", "author", "keywords",
                      "documentationUrl", "changelogUrl", "licensesUrl"]
@@ -32,6 +32,9 @@ _SEP = r"[\\/]"
 _DRIVE_ROOTS = r"(?:users|k|projects|work|dev|src)"
 _HOME = r"[^/\s]+/"
 ABSOLUTE_PATH = re.compile(r"(?i)(?:\b[a-z]:" + _SEP + _DRIVE_ROOTS + _SEP + ")|(?:/" + "Users/" + _HOME + ")|(?:/" + "home/" + _HOME + ")")
+# A [SerializeField]/[SerializeReference] attribute (alone or in a list) and a readonly field declaration.
+SERIALIZE_ATTRIBUTE = re.compile(r"\[[^\]]*\b(?:SerializeField|SerializeReference)\b[^\]]*\]")
+READONLY_FIELD = re.compile(r"\breadonly\b[^(){}]*[;=]")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -141,6 +144,27 @@ def main(root: Path) -> int:
             for number, line in enumerate(text.splitlines(), 1):
                 if ABSOLUTE_PATH.search(line):
                     add(f"{rel}:{number}: developer-machine absolute path")
+
+    # Unity never serializes readonly fields: a [SerializeField] that dotnet format made readonly silently loses its data.
+    for path in files:
+        rel = path.relative_to(root).as_posix()
+        if path.suffix != ".cs" or rel.startswith("Tools~/") or not path.is_file():
+            continue
+        pending = False
+        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            code = line.split("//", 1)[0].strip()
+            if not code:
+                continue
+            attribute = SERIALIZE_ATTRIBUTE.search(code)
+            if attribute:
+                pending = True
+                code = code[attribute.end():].strip()
+                if not code:
+                    continue
+            if pending and READONLY_FIELD.search(code):
+                add(f"{rel}:{number}: readonly field with [SerializeField]/[SerializeReference]; Unity drops its data")
+            if not code.startswith("["):
+                pending = False
 
     for problem in problems:
         print(problem)
