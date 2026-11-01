@@ -88,8 +88,9 @@ namespace Cone.Grass.Tests
             AssetDatabase.CreateAsset(source, sourcePath);
             _owned.Remove(source);
             AssetDatabase.SaveAssetIfDirty(source);
-            Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(aliasPath), Is.SameAs(source),
-                "Unity resolves an existing asset path case-insensitively.");
+            // Unity resolves an existing asset path case-insensitively. After the
+            // save it can hand back another managed wrapper for the same asset.
+            TerrainGrassAlbedoBakerTests.AssertSameAsset(AssetDatabase.LoadAssetAtPath<Texture2D>(aliasPath), source);
             string guid = AssetDatabase.AssetPathToGUID(sourcePath);
             Color[] before = source.GetPixels();
 

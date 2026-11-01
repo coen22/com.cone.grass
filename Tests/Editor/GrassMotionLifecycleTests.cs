@@ -359,6 +359,9 @@ namespace Cone.Grass.Tests
                     fixture.EnsureAllocation(source);
 
                     QualitySettings.globalTextureMipmapLimit = 1;
+                    // Unity re-uploads imported textures when the limit changes. A
+                    // script-created texture applies the new limit on its next upload.
+                    source.Apply(false, false);
                     Assert.That(source.activeMipmapLimit, Is.EqualTo(1));
                     Assert.That(fixture.EnsureAllocation(source), Is.True);
                     RTHandle snapshot = (RTHandle)GetField(fixture.Snapshots.GetValue(0), "Wind");

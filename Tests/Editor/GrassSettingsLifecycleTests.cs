@@ -203,8 +203,21 @@ namespace Cone.Grass.Tests
                 SceneManager.MoveGameObjectToScene(originalObject, preview);
                 Assert.That(original.isActiveAndEnabled, Is.True);
                 Assert.That(original.IsReadyForRendering, Is.False);
-                Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(original),
-                    "Registration must encounter the stale owner before its deferred Update cleanup.");
+                // Unity 6000.6 can disable and re-enable an object moved into a preview
+                // scene, so the owner is released immediately. Older Editors skip that
+                // notification and leave a stale owner for registration to replace.
+                if (InfiniteGrassRenderer.Instance != null)
+                {
+                    Assert.That(InfiniteGrassRenderer.Instance, Is.SameAs(original),
+                        "Registration must encounter the stale owner before its deferred Update cleanup.");
+                }
+                else
+                {
+                    foreach (Mesh mesh in meshes)
+                    {
+                        Assert.That(mesh == null, Is.True, "An owner released by the scene move must release its generated meshes.");
+                    }
+                }
 
                 // Do not yield an Update between the scene move and registration.
                 replacementObject = new GameObject("Replacement grass scene owner");
@@ -1580,11 +1593,12 @@ namespace Cone.Grass.Tests
                 Type passType = typeof(GrassDataRendererFeature).GetNestedType("GrassDataPass", BindingFlags.NonPublic);
                 var resolve = (Func<Material, Texture>)passType.GetMethod("ResolveWindTexture",
                     BindingFlags.Static | BindingFlags.NonPublic).CreateDelegate(typeof(Func<Material, Texture>));
+                // Unity cannot create single-sample storage with bindMS (Render Graph
+                // rejects that descriptor too), so a producer never supplies one.
                 var configurations = new[]
                 {
                     (Samples: 4, BindMS: true, Reject: true),
                     (Samples: 4, BindMS: false, Reject: false),
-                    (Samples: 1, BindMS: true, Reject: false),
                     (Samples: 1, BindMS: false, Reject: false),
                     (Samples: 4, BindMS: true, Reject: true)
                 };
@@ -1593,7 +1607,7 @@ namespace Cone.Grass.Tests
                     source.Release();
                     source.antiAliasing = configuration.Samples;
                     source.bindTextureMS = configuration.BindMS;
-                    Assert.That(source.Create(), Is.True);
+                    Assert.That(source.Create(), Is.True, "Recreate the wind source as " + configuration + ".");
                     Assert.That(source.antiAliasing, Is.EqualTo(configuration.Samples));
                     Assert.That(source.bindTextureMS, Is.EqualTo(configuration.BindMS));
 
@@ -1646,13 +1660,15 @@ namespace Cone.Grass.Tests
         }
 
         [Test]
+        [Category("GrassGPU")]
         public void CaptureDeclarationsIncludeRendererAndMaterialTextureOverridesWithoutStaleEntries()
         {
+            RequireProducerTextureDevice();
             Shader shader = Shader.Find("InfiniteGrass/Modifiers/GrassMaskShader");
             Assert.That(shader, Is.Not.Null);
             var material = new Material(shader);
             var gameObject = new GameObject("Grass capture texture overrides");
-            var external = new RenderTexture(4, 4, 0);
+            RenderTexture external = CreateProducerTexture();
             try
             {
                 Renderer renderer = gameObject.AddComponent<MeshRenderer>();
@@ -1715,8 +1731,10 @@ namespace Cone.Grass.Tests
         }
 
         [Test]
+        [Category("GrassGPU")]
         public void CustomCaptureDeclarationsTrackAllExposedTextureInputsAcrossShaderChanges()
         {
+            RequireProducerTextureDevice();
             // Only shader metadata is needed; no GPU pass compilation or drawing is requested.
             Shader shader = ShaderUtil.CreateShaderAsset(@"
     Shader ""Hidden/GrassTests/CustomCaptureInputs""
@@ -1774,7 +1792,7 @@ namespace Cone.Grass.Tests
                 material.SetTexture(detail, Texture2D.blackTexture);
                 for (int i = 0; i < external.Length; i++)
                 {
-                    external[i] = new RenderTexture(4, 4, 0);
+                    external[i] = CreateProducerTexture();
                 }
 
                 var block = new MaterialPropertyBlock();
@@ -1827,7 +1845,7 @@ namespace Cone.Grass.Tests
                 Assert.That(textures, Is.Empty);
                 foreach (RenderTexture texture in external)
                 {
-                    Assert.That(texture.IsCreated(), Is.False, "Dependency collection must not allocate producer storage.");
+                    Assert.That(texture.IsCreated(), Is.True, "Dependency collection must not release producer storage.");
                 }
             }
             finally
@@ -1840,6 +1858,24 @@ namespace Cone.Grass.Tests
                     Object.DestroyImmediate(texture);
                 }
             }
+        }
+
+        private static void RequireProducerTextureDevice()
+        {
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
+                Assert.Ignore("Property-block render texture overrides require a graphics device.");
+            }
+        }
+
+        // A property block resolves a render texture through its GPU storage: an
+        // override of a never-created texture reads back as no texture and binds none.
+        // Producers render into created storage before a capture can depend on it.
+        private static RenderTexture CreateProducerTexture()
+        {
+            var texture = new RenderTexture(4, 4, 0);
+            Assert.That(texture.Create(), Is.True);
+            return texture;
         }
 
         private delegate int CaptureTextureCollector(Renderer renderer, Material material, int materialIndex,

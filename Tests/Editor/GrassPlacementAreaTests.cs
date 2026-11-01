@@ -103,7 +103,7 @@ namespace Cone.Grass.Tests
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
-            AssertSerializedEmptyPlaceholder(area.DensityAsset);
+            AssertSerializedEmptyReference(area.DensityAsset);
             Assert.That(area.DensityTexture, Is.SameAs(external));
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
             Assert.That(snapshot.DensityTexture, Is.SameAs(external));
@@ -121,8 +121,25 @@ namespace Cone.Grass.Tests
         {
             Assert.That(ReferenceEquals(value, null), Is.False,
                 "Exercise Unity's native serialized placeholder, not a plain CLR null.");
+            AssertSerializedEmptyReference(value);
+        }
+
+        // Unity 6000.6 deserializes an emptied ScriptableObject field as a plain CLR
+        // null; component fields still receive a zero-ID placeholder. Either form must
+        // read as unassigned, without an object that could supply asset pixels.
+        private static void AssertSerializedEmptyReference(Object value)
+        {
             Assert.That(value == null, Is.True);
-            Assert.That(value.GetEntityId(), Is.EqualTo(EntityId.None));
+            Assert.That(ReferenceEquals(value, null) || value.GetEntityId() == EntityId.None, Is.True,
+                "An emptied serialized reference must not keep an object identity.");
+        }
+
+        private static void AssertRect(Rect actual, Rect expected)
+        {
+            Assert.That(actual.xMin, Is.EqualTo(expected.xMin).Within(0.000001f));
+            Assert.That(actual.yMin, Is.EqualTo(expected.yMin).Within(0.000001f));
+            Assert.That(actual.xMax, Is.EqualTo(expected.xMax).Within(0.000001f));
+            Assert.That(actual.yMax, Is.EqualTo(expected.yMax).Within(0.000001f));
         }
 
         [TestCase(true)]
@@ -496,13 +513,15 @@ namespace Cone.Grass.Tests
             GrassPlacementArea.SourceChanged += handler;
             try
             {
+                // Unity cannot create single-sample storage with bindMS (Render Graph
+                // rejects that descriptor too), so a producer never supplies one.
                 var configurations = new[]
                 {
                     (Samples: 4, BindMS: true, Reject: true),
                     (Samples: 4, BindMS: false, Reject: false),
-                    (Samples: 1, BindMS: true, Reject: false),
+                    (Samples: 1, BindMS: false, Reject: false),
                     (Samples: 4, BindMS: true, Reject: true),
-                    (Samples: 1, BindMS: true, Reject: false),
+                    (Samples: 4, BindMS: false, Reject: false),
                     (Samples: 1, BindMS: false, Reject: false)
                 };
                 foreach (var configuration in configurations)
@@ -516,7 +535,7 @@ namespace Cone.Grass.Tests
                     texture.Release();
                     texture.antiAliasing = configuration.Samples;
                     texture.bindTextureMS = configuration.BindMS;
-                    Assert.That(texture.Create(), Is.True);
+                    Assert.That(texture.Create(), Is.True, "Recreate the producer texture as " + configuration + ".");
                     Assert.That(texture.antiAliasing, Is.EqualTo(configuration.Samples));
                     Assert.That(texture.bindTextureMS, Is.EqualTo(configuration.BindMS));
 
@@ -1161,7 +1180,8 @@ namespace Cone.Grass.Tests
             Rect originalCrop = new Rect(0.48f, 0.05f, 0.04f, 0.9f);
             area.SetTextureCoverageBounds(originalCrop);
             Assert.That(area.TryGetCaptureData(out GrassPlacementDrawData snapshot), Is.True);
-            Assert.That(snapshot.CoverageUV, Is.EqualTo(originalCrop));
+            // Sanitizing rebuilds the crop from its clamped edges, so its size may differ by an ulp.
+            AssertRect(snapshot.CoverageUV, originalCrop);
 
             var emptyCorner = new Bounds(new Vector3(20f, 0f, -20f), Vector3.one * 0.1f);
             var covered = new Bounds(new Vector3(20f, 0f, 20f), Vector3.one * 0.1f);

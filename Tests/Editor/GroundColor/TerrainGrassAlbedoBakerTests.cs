@@ -92,7 +92,10 @@ namespace Cone.Grass.Tests
         [Test]
         public void OpacityAsDensityNormalizesTheFinalAlbedo()
         {
-            TerrainLayer red = Layer(new Color(1f, 0f, 0f, 0.5f), true);
+            // TerrainLit keeps a density layer only where its opacity exceeds the
+            // remaining weight. The 8-bit control map stores 0.5 as 128/255, so an
+            // opacity of exactly 0.5 would keep ~4% of red; use one clearly below.
+            TerrainLayer red = Layer(new Color(1f, 0f, 0f, 0.25f), true);
             red.diffuseRemapMin = new Vector4(0f, 0f, 0f, 1f);
             red.diffuseRemapMax = Vector4.one;
             SetLayers(new[] { red, Layer(Color.blue, true) }, new[] { 0.5f, 0.5f });
@@ -355,7 +358,7 @@ namespace Cone.Grass.Tests
                 densityRevisions[i] = area.DensityRevision;
                 surfaceRevisions[i] = area.SurfaceRevision;
             }
-            Assert.That(Bake(), Is.SameAs(output));
+            AssertSameAsset(Bake(), output);
             for (int i = 0; i < areas.Length; i++)
             {
                 Assert.That(areas[i].GroundColorRevision, Is.GreaterThan(groundRevisions[i]));
@@ -386,7 +389,7 @@ namespace Cone.Grass.Tests
                 Assert.That(notifiedTerrain, Is.SameAs(_terrain));
                 Assert.That(notifiedTexture, Is.SameAs(output),
                     "All observers must receive the successfully saved output even when an earlier observer fails.");
-                Assert.That(AssetDatabase.LoadAssetAtPath<Texture2D>(_outputPath), Is.SameAs(output));
+                AssertSameAsset(AssetDatabase.LoadAssetAtPath<Texture2D>(_outputPath), output);
                 Assert.That(EditorUtility.IsDirty(output), Is.False);
                 AssertColor(output.GetPixel(8, 8), Color.green, 0.015f);
             }
@@ -452,7 +455,7 @@ namespace Cone.Grass.Tests
 
             Assert.That(TerrainGrassAlbedoBaker.TryBake(_terrain, 32, actualPath,
                 out Texture2D later, out string error), Is.True, error);
-            Assert.That(later, Is.SameAs(first));
+            AssertSameAsset(later, first);
             Assert.That(later.width, Is.EqualTo(32), "Output ownership must be released after notifications finish.");
         }
 
@@ -594,6 +597,17 @@ namespace Cone.Grass.Tests
             _terrain.terrainData.SetAlphamaps(0, 0, controls);
         }
         private T Own<T>(T value) where T : Object { _owned.Add(value); return value; }
+
+        // Saving reimports the output. Unity 6000.6 can then return another managed
+        // wrapper for the same native asset, so compare asset identity, not references.
+        internal static void AssertSameAsset(Object actual, Object expected)
+        {
+            Assert.That(actual, Is.Not.Null);
+            Assert.That(actual.GetEntityId(), Is.EqualTo(expected.GetEntityId()));
+            Assert.That(actual == expected, Is.True);
+            Assert.That(AssetDatabase.GetAssetPath(actual), Is.EqualTo(AssetDatabase.GetAssetPath(expected)));
+        }
+
         private static void AssertColor(Color actual, Color expected, float tolerance)
         {
             Assert.That(actual.r, Is.EqualTo(expected.r).Within(tolerance));
