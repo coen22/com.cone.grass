@@ -1,0 +1,133 @@
+# Shared Cone package CI (template: copy unchanged; package specifics go in Tools~/ci/test-project.json).
+# hygiene: release shape of the package (Tools~/ci/check_package.py, stdlib Python).
+# format:  dotnet format whitespace against the shared .editorconfig.
+# unity:   EditMode and PlayMode tests in a generated project that contains only this package. Runs only when the
+#          UNITY_LICENSE secret exists; otherwise it says so and skips. It fails when a mode ran no tests.
+name: Package CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: package-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UNITY_VERSION: 6000.6.7f1
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Check package shape
+        run: python3 'Tools~/ci/check_package.py'
+      - name: Package-specific checks
+        run: |
+          shopt -s nullglob
+          for script in Tools~/ci/check_*.py; do
+            [ "$(basename "$script")" = check_package.py ] && continue
+            echo "::group::$script"; python3 "$script"; echo "::endgroup::"
+          done
+
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+      - name: Whitespace and layout match .editorconfig
+        run: dotnet format whitespace --folder --verify-no-changes --verbosity minimal .
+
+  unity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [EditMode, PlayMode]
+    steps:
+      - name: Licence present?
+        id: licence
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        run: |
+          if [ -z "$UNITY_LICENSE" ]; then
+            echo "::notice title=Unity tests skipped::No UNITY_LICENSE secret in this repository; ${{ matrix.mode }} tests did not run (this is not a pass)."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: steps.licence.outputs.present == 'true'
+        with:
+          path: package
+          persist-credentials: false
+      - name: Generate a test project containing only this package
+        if: steps.licence.outputs.present == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          package = json.loads(pathlib.Path("package/package.json").read_text())
+          extra_path = pathlib.Path("package/Tools~/ci/test-project.json")
+          extra = json.loads(extra_path.read_text()) if extra_path.exists() else {}
+          deps = {package["name"]: "file:../../package", "com.unity.test-framework": "1.8.0"}
+          deps.update(extra.get("dependencies", {}))
+          root = pathlib.Path("project")
+          (root / "Packages").mkdir(parents=True)
+          (root / "Assets").mkdir()
+          (root / "ProjectSettings").mkdir()
+          manifest = {"dependencies": deps, "testables": [package["name"]] + extra.get("testables", [])}
+          (root / "Packages/manifest.json").write_text(json.dumps(manifest, indent=2))
+          (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: ${{ env.UNITY_VERSION }}\n")
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: game-ci/unity-test-runner@32e57712352b500e17974b245a6dce9e11a73213 # v4
+        if: steps.licence.outputs.present == 'true'
+        id: tests
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: project
+          unityVersion: ${{ env.UNITY_VERSION }}
+          testMode: ${{ matrix.mode }}
+          artifactsPath: artifacts-${{ matrix.mode }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: ${{ matrix.mode }} results
+      - name: Require tests to have run
+        if: always() && steps.licence.outputs.present == 'true'
+        run: |
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          files = glob.glob("artifacts-${{ matrix.mode }}/*.xml")
+          if not files:
+              sys.exit("No test results were written: the run did not happen.")
+          run = ET.parse(files[0]).getroot()
+          total, passed, failed = (int(run.get(k, 0)) for k in ("total", "passed", "failed"))
+          print(f"${{ matrix.mode }}: total={total} passed={passed} failed={failed} skipped={run.get('skipped')} result={run.get('result')}")
+          if total == 0:
+              sys.exit("${{ matrix.mode }}: 0 tests ran. A run with no tests is not a pass.")
+          if failed:
+              sys.exit(f"${{ matrix.mode }}: {failed} test(s) failed.")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.licence.outputs.present == 'true'
+        with:
+          name: test-results-${{ matrix.mode }}
+          path: artifacts-${{ matrix.mode }}

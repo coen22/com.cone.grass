@@ -1,73 +1,42 @@
 # Developer tools
 
 Scripts for working on the package itself. Users of the package do not need them; Unity ignores this folder.
-
 Run everything from the repository root.
 
-## Source and shader checks (no Unity licence)
+## Checks without Unity
 
 ```sh
-python3 Tools~/validate_source.py .
-python3 -B -m unittest discover -s Tools~/tests -v
-python3 -B -m unittest discover -s Tools~/ShaderChecks -p 'test_*.py' -v
-python3 -B Tools~/ShaderChecks/check.py
-dotnet run --project Tools~/SourceChecks -- .
+python3 Tools~/ci/check_package.py                                   # release shape: package.json, docs, .meta files
+python3 Tools~/ci/check_source.py                                    # shader includes, Unity GUIDs, JSON metadata
+python3 -B -m unittest discover -s Tools~/ShaderChecks -p 'test_*.py'
+python3 -B Tools~/ShaderChecks/check.py                              # DXC: every kernel and pass to DXIL and SPIR-V
+dotnet format whitespace --folder --verify-no-changes .              # layout against .editorconfig
 ```
 
-| Tool | What it checks |
-|---|---|
-| `validate_source.py` | Package metadata and source layout. |
-| `tests/` | Unit tests for these Python tools. |
-| `ShaderChecks/` | Compiles every compute kernel and shader pass with Microsoft DXC to DXIL and SPIR-V against pinned Unity Graphics headers. Needs Linux x86-64, Python 3.12+ and Git; output goes to `artifacts/shaders`. See [ShaderChecks/README.md](ShaderChecks/README.md). |
-| `SourceChecks/` | Parses the C# sources with Roslyn (C# 9) for Editor, Release and Checked player configurations. Needs .NET 8. It does not bind Unity APIs. |
+`ShaderChecks/` compiles every compute kernel and shader pass with Microsoft DXC against pinned Unity Graphics headers.
+It needs Linux x86-64, Python 3.12+ and Git; output goes to `artifacts/shaders`. See
+[ShaderChecks/README.md](ShaderChecks/README.md). It catches HLSL errors only, not Unity import or rendering.
 
-These catch syntax and HLSL compile errors only. Unity import, runtime behaviour and rendering need the Editor tests below.
+## Unity tests
 
-## Validation project
+Create an empty Unity 6000.6 project with the Universal Render Pipeline, add the package from disk, and list it as
+testable in `Packages/manifest.json`:
+
+```json
+"testables": ["com.cone.grass"]
+```
+
+Run the `Cone.Grass.Tests.Editor` (EditMode) and `Cone.Grass.Tests.Runtime` (PlayMode) assemblies from the Test Runner
+or from the command line. GPU cases need a graphics device, so do not pass `-nographics`:
 
 ```sh
-python3 Tools~/create_validation_project.py --unity 6000.6.0f1 --urp 17.6.0
+Unity -batchmode -projectPath <project> -runTests -testPlatform EditMode -testResults editmode.xml -logFile editmode.log
+Unity -batchmode -projectPath <project> -runTests -testPlatform PlayMode -testResults playmode.xml -logFile playmode.log
 ```
-
-Creates a disposable project in `Validation~/Project` (ignored by Git) with the package as a local dependency, the Unity Test Framework, package test discovery, the MicroVerse bridge sample and a native URP setup. Rerunning it updates the template files and keeps existing `.meta` files. It refuses to overwrite an unrelated project. Pass `--output` to choose another folder.
-
-Open the project in that Unity version and run the EditMode and PlayMode tests. GPU tests need a graphics device; do not use `-nographics` for them.
-
-```sh
-Unity -batchmode -projectPath Validation~/Project -runTests -testPlatform EditMode \
-  -testResults results/editmode.xml -logFile results/editmode.log
-python3 Tools~/report_unity_results.py results --require-gpu
-```
-
-Do not pass `-quit` to a Test Runner invocation. `report_unity_results.py` fails if GPU cases are missing or skipped when `--require-gpu` is given.
-
-## Standalone builds
-
-In the validation project, **Tools > Cone > Grass Validation > Create Rendering Scene** creates a test scene: a URP terrain, a saved synthetic mask used through the MicroVerse bridge, the renderer feature, a light, an obstacle and a camera.
-
-```sh
-Unity -batchmode -nographics -quit -buildTarget StandaloneLinux64 -projectPath Validation~/Project \
-  -executeMethod GrassValidationBuild.BuildCurrent -logFile results/build.log
-python3 Tools~/report_build_results.py Validation~/Project/Builds
-```
-
-`BuildCurrent` makes a clean and then an incremental development player with Managed Code Variant set to Checked (restored afterwards). Windows and macOS targets work when installed.
-
-Launch the player with `-grassSmoke -grassSmokeOutput results/player` to run its rendering probe, which captures grass on/off, wind, a camera pan, contact shadows, render scales, MSAA and empty sources. Check the result with:
-
-```sh
-python3 Tools~/report_player_results.py results/player
-python3 Tools~/report_player_results.py results/player --require-msaa 2 4 8
-```
-
-Add `-grassSmokeMotion` to the player and `--require-motion` to the reporter for the optional motion-vector stage.
-
-## Other scripts
-
-| Script | Use |
-|---|---|
-| `probe_unity_cli.py` | Records how a local Unity install behaves from the command line: `--editor <Unity> --project <path> --output <dir>`. |
 
 ## Continuous integration
 
-The GitHub workflow runs the source and shader checks on every pull request. The Unity test and build jobs run only when Unity licence secrets are configured (`UNITY_LICENSE_SERVER`, or `UNITY_EMAIL` and `UNITY_PASSWORD` with `UNITY_LICENSE` or `UNITY_SERIAL`).
+- `.github/workflows/package-ci.yml` is the shared Cone package workflow: package shape, the `Tools~/ci/check_*.py`
+  hooks, `dotnet format whitespace`, and EditMode and PlayMode tests in a generated project. The Unity jobs run only
+  when the repository has a `UNITY_LICENSE` secret, and say so when they skip.
+- `.github/workflows/shader-check.yml` runs the DXC shader compile above.
