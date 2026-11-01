@@ -1,5 +1,7 @@
 # Shared Cone package CI (template: copy unchanged). Package specifics go in Tools~/ci/test-project.json:
-#   {"modes": ["EditMode", "PlayMode"], "dependencies": {...}, "testables": [...]}   (every key optional;
+#   {"modes": ["EditMode", "PlayMode"], "dependencies": {...}, "testables": [...], "assemblyNames": [...]}
+#   (every key optional; assemblyNames limits the run to those test assemblies, e.g. when a testable dependency is
+#   only there for its test fixture;
 #   modes defaults to both; an editor-only package lists ["EditMode"]) and in extra Tools~/ci/check_*.py scripts.
 # hygiene: release shape of the package (Tools~/ci/check_package.py, stdlib Python).
 # format:  dotnet format whitespace against the shared .editorconfig.
@@ -32,6 +34,8 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+      - name: Checker self-tests
+        run: python3 -m unittest discover -s 'Tools~/ci' -p 'test_*.py' -v
       - name: Check package shape
         run: python3 'Tools~/ci/check_package.py'
       - name: Package-specific checks
@@ -89,8 +93,14 @@ jobs:
         id: licence
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          REQUIRE_UNITY_TESTS: ${{ vars.REQUIRE_UNITY_TESTS }}
         run: |
           if [ -z "$UNITY_LICENSE" ]; then
+            # Set the repository variable REQUIRE_UNITY_TESTS=true to make a missing licence fail instead of skip.
+            if [ "$REQUIRE_UNITY_TESTS" = "true" ]; then
+              echo "::error title=Unity tests required::REQUIRE_UNITY_TESTS is set but there is no UNITY_LICENSE secret."
+              exit 1
+            fi
             echo "::notice title=Unity tests skipped::No UNITY_LICENSE secret in this repository; ${{ matrix.mode }} tests did not run (this is not a pass)."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
@@ -102,10 +112,11 @@ jobs:
           path: package
           persist-credentials: false
       - name: Generate a test project containing only this package
+        id: project
         if: steps.licence.outputs.present == 'true'
         run: |
           python3 - <<'PY'
-          import json, pathlib
+          import json, os, pathlib
           package = json.loads(pathlib.Path("package/package.json").read_text())
           extra_path = pathlib.Path("package/Tools~/ci/test-project.json")
           extra = json.loads(extra_path.read_text()) if extra_path.exists() else {}
@@ -118,6 +129,9 @@ jobs:
           manifest = {"dependencies": deps, "testables": [package["name"]] + extra.get("testables", [])}
           (root / "Packages/manifest.json").write_text(json.dumps(manifest, indent=2))
           (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: ${{ env.UNITY_VERSION }}\n")
+          names = extra.get("assemblyNames", [])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("params=" + ("-assemblyNames " + ";".join(names) if names else "") + "\n")
           print(json.dumps(manifest, indent=2))
           PY
       - uses: game-ci/unity-test-runner@32e57712352b500e17974b245a6dce9e11a73213 # v4
@@ -134,6 +148,7 @@ jobs:
           artifactsPath: artifacts-${{ matrix.mode }}
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           checkName: ${{ matrix.mode }} results
+          customParameters: ${{ steps.project.outputs.params }}
       - name: Require tests to have run
         if: always() && steps.licence.outputs.present == 'true'
         run: |

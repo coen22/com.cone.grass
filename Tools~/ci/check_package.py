@@ -28,13 +28,15 @@ TEXT_SUFFIXES = {".cs", ".md", ".json", ".asmdef", ".asmref", ".uss", ".uxml", "
                  ".shader", ".hlsl", ".cginc", ".compute", ".unity", ".prefab", ".asset", ".mat", ".meta", ".ps1", ".sh", ".props", ".targets", ".csproj", ".slnx", ".sln", ".globalconfig"}
 # Developer-machine paths. Generic install locations such as C:\Program Files are allowed in tooling defaults.
 # Built from parts so this file's own source never matches it.
-_SEP = r"[\\/]"
+_SEP = r"[\\/]+"
 _DRIVE_ROOTS = r"(?:users|k|projects|work|dev|src)"
 _HOME = r"[^/\s]+/"
-ABSOLUTE_PATH = re.compile(r"(?i)(?:\b[a-z]:" + _SEP + _DRIVE_ROOTS + _SEP + ")|(?:/" + "Users/" + _HOME + ")|(?:/" + "home/" + _HOME + ")")
+ABSOLUTE_PATH = re.compile(r"(?i)(?:\b[a-z]:" + _SEP + _DRIVE_ROOTS + _SEP + r")|(?:(?<![\w./])/" + "Users/" + _HOME + r")|(?:(?<![\w./])/" + "home/" + _HOME + ")")
 # A [SerializeField]/[SerializeReference] attribute (alone or in a list) and a readonly field declaration.
 SERIALIZE_ATTRIBUTE = re.compile(r"\[[^\]]*\b(?:SerializeField|SerializeReference)\b[^\]]*\]")
+STATIC_MEMBER = re.compile(r"\bstatic\b")
 READONLY_FIELD = re.compile(r"\breadonly\b[^(){}]*[;=]")
+OPAQUE_BUNDLES = {".androidlib", ".androidpack", ".bundle", ".framework", ".xcframework", ".plugin", ".aar"}
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -112,16 +114,25 @@ def main(root: Path) -> int:
         while parent not in (".", ""):
             dirs.add(parent)
             parent = Path(parent).parent.as_posix()
-    imported = [r for r in IMPORTED_ROOTS] + [s.get("path", "") for s in manifest.get("samples") or []]
+    sample_roots = {s.get("path", "") for s in manifest.get("samples") or []}
     for rel in sorted(shipped | dirs):
         parts = Path(rel).parts
-        if not parts or rel.endswith(".meta") or not any(rel == top or rel.startswith(top + "/") for top in imported if top):
+        if not parts or rel.endswith(".meta") or rel in sample_roots:
             continue
-        top = next(t for t in imported if t and (rel == t or rel.startswith(t + "/")))
-        inner = Path(rel).relative_to(top).parts
-        if rel == top:
-            continue
+        # Hidden (.git, .github) and tilde (Documentation~, Samples~, Tools~) paths are not imported; a sample's
+        # contents are, once the Package Manager copies the sample into Assets.
+        inner = parts
+        for root_path in sample_roots:
+            if root_path and rel.startswith(root_path + "/"):
+                inner = Path(rel).relative_to(root_path).parts
+                break
+        else:
+            if any(part.endswith("~") for part in parts):
+                continue
         if any(part.endswith("~") or part.startswith(".") for part in inner):
+            continue
+        # Plugin bundles (.androidlib, .bundle, .framework...) are one asset to Unity: only the bundle has a .meta.
+        if any(Path(part).suffix in OPAQUE_BUNDLES for part in inner[:-1]):
             continue
         if rel + ".meta" not in shipped:
             add(f"{rel}: no .meta file")
@@ -134,7 +145,7 @@ def main(root: Path) -> int:
             add(f"{rel}: evidence/validation folder must not ship")
     for path in files:
         rel = path.relative_to(root).as_posix()
-        if rel.startswith("Tools~/ci/"):
+        if rel in ("Tools~/ci/check_package.py", "Tools~/ci/test_check_package.py"):  # the checker and its fixtures
             continue
         if path.suffix.lower() in TEXT_SUFFIXES and path.is_file() and path.stat().st_size < 4_000_000:
             try:
@@ -155,16 +166,20 @@ def main(root: Path) -> int:
             code = line.split("//", 1)[0].strip()
             if not code:
                 continue
-            attribute = SERIALIZE_ATTRIBUTE.search(code)
-            if attribute:
-                pending = True
-                code = code[attribute.end():].strip()
-                if not code:
-                    continue
-            if pending and READONLY_FIELD.search(code):
+            # Peel every leading attribute list ([A][B, C] ...); what remains, if anything, is the declaration.
+            while code.startswith("["):
+                close = code.find("]")
+                if close < 0:
+                    break
+                if SERIALIZE_ATTRIBUTE.match(code[:close + 1]):
+                    pending = True
+                code = code[close + 1:].strip()
+            if not code:
+                continue
+            # Unity serializes instance fields only, so a static readonly field is never a serialized one.
+            if pending and READONLY_FIELD.search(code) and not STATIC_MEMBER.search(code):
                 add(f"{rel}:{number}: readonly field with [SerializeField]/[SerializeReference]; Unity drops its data")
-            if not code.startswith("["):
-                pending = False
+            pending = False
 
     for problem in problems:
         print(problem)
