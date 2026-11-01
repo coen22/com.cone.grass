@@ -1,2 +1,6 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize text files to LF (matches .editorconfig).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.exr binary
+*.fbx binary
