@@ -1,16 +1,19 @@
 using UnityEditor;
 
-[CustomEditor(typeof(GrassInteractor)), CanEditMultipleObjects]
-public sealed class GrassInteractorEditor : Editor
+namespace Cone.Grass.Editor
 {
-    public override void OnInspectorGUI()
+    [CustomEditor(typeof(GrassInteractor)), CanEditMultipleObjects]
+    internal sealed class GrassInteractorEditor : UnityEditor.Editor
     {
-        serializedObject.Update();
-        // The facade's public settings configure these base fields before each
-        // sample. Keep only the inherited controls that callers can still edit.
-        DrawPropertiesExcluding(serializedObject, "m_Script", "actorCollider", "captureShader",
-            "acceptedSupportLayers", "footprintPadding", "groundClearance", "attenuateWithClearance",
-            "bendStrength", "attackDuration", "recoveryDuration");
-        serializedObject.ApplyModifiedProperties();
+        public override void OnInspectorGUI()
+        {
+            serializedObject.Update();
+            // The facade's public settings configure these base fields before each
+            // sample. Keep only the inherited controls that callers can still edit.
+            DrawPropertiesExcluding(serializedObject, "m_Script", "actorCollider", "captureShader",
+                "acceptedSupportLayers", "footprintPadding", "groundClearance", "attenuateWithClearance",
+                "bendStrength", "attackDuration", "recoveryDuration");
+            serializedObject.ApplyModifiedProperties();
+        }
     }
 }

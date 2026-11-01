@@ -1,0 +1,9 @@
+{
+  "name": "Cone.Grass",
+  "rootNamespace": "Cone.Grass",
+  "references": [
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "autoReferenced": true
+}

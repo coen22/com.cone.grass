@@ -1,0 +1,16 @@
+{
+  "name": "Cone.Grass.Samples.Meadow",
+  "rootNamespace": "Cone.Grass.Samples.Meadow",
+  "references": [
+    "Cone.Grass",
+    "Unity.InputSystem"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.unity.inputsystem",
+      "expression": "1.0.0",
+      "define": "CONE_GRASS_SAMPLE_INPUT_SYSTEM"
+    }
+  ],
+  "autoReferenced": false
+}

@@ -1,265 +1,268 @@
 using System;
 using UnityEngine;
 
-/// <summary>Integer-safe grid and work-budget calculations shared by grass generation.</summary>
-public static class GrassDispatchMath
+namespace Cone.Grass
 {
-    public const int MaximumDispatchCells = 65535 * 8;
-    public const long MaximumCandidates = 64L * 1024 * 1024;
-    private const double MaximumCellCoordinate = int.MaxValue / 2.0 - 256;
-
-    /// <summary>
-    /// Finds all cell centers whose half-cell jitter can intersect the XZ bounds.
-    /// Bounds are conservative at equality; the shader owns the final surface test.
-    /// </summary>
-    public static bool TryGetGridRange(Bounds bounds, float spacing, out GrassGridRange range)
+    /// <summary>Integer-safe grid and work-budget calculations shared by grass generation.</summary>
+    internal static class GrassDispatchMath
     {
-        range = default;
-        if (!Finite(spacing) || spacing <= 0f)
-            return false;
-        Vector3 min = bounds.min;
-        Vector3 max = bounds.max;
-        if (!Finite(min.x) || !Finite(min.z) || !Finite(max.x) || !Finite(max.z) ||
-            min.x >= max.x || min.z >= max.z)
-            return false;
+        public const int MaximumDispatchCells = 65535 * 8;
+        public const long MaximumCandidates = 64L * 1024 * 1024;
+        private const double MaximumCellCoordinate = int.MaxValue / 2.0 - 256;
 
-        double x0 = Math.Ceiling((double)min.x / spacing - 0.5);
-        double z0 = Math.Ceiling((double)min.z / spacing - 0.5);
-        double x1 = Math.Floor((double)max.x / spacing + 0.5) + 1.0;
-        double z1 = Math.Floor((double)max.z / spacing + 0.5) + 1.0;
-        if (x0 < -MaximumCellCoordinate || z0 < -MaximumCellCoordinate ||
-            x1 > MaximumCellCoordinate || z1 > MaximumCellCoordinate ||
-            x1 <= x0 || z1 <= z0)
-            return false;
-
-        int firstX = (int)x0, firstZ = (int)z0;
-        int endX = (int)x1, endZ = (int)z1;
-        if (!ExpandForFloatRounding(min.x, max.x, spacing, ref firstX, ref endX) ||
-            !ExpandForFloatRounding(min.z, max.z, spacing, ref firstZ, ref endZ))
-            return false;
-
-        range = new GrassGridRange(firstX, firstZ, endX - firstX, endZ - firstZ);
-        return true;
-    }
-
-    private static bool ExpandForFloatRounding(float min, float max, float spacing,
-        ref int first, ref int end)
-    {
-        // The analytic range assumes exact arithmetic. Shader float rounding can
-        // move an adjacent cell's root onto a bound, including a whole group of
-        // integer cells at large coordinates. Positive spacing makes both cell
-        // endpoints monotonic, so the first unreachable neighbor ends each search.
-        while (CandidateEndpoint(first - 1, spacing, true) >= min)
+        /// <summary>
+        /// Finds all cell centers whose half-cell jitter can intersect the XZ bounds.
+        /// Bounds are conservative at equality; the shader owns the final surface test.
+        /// </summary>
+        public static bool TryGetGridRange(Bounds bounds, float spacing, out GrassGridRange range)
         {
-            first--;
-            if (first < -MaximumCellCoordinate)
+            range = default;
+            if (!Finite(spacing) || spacing <= 0f)
                 return false;
-        }
-        while (CandidateEndpoint(end, spacing, false) <= max)
-        {
-            end++;
-            if (end > MaximumCellCoordinate)
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            if (!Finite(min.x) || !Finite(min.z) || !Finite(max.x) || !Finite(max.z) ||
+                min.x >= max.x || min.z >= max.z)
                 return false;
+
+            double x0 = Math.Ceiling((double)min.x / spacing - 0.5);
+            double z0 = Math.Ceiling((double)min.z / spacing - 0.5);
+            double x1 = Math.Floor((double)max.x / spacing + 0.5) + 1.0;
+            double z1 = Math.Floor((double)max.z / spacing + 0.5) + 1.0;
+            if (x0 < -MaximumCellCoordinate || z0 < -MaximumCellCoordinate ||
+                x1 > MaximumCellCoordinate || z1 > MaximumCellCoordinate ||
+                x1 <= x0 || z1 <= z0)
+                return false;
+
+            int firstX = (int)x0, firstZ = (int)z0;
+            int endX = (int)x1, endZ = (int)z1;
+            if (!ExpandForFloatRounding(min.x, max.x, spacing, ref firstX, ref endX) ||
+                !ExpandForFloatRounding(min.z, max.z, spacing, ref firstZ, ref endZ))
+                return false;
+
+            range = new GrassGridRange(firstX, firstZ, endX - firstX, endZ - firstZ);
+            return true;
         }
-        return true;
-    }
 
-    private static float CandidateEndpoint(int cell, float spacing, bool upper)
-    {
-        // Match the compute shader's precise int -> float, jitter addition and
-        // spacing product, with an inclusive half-cell jitter envelope. Promote
-        // each rounded intermediate before the next operation to make both
-        // float32 rounding steps explicit on the CPU too.
-        float jittered = (float)((double)(float)cell + (upper ? 0.5 : -0.5));
-        return (float)((double)jittered * spacing);
-    }
+        private static bool ExpandForFloatRounding(float min, float max, float spacing,
+            ref int first, ref int end)
+        {
+            // The analytic range assumes exact arithmetic. Shader float rounding can
+            // move an adjacent cell's root onto a bound, including a whole group of
+            // integer cells at large coordinates. Positive spacing makes both cell
+            // endpoints monotonic, so the first unreachable neighbor ends each search.
+            while (CandidateEndpoint(first - 1, spacing, true) >= min)
+            {
+                first--;
+                if (first < -MaximumCellCoordinate)
+                    return false;
+            }
+            while (CandidateEndpoint(end, spacing, false) <= max)
+            {
+                end++;
+                if (end > MaximumCellCoordinate)
+                    return false;
+            }
+            return true;
+        }
 
-    /// <summary>
-    /// Bounds the actual float32 roots of a clipped cell range, including a
-    /// world-space filtering margin. Center/extents conversion rounds outward.
-    /// </summary>
-    public static bool TryGetCandidateBounds(GrassGridRange range, float spacing, float margin, out Bounds bounds)
-    {
-        bounds = default;
-        long endX = (long)range.MinX + range.Width;
-        long endZ = (long)range.MinZ + range.Height;
-        if (!Finite(spacing) || spacing <= 0f || !Finite(margin) || margin < 0f ||
-            range.Width <= 0 || range.Height <= 0 ||
-            range.MinX < -MaximumCellCoordinate || range.MinZ < -MaximumCellCoordinate ||
-            endX > MaximumCellCoordinate || endZ > MaximumCellCoordinate)
-            return false;
+        private static float CandidateEndpoint(int cell, float spacing, bool upper)
+        {
+            // Match the compute shader's precise int -> float, jitter addition and
+            // spacing product, with an inclusive half-cell jitter envelope. Promote
+            // each rounded intermediate before the next operation to make both
+            // float32 rounding steps explicit on the CPU too.
+            float jittered = (float)((double)(float)cell + (upper ? 0.5 : -0.5));
+            return (float)((double)jittered * spacing);
+        }
 
-        if (!TryGetCandidateAxis(range.MinX, (int)endX - 1, spacing, margin, out float centerX, out float extentX) ||
-            !TryGetCandidateAxis(range.MinZ, (int)endZ - 1, spacing, margin, out float centerZ, out float extentZ))
-            return false;
+        /// <summary>
+        /// Bounds the actual float32 roots of a clipped cell range, including a
+        /// world-space filtering margin. Center/extents conversion rounds outward.
+        /// </summary>
+        public static bool TryGetCandidateBounds(GrassGridRange range, float spacing, float margin, out Bounds bounds)
+        {
+            bounds = default;
+            long endX = (long)range.MinX + range.Width;
+            long endZ = (long)range.MinZ + range.Height;
+            if (!Finite(spacing) || spacing <= 0f || !Finite(margin) || margin < 0f ||
+                range.Width <= 0 || range.Height <= 0 ||
+                range.MinX < -MaximumCellCoordinate || range.MinZ < -MaximumCellCoordinate ||
+                endX > MaximumCellCoordinate || endZ > MaximumCellCoordinate)
+                return false;
 
-        bounds.center = new Vector3(centerX, 0f, centerZ);
-        // Setting extents avoids an unnecessary size = extent * 2 overflow.
-        bounds.extents = new Vector3(extentX, 0f, extentZ);
-        return true;
-    }
+            if (!TryGetCandidateAxis(range.MinX, (int)endX - 1, spacing, margin, out float centerX, out float extentX) ||
+                !TryGetCandidateAxis(range.MinZ, (int)endZ - 1, spacing, margin, out float centerZ, out float extentZ))
+                return false;
 
-    private static bool TryGetCandidateAxis(int first, int last, float spacing, float margin,
-        out float center, out float extent)
-    {
-        double minimum = (double)CandidateEndpoint(first, spacing, false) - margin;
-        double maximum = (double)CandidateEndpoint(last, spacing, true) + margin;
-        return TryGetOutwardAxis(minimum, maximum, out center, out extent);
-    }
+            bounds.center = new Vector3(centerX, 0f, centerZ);
+            // Setting extents avoids an unnecessary size = extent * 2 overflow.
+            bounds.extents = new Vector3(extentX, 0f, extentZ);
+            return true;
+        }
 
-    private static bool TryGetOutwardAxis(double minimum, double maximum, out float center, out float extent)
-    {
-        center = extent = 0f;
-        if (minimum < -float.MaxValue || maximum > float.MaxValue ||
-            double.IsNaN(minimum) || double.IsNaN(maximum))
-            return false;
+        private static bool TryGetCandidateAxis(int first, int last, float spacing, float margin,
+            out float center, out float extent)
+        {
+            double minimum = (double)CandidateEndpoint(first, spacing, false) - margin;
+            double maximum = (double)CandidateEndpoint(last, spacing, true) + margin;
+            return TryGetOutwardAxis(minimum, maximum, out center, out extent);
+        }
 
-        float lower = RoundOutward(minimum, false);
-        float upper = RoundOutward(maximum, true);
-        center = (float)(((double)lower + upper) * 0.5);
-        double requiredExtent = Math.Max((double)center - lower, (double)upper - center);
-        extent = RoundOutward(requiredExtent, true);
-        // A range crossing zero can lose a tiny endpoint even in the double
-        // midpoint/distance arithmetic. Check the actual Bounds representation.
-        if (center - extent > lower || center + extent < upper)
-            extent = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(extent) + 1);
-        return Finite(center - extent) && Finite(center + extent) &&
-            center - extent <= lower && center + extent >= upper;
-    }
+        private static bool TryGetOutwardAxis(double minimum, double maximum, out float center, out float extent)
+        {
+            center = extent = 0f;
+            if (minimum < -float.MaxValue || maximum > float.MaxValue ||
+                double.IsNaN(minimum) || double.IsNaN(maximum))
+                return false;
 
-    private static float RoundOutward(double value, bool upper)
-    {
-        float rounded = (float)value;
-        if (upper ? (double)rounded >= value : (double)rounded <= value)
-            return rounded;
-        if (rounded == 0f)
-            return upper ? float.Epsilon : -float.Epsilon;
-        int bits = BitConverter.SingleToInt32Bits(rounded);
-        bits += (rounded > 0f) == upper ? 1 : -1;
-        return BitConverter.Int32BitsToSingle(bits);
-    }
+            float lower = RoundOutward(minimum, false);
+            float upper = RoundOutward(maximum, true);
+            center = (float)(((double)lower + upper) * 0.5);
+            double requiredExtent = Math.Max((double)center - lower, (double)upper - center);
+            extent = RoundOutward(requiredExtent, true);
+            // A range crossing zero can lose a tiny endpoint even in the double
+            // midpoint/distance arithmetic. Check the actual Bounds representation.
+            if (center - extent > lower || center + extent < upper)
+                extent = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(extent) + 1);
+            return Finite(center - extent) && Finite(center + extent) &&
+                center - extent <= lower && center + extent >= upper;
+        }
 
-    public static int FloorDivide(int value, int divisor)
-    {
-        if (divisor <= 0)
-            throw new ArgumentOutOfRangeException(nameof(divisor));
-        return value >= 0 ? value / divisor : (int)(((long)value - divisor + 1L) / divisor);
-    }
+        private static float RoundOutward(double value, bool upper)
+        {
+            float rounded = (float)value;
+            if (upper ? (double)rounded >= value : (double)rounded <= value)
+                return rounded;
+            if (rounded == 0f)
+                return upper ? float.Epsilon : -float.Epsilon;
+            int bits = BitConverter.SingleToInt32Bits(rounded);
+            bits += (rounded > 0f) == upper ? 1 : -1;
+            return BitConverter.Int32BitsToSingle(bits);
+        }
 
-    /// <summary>
-    /// Includes the world-space support of a filtered capture texel. Use before
-    /// camera intersection and when testing a candidate tile against source occupancy.
-    /// </summary>
-    public static Bounds ExpandXZ(Bounds bounds, float margin)
-    {
-        if (!Finite(margin) || margin < 0f || margin > float.MaxValue * 0.5f)
-            throw new ArgumentOutOfRangeException(nameof(margin));
-        if (margin == 0f)
+        public static int FloorDivide(int value, int divisor)
+        {
+            if (divisor <= 0)
+                throw new ArgumentOutOfRangeException(nameof(divisor));
+            return value >= 0 ? value / divisor : (int)(((long)value - divisor + 1L) / divisor);
+        }
+
+        /// <summary>
+        /// Includes the world-space support of a filtered capture texel. Use before
+        /// camera intersection and when testing a candidate tile against source occupancy.
+        /// </summary>
+        public static Bounds ExpandXZ(Bounds bounds, float margin)
+        {
+            if (!Finite(margin) || margin < 0f || margin > float.MaxValue * 0.5f)
+                throw new ArgumentOutOfRangeException(nameof(margin));
+            if (margin == 0f)
+                return bounds;
+
+            Vector3 minimum = bounds.min, maximum = bounds.max;
+            if (minimum.x <= maximum.x && minimum.z <= maximum.z &&
+                TryGetOutwardAxis((double)minimum.x - margin, (double)maximum.x + margin,
+                    out float centerX, out float extentX) &&
+                TryGetOutwardAxis((double)minimum.z - margin, (double)maximum.z + margin,
+                    out float centerZ, out float extentZ))
+            {
+                // Extent + margin can round inward, losing a reachable boundary
+                // cell before sparse tile enumeration. Enclose the expanded source
+                // endpoints instead, without changing its vertical bounds.
+                bounds.center = new Vector3(centerX, bounds.center.y, centerZ);
+                bounds.extents = new Vector3(extentX, bounds.extents.y, extentZ);
+                return bounds;
+            }
+
+            // Keep the existing behavior for invalid or unrepresentable inputs;
+            // downstream range checks reject their nonfinite/inverted endpoints.
+            bounds.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
             return bounds;
-
-        Vector3 minimum = bounds.min, maximum = bounds.max;
-        if (minimum.x <= maximum.x && minimum.z <= maximum.z &&
-            TryGetOutwardAxis((double)minimum.x - margin, (double)maximum.x + margin,
-                out float centerX, out float extentX) &&
-            TryGetOutwardAxis((double)minimum.z - margin, (double)maximum.z + margin,
-                out float centerZ, out float extentZ))
-        {
-            // Extent + margin can round inward, losing a reachable boundary
-            // cell before sparse tile enumeration. Enclose the expanded source
-            // endpoints instead, without changing its vertical bounds.
-            bounds.center = new Vector3(centerX, bounds.center.y, centerZ);
-            bounds.extents = new Vector3(extentX, bounds.extents.y, extentZ);
-            return bounds;
         }
 
-        // Keep the existing behavior for invalid or unrepresentable inputs;
-        // downstream range checks reject their nonfinite/inverted endpoints.
-        bounds.Expand(new Vector3(margin * 2f, 0f, margin * 2f));
-        return bounds;
-    }
-
-    /// <summary>Intersect source/camera XZ ranges without rounding their overlap inward. Touching edges are empty.</summary>
-    public static bool TryIntersectXZ(Bounds a, Bounds b, out Bounds intersection)
-    {
-        Vector3 minimum = new Vector3(Mathf.Max(a.min.x, b.min.x), 0f, Mathf.Max(a.min.z, b.min.z));
-        Vector3 maximum = new Vector3(Mathf.Min(a.max.x, b.max.x), 0f, Mathf.Min(a.max.z, b.max.z));
-        intersection = default;
-        if (minimum.x >= maximum.x || minimum.z >= maximum.z)
-            return false;
-        if (TryGetOutwardAxis(minimum.x, maximum.x, out float centerX, out float extentX) &&
-            TryGetOutwardAxis(minimum.z, maximum.z, out float centerZ, out float extentZ))
+        /// <summary>Intersect source/camera XZ ranges without rounding their overlap inward. Touching edges are empty.</summary>
+        public static bool TryIntersectXZ(Bounds a, Bounds b, out Bounds intersection)
         {
-            intersection.center = new Vector3(centerX, 0f, centerZ);
-            intersection.extents = new Vector3(extentX, 0f, extentZ);
+            Vector3 minimum = new Vector3(Mathf.Max(a.min.x, b.min.x), 0f, Mathf.Max(a.min.z, b.min.z));
+            Vector3 maximum = new Vector3(Mathf.Min(a.max.x, b.max.x), 0f, Mathf.Min(a.max.z, b.max.z));
+            intersection = default;
+            if (minimum.x >= maximum.x || minimum.z >= maximum.z)
+                return false;
+            if (TryGetOutwardAxis(minimum.x, maximum.x, out float centerX, out float extentX) &&
+                TryGetOutwardAxis(minimum.z, maximum.z, out float centerZ, out float extentZ))
+            {
+                intersection.center = new Vector3(centerX, 0f, centerZ);
+                intersection.extents = new Vector3(extentX, 0f, extentZ);
+            }
+            else
+            {
+                // Preserve the native conversion for invalid/unrepresentable
+                // overlap so the existing downstream grid check still rejects it.
+                intersection.SetMinMax(minimum, maximum);
+            }
+            return true;
         }
-        else
+
+        /// <summary>Clips an integer tile before counting or dispatching its candidate cells.</summary>
+        public static bool TryClipTile(GrassGridRange bounds, int tileX, int tileZ, int tileSize,
+            out GrassGridRange clipped)
         {
-            // Preserve the native conversion for invalid/unrepresentable
-            // overlap so the existing downstream grid check still rejects it.
-            intersection.SetMinMax(minimum, maximum);
+            clipped = default;
+            if (tileSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(tileSize));
+            long boundsMaxX = (long)bounds.MinX + bounds.Width;
+            long boundsMaxZ = (long)bounds.MinZ + bounds.Height;
+            if (bounds.Width <= 0 || bounds.Height <= 0 || boundsMaxX > int.MaxValue || boundsMaxZ > int.MaxValue)
+                return false;
+            long minX = Math.Max(bounds.MinX, (long)tileX * tileSize);
+            long minZ = Math.Max(bounds.MinZ, (long)tileZ * tileSize);
+            long maxX = Math.Min(boundsMaxX, ((long)tileX + 1L) * tileSize);
+            long maxZ = Math.Min(boundsMaxZ, ((long)tileZ + 1L) * tileSize);
+            if (minX >= maxX || minZ >= maxZ)
+                return false;
+            clipped = new GrassGridRange((int)minX, (int)minZ, (int)(maxX - minX), (int)(maxZ - minZ));
+            return true;
         }
-        return true;
+
+        /// <summary>A failed reservation leaves the existing budget unchanged.</summary>
+        public static bool TryAddCandidateBudget(long current, int width, int height, long limit, out long updated)
+        {
+            updated = current;
+            if (current < 0 || limit < 0 || current > limit || width < 0 || height < 0)
+                return false;
+            long count = (long)width * height;
+            if (count > limit - current)
+                return false;
+            updated = current + count;
+            return true;
+        }
+
+        public static int ThreadGroupCount(int cells)
+        {
+            if (cells < 0 || cells > MaximumDispatchCells)
+                throw new ArgumentOutOfRangeException(nameof(cells));
+            return (cells + 7) / 8;
+        }
+
+        private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
-    /// <summary>Clips an integer tile before counting or dispatching its candidate cells.</summary>
-    public static bool TryClipTile(GrassGridRange bounds, int tileX, int tileZ, int tileSize,
-        out GrassGridRange clipped)
+    internal readonly struct GrassGridRange
     {
-        clipped = default;
-        if (tileSize <= 0)
-            throw new ArgumentOutOfRangeException(nameof(tileSize));
-        long boundsMaxX = (long)bounds.MinX + bounds.Width;
-        long boundsMaxZ = (long)bounds.MinZ + bounds.Height;
-        if (bounds.Width <= 0 || bounds.Height <= 0 || boundsMaxX > int.MaxValue || boundsMaxZ > int.MaxValue)
-            return false;
-        long minX = Math.Max(bounds.MinX, (long)tileX * tileSize);
-        long minZ = Math.Max(bounds.MinZ, (long)tileZ * tileSize);
-        long maxX = Math.Min(boundsMaxX, ((long)tileX + 1L) * tileSize);
-        long maxZ = Math.Min(boundsMaxZ, ((long)tileZ + 1L) * tileSize);
-        if (minX >= maxX || minZ >= maxZ)
-            return false;
-        clipped = new GrassGridRange((int)minX, (int)minZ, (int)(maxX - minX), (int)(maxZ - minZ));
-        return true;
-    }
+        public readonly int MinX;
+        public readonly int MinZ;
+        public readonly int Width;
+        public readonly int Height;
+        public int MaxX => checked(MinX + Width);
+        public int MaxZ => checked(MinZ + Height);
+        public long CandidateCount => (long)Width * Height;
 
-    /// <summary>A failed reservation leaves the existing budget unchanged.</summary>
-    public static bool TryAddCandidateBudget(long current, int width, int height, long limit, out long updated)
-    {
-        updated = current;
-        if (current < 0 || limit < 0 || current > limit || width < 0 || height < 0)
-            return false;
-        long count = (long)width * height;
-        if (count > limit - current)
-            return false;
-        updated = current + count;
-        return true;
-    }
-
-    public static int ThreadGroupCount(int cells)
-    {
-        if (cells < 0 || cells > MaximumDispatchCells)
-            throw new ArgumentOutOfRangeException(nameof(cells));
-        return (cells + 7) / 8;
-    }
-
-    private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
-}
-
-public readonly struct GrassGridRange
-{
-    public readonly int MinX;
-    public readonly int MinZ;
-    public readonly int Width;
-    public readonly int Height;
-    public int MaxX => checked(MinX + Width);
-    public int MaxZ => checked(MinZ + Height);
-    public long CandidateCount => (long)Width * Height;
-
-    public GrassGridRange(int minX, int minZ, int width, int height)
-    {
-        MinX = minX;
-        MinZ = minZ;
-        Width = width;
-        Height = height;
+        public GrassGridRange(int minX, int minZ, int width, int height)
+        {
+            MinX = minX;
+            MinZ = minZ;
+            Width = width;
+            Height = height;
+        }
     }
 }

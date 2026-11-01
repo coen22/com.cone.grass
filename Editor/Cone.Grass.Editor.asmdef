@@ -1,0 +1,13 @@
+{
+  "name": "Cone.Grass.Editor",
+  "rootNamespace": "Cone.Grass.Editor",
+  "references": [
+    "Cone.Grass",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

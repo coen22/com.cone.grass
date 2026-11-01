@@ -1,132 +1,90 @@
-# MicroVerse grass mask bridge
+# MicroVerse mask bridge
 
-This optional sample connects MicroVerse's **saved MaskTarget texture subassets** to `GrassPlacementArea`. A Spline Area can drive both the grass ground texture and the rendered blades. The sample has no dependency on MicroVerse assemblies or proprietary source code.
+This optional sample connects MicroVerse's **saved MaskTarget textures** to Infinite Grass Placement Areas. One Spline Area can then drive both the ground texture and the grass. The sample contains no MicroVerse code and has no compile-time dependency on MicroVerse assemblies.
 
-The implemented bridge uses Unity's asset APIs and explicit terrain mapping. Native MicroVerse completion and cancellation event integration still needs validation against the installed MicroVerse version. This sample does not claim version-specific native API compatibility.
+The bridge reads saved mask outputs through Unity's asset APIs. It does not hook into MicroVerse's generation events, so it cannot tell when a generation is still running (see [Editing and refresh](#editing-and-refresh)).
 
 ## Install
 
-Import **MicroVerse Mask Bridge** from this package's Samples section in Package Manager, or copy this entire directory into your project's `Assets/InfiniteGrass/Integrations/MicroVerse` folder. Keep both assembly definitions and the `Editor` directory. Unity does not compile this directory while it remains under the package's `Integrations~` path.
+Import **MicroVerse Mask Bridge** from the **Samples** tab of **Infinite Grass** in Package Manager. Unity does not compile the sample while it stays inside the package.
 
-The authoring workflow requires MicroVerse Core, Splines, and Masks, plus Unity Splines. The MicroVerse Vegetation module is not required for this mask-based renderer. Install those products through their normal distribution channels; this sample includes none of their source or example assets.
+It contains three assemblies, all in the `Cone.Grass.MicroVerse` namespace:
 
-## One spline for ground texture and blades
+| Assembly | Contents |
+|---|---|
+| `Cone.Grass.MicroVerse` | The `GrassMicroVerseBridge` component. |
+| `Cone.Grass.MicroVerse.Editor` | Inspector, refresh watcher and build checks. |
+| `Cone.Grass.MicroVerse.Tests` | EditMode tests (need the Unity Test Framework). |
+
+Keep both assembly definitions and the `Editor` folder.
+
+The authoring workflow needs MicroVerse Core, Splines and Masks, and Unity Splines. The MicroVerse Vegetation module is not needed. Install them through their normal channels.
+
+## One spline for ground texture and grass
 
 1. Create a closed Unity spline around a grass patch and add MicroVerse's **Spline Area** component.
-2. Add a MicroVerse **Texture Stamp** beneath the area. Select the desired grass `TerrainLayer`, choose **Spline Area** falloff, and assign the area.
-3. Create a **MaskTarget** asset for grass density. Use **R8**, clear to black, and select a resolution suitable for the smallest grass boundary you need. Linear RGBA also works if the red channel contains density. Do not use an SDF target for this input.
-4. Add a **Mask Stamp**, point it at that target, and write white positive coverage to the red channel within the same Spline Area. Match the Texture Stamp's falloff, filters, and relevant noise settings so the visible grass and textured ground cover the same region.
-5. Allow MicroVerse to finish, then save the scene. Expand the MaskTarget asset in the Project window to inspect its generated per-terrain textures.
-6. Add **Infinite Grass > MicroVerse Mask Bridge** to each affected Terrain GameObject, or to a separate source GameObject with that Terrain explicitly assigned. The required `GrassPlacementArea` is added automatically.
-7. Assign the MaskTarget and Terrain, then choose that terrain's output in **Generated Density Texture**. The mapping is deliberately explicit: the bridge never guesses from partial terrain names or texture order.
-8. Assign the **same TerrainLayer** used by the Texture Stamp to **Grass Terrain Layer**. For mixed grass/dirt boundaries, enable **Bake Terrain Ground Albedo**, choose a unique output `.asset` for this terrain, and click **Bake Terrain Albedo and Refresh**.
-9. Set the grass renderer to authored placement, refresh, save the scene, and check the boundary in Scene and Game views. The placement area receives the positive density map, terrain frame, and matching ground color inputs.
+2. Add a MicroVerse **Texture Stamp** beneath the area. Select the grass `TerrainLayer`, choose **Spline Area** falloff, and assign the area.
+3. Create a **MaskTarget** asset for grass density. Use **R8**, clear to black, at a resolution fine enough for the smallest grass edge you need. Linear RGBA also works if red holds the density. Do not use an SDF target.
+4. Add a **Mask Stamp** that writes white to the red channel of that target within the same Spline Area. Match the Texture Stamp's falloff, filters and noise, so the grass and the ground texture cover the same region.
+5. Let MicroVerse finish, then save the scene. Expand the MaskTarget in the Project window to see its per-terrain textures.
+6. Add **Infinite Grass > MicroVerse Mask Bridge** to each affected Terrain GameObject, or to another GameObject with that Terrain assigned. The required Placement Area is added automatically.
+7. Assign **Mask Target** and **Terrain**, then choose that terrain's texture in **Generated Density Texture**. The bridge never guesses from partial names or texture order.
+8. Set **Grass Terrain Layer** to the TerrainLayer used by the Texture Stamp. For mixed grass and dirt edges, turn on **Bake Terrain Ground Albedo**, choose a unique output `.asset` for this terrain, and click **Bake Terrain Albedo and Refresh**.
+9. Make sure the Infinite Grass Renderer uses **Authored Areas**, save the scene, and check the edge in the Scene and Game views.
 
-Use a unique name for every terrain and mask. A spline crossing terrain boundaries needs one bridge per terrain and the matching output texture on each. Each terrain's own size and origin determine the mask coordinates; one tile's mask must not be stretched over its neighbors.
+Give every terrain and mask a unique name. A spline that crosses terrains needs one bridge per terrain, each with that terrain's own texture.
 
-## Density and color
+## Density and colour
 
 | Input | Meaning |
 | --- | --- |
-| Density red = 0 | No blades |
-| Density red = 1 | Full authored density, before distance/quality reduction |
-| Density red between 0 and 1 | Continuous thinning of stable world-space blade candidates |
-| Grass Terrain Layer | Samples the same diffuse texture, terrain tiling/offset, and diffuse remap used by the selected layer |
-| Bake Terrain Ground Albedo | Saves the native URP Terrain/Lit blend of all terrain layers as a terrain-aligned albedo map |
-| Ground Color Override | Optional external color map covering this entire terrain, used when automatic terrain baking is disabled; takes precedence over the layer diffuse texture |
-| Ground Tint / Strength | Controls the color contribution sent to the grass renderer |
+| Density red = 0 | No grass |
+| Density red = 1 | Full density, before the distance fade |
+| Density red between 0 and 1 | Grass thins smoothly |
+| Grass Terrain Layer | Ground colour from that layer's diffuse texture, with the terrain's tiling and remap |
+| Bake Terrain Ground Albedo | Bakes the blend of all terrain layers into a terrain-aligned map |
+| Ground Color Override | A terrain-aligned colour map, used when baking is off. Takes precedence over the layer. |
+| Ground Tint, Ground Color Strength | The ground colour's tint and amount |
 
-Density must be linear data in a normalized or floating-point red channel. The bridge rejects sRGB density textures so a painted density of 0.5 is not silently changed by color conversion. Alpha-only formats such as Alpha8 do not supply that red channel, and integer/depth formats do not match the shader's filtered float sampling; they are rejected as well. Linear red-channel compressed formats remain eligible. These checks inspect format metadata and do not require a graphics device during build preflight. Missing, unsupported or ambiguous outputs produce zero grass until they are resolved.
+Density must be linear data in a normalised or floating-point red channel. The bridge rejects sRGB density textures, alpha-only formats (such as Alpha8), and integer and depth formats. Compressed formats with a linear red channel work. A missing, unsupported or ambiguous texture grows no grass until fixed.
 
-The renderer's root-to-tip blend makes the blade bases inherit the ground color while retaining blade variation farther up. Set the grass material's ground blend strength and root blend height to match the scene. Ground coloring and contact shadows are separate controls: color establishes the match; the shadow effect adds local darkening around contact.
+The baker supports only the native `Universal Render Pipeline/Terrain/Lit` material. It produces linear RGBAHalf with mipmaps and updates an existing output asset in place, keeping its GUID. Use one output per terrain; the default resolution is 1024. For custom terrain materials, Shader Graph terrains or MicroSplat, turn off **Bake Terrain Ground Albedo** and assign that material's own final-albedo map as **Ground Color Override**. Unsupported materials report a clear error.
 
-A single TerrainLayer's diffuse color does not represent a blend of several terrain layers. **Bake Terrain Ground Albedo** uses the package's editor baker to capture the native URP Terrain/Lit albedo, including diffuse tiling, remapping, opacity-as-density, height blending, and terrain layers beyond the first four. It calls the installed URP blend functions. The output contains no lighting or contact-shadow darkening, so lighting is applied once when drawing the blades.
+The bridge owns its Placement Area's terrain, shape, density texture, edge falloff and ground colour bindings: change them on the bridge. The mask already holds the spline's falloff, so the area's **Edge Falloff** is set to 0. The area's other settings stay yours.
 
-The bake uses GPU sampling, so source terrain textures can remain unreadable. It creates a linear RGBAHalf texture with mipmaps and updates an existing output asset in place to preserve its GUID and scene references. Use one output asset per Terrain. The default is 1024 x 1024; choose the lowest resolution that preserves the ground-color transitions visible beneath the blades.
+## Editing and refresh
 
-Only the native `Universal Render Pipeline/Terrain/Lit` material is supported by this baker. Custom terrain materials, including procedural tint, snow, Shader Graph terrain and MicroSplat, need a final-albedo output from their own material workflow. Disable **Bake Terrain Ground Albedo** and supply that terrain-aligned map through **Ground Color Override**. Unsupported material configurations produce a clear error instead of a misleading partial bake.
+With **Auto Refresh** on, saved asset changes, scene opening and saving, inspector edits, terrain texture changes and Undo/Redo schedule a refresh after a short delay. **Poll Saved Outputs** also checks the saved textures every **Poll Interval** (1 s by default). An unchanged poll does no texture reads and no grass capture work, and polling has no cost in the player.
 
-The bridge owns its placement area's terrain, texture shape, density texture, edge falloff, and ground color bindings. Set these through the bridge. The generated mask already contains the spline falloff, so the bridge sets the placement area's additional edge falloff to zero. Blade density multipliers and other independent appearance controls remain available on the core components.
+Because the bridge cannot see MicroVerse's generation state, coverage can lag by the refresh delay or show an intermediate output during editing. When generation finishes, click **Refresh Saved Mask**. **Bake Terrain Albedo and Refresh** also forces a new ground bake. Both keep the cached terrain height.
 
-## Editing and regeneration
+Changing mask format or resolution can replace the generated texture. The bridge finds it again by its unique full name. If the name changes, select the new texture. If two textures share a name, rename one; the bridge never picks for you.
 
-With **Auto Refresh** enabled, saved asset changes, scene opening/saving, inspector values, terrain texture changes and Undo/Redo schedule a refresh after a short debounce. **Poll Saved Outputs** checks once per second by default. The interval is adjustable, and polling can be disabled while keeping event-based refresh.
+Changing the bridge's Terrain or Mask Target clears the selected texture. Changing the Terrain also clears the bake path, so one tile cannot overwrite another's bake. Disabling the bridge stops automatic updates; the Placement Area keeps the last resolved inputs. Disable the Placement Area to hide its grass.
 
-Mask discovery is cached per asset. Ordinary polling checks object identity, dimensions, graphics format, update count, editor dirty count and Unity's cached asset dependency hash. A steady poll does not reload every subasset, read pixels, change scene dirtiness or schedule a grass capture. A changed mask invalidates density and the associated ground-color coverage, while terrain height remains cached. A changed ground-color map invalidates only color. Terrain height edits use the core placement surface invalidation path.
-
-The optional ground bake also uses a source signature, including terrain texture notifications, layer/material properties and asset changes. It reuses a current saved output across editor reloads and rebakes when its inputs change. GPU capture and readback occur during a required bake, not on each poll. Source edits made by save callbacks or bake observers remain changes to process on the next refresh; they cannot certify pixels produced before those edits.
-
-Ordinary refresh also detects edits to the live generated output through its identity, upload and dirty counters, dirty flag, and required output settings. It restores the existing asset in place when those checks change, preserving its GUID. Output validation checks linear RGBAHalf, the full mip chain, Trilinear filtering, Clamp U/V, anisotropy 1 and zero mip bias. Dirty or incompatible outputs are rejected by read-only build preflight, including after the session cache is cleared. Unchanged polling performs no pixel readback; clean pixel writes with no retained counter evidence still require the explicit forced-bake command.
-
-A synchronous refresh requested from that bridge's own bake or placement-change callback returns `false` without clearing or rebinding the committed placement. The same protection applies to another bridge sharing the output currently being baked. Queue the refresh after the current callback returns. The baker also prevents a nested operation from overwriting an output that is still being saved or reported to its observers.
-
-If a callback deletes, replaces or observably edits the completed output, refresh fails and retains the configured output path and previous bake records for recovery. This includes saved or unsaved pixel uploads and sampler changes made through either the bake or bound-area notification. The callback's asset edits remain untouched, placement clears, and read-only build preflight rejects the incomplete result. For an in-place edit, after the callback stops editing the output, an explicit refresh regenerates that same asset and preserves its GUID. A live nonpersistent reference also falls back to that configured path on the next refresh. Moving the same persistent main asset remains valid and updates its saved path; the native move compatibility check is still required. Failed read-only build validation does not repair these bindings.
-
-After a completed bake and its callbacks, the bridge resolves the selected saved density again before committing placement inputs. A valid replacement binds immediately; a missing or ambiguous output clears coverage. If a callback changes the Terrain, TerrainData or bake configuration, refresh preserves that new configuration and reports that another refresh is needed to bake its current inputs. Ordinary cached polls retain their existing discovery path.
-
-A bake of currently unsaved source changes can be previewed in the editor, but is marked unready for a player build. After saving those sources, the bridge bakes once more before recording a valid saved result. Bridges sharing one Terrain's output must also use the same resolution.
-
-The bridge treats path casing and Windows-style separators as aliases of the same output asset. Before writing a bake, it also checks loaded scenes for inactive bridge objects and disabled bridges retaining a saved bake, so those outputs cannot be overwritten at another Terrain or resolution. Use separate output assets for separate tiles or resolutions. Unchanged polls do not scan scene hierarchies.
-
-Automatic refresh does not know whether MicroVerse is generating, has completed, or has canceled an update. During editing, coverage can lag by the debounce/poll interval and can observe an intermediate producer output. A GPU producer is also allowed to write a texture without incrementing `Texture.updateCount` or raising an asset event. Such unreported writes cannot be detected by cheap polling. After generation finishes, **Refresh Saved Mask** explicitly invalidates density even if counters did not change; **Bake Terrain Albedo and Refresh** also forces a ground bake. Both preserve cached terrain height.
-
-Changes to mask format or resolution can replace the generated texture subasset. The bridge resolves its selected **unique full texture name** again, so it can replace an obsolete reference when the replacement retains that name. If the name changes, select the new output explicitly. If multiple subassets have the same name, resolve the naming conflict before proceeding. The bridge never silently chooses one.
-
-Changing the Terrain or MaskTarget in the inspector clears the selected density output and requires a new explicit mapping. Changing the Terrain also clears the ground-bake path so a different tile cannot overwrite the previous tile's bake accidentally. Moving an existing bake asset preserves its reference and updates its saved path. Disabling the bridge stops automatic authoring updates; the adjacent placement area retains the last resolved runtime inputs. Disable the placement area to stop drawing its grass.
-
-Editor cache housekeeping also releases manually refreshed bindings after their bridge is disabled or destroyed. It preserves the caches of live manual bindings, performs no texture readback and schedules no grass capture.
+A bake made from unsaved source changes previews in the editor but is marked not ready for a build. Save the sources and the bridge bakes once more. Bridges that share one terrain's output must use the same resolution.
 
 ## Saving and player builds
 
-Finish MicroVerse generation and save its source assets. Refresh the bridge, bake if required, and save the scene before building. The runtime `GrassPlacementArea` serializes the resolved texture and Terrain references. Enabled bridges refresh before scene serialization so those runtime fields are part of the saved scene. An asset replacement performed later by another producer callback can still require a final refresh and save.
+Before building: let MicroVerse finish, save its assets, refresh the bridge, bake if required, and save the scene. The Placement Area stores the resolved texture and terrain in the scene, so the player needs no MicroVerse lookup. Enabled bridges refresh before the scene is saved.
 
-The player build preflight runs for **every build**, including incremental builds. It inspects the requested saved scenes in preview scenes and checks explicit mask resolution, saved assets, current core bindings, and the persisted source/output hashes of an enabled ground bake. For direct TerrainLayer color, save both the selected diffuse and the first layer/diffuse in its four-layer group: that separate source supplies native sampler state. A saved ground-color override takes precedence and does not consume those sampler settings. Preflight fails with the scene, object and corrective action if the saved bindings or bake are stale. This check neither saves open scenes nor repairs only a temporary build copy; an unsaved correction cannot silently pass the cached build path.
+Every player build, clean or incremental, checks the saved scenes first. It fails with the scene, the object and the fix if a binding or a bake is stale. It never saves open scenes or repairs a build copy. When you use a Grass Terrain Layer without a baked or override map, save the layer's diffuse texture as well as the TerrainLayer asset.
 
-The saved bake key includes both the native TerrainLit shader and the grass albedo capture shader. Updating the capture shader invalidates older outputs as well as source-asset changes; refresh the bridge to rebuild them, then save the scene.
+The build removes the bridge component from the built scene; the Placement Area stays. It never generates terrain or bakes during a build. Custom content builds can call `GrassMicroVerseBridgeBuildProcessor.ValidateSavedScenes(scenePaths)` before building their scenes. Prefabs and Addressables outside that scene workflow need their placement inputs prepared and saved by their own pipeline.
 
-Bake-completion callbacks can remove authoring objects. Refresh checks that its bridge and placement area still exist before committing results, and watcher/scene-save iteration skips removed consumers while continuing with the remaining objects.
+## Tests
 
-When using a single Grass Terrain Layer without a baked or overridden color map, save that layer's diffuse texture as well as the TerrainLayer asset. They are separate assets, and unsaved diffuse pixels now fail preflight. A saved Ground Color Override takes precedence, so edits to an unused layer diffuse do not block that configuration.
+With the Unity Test Framework installed, run `GrassMicroVerseBridgeTests` and `GrassMicroVerseGroundBakeTests` in the Test Runner (EditMode). They use synthetic saved textures, so they need no MicroVerse install. The ground-bake tests need a graphics device and URP.
 
-The versioned scene processor validates those same inputs and removes the authoring bridge component from the built scene copy. It never generates terrain or bakes textures during a build. Disabled bridges retain their last serialized placement data.
+## Checking a setup
 
-Unity 6.6's `BuildPipelineContext.DependOnAsset` tracking applies to `BuildContentDirectory`, not `BuildPlayer`; a scene-processing callback alone therefore cannot guarantee incremental player consistency. The sample declares its content dependencies and uses the unconditional player preflight for that reason. Custom content build scripts can call `GrassMicroVerseBridgeBuildProcessor.ValidateSavedScenes(scenePaths)` before building their scenes. Prefabs and addressable content outside that scene workflow still need their placement inputs prepared and saved by their own pipeline.
-
-There is no MicroVerse lookup or polling in the player. Keep the generated texture assets as dependencies of the resolved placement components. The optional runtime marker contains no authoring fields in player compilation, even if an external content pipeline does not remove it.
-
-## Validation in the target project
-
-After importing the sample with Unity Test Framework available, run `GrassMicroVerseBridgeTests` and `GrassMicroVerseGroundBakeTests` in Test Runner. They cover explicit tile selection, empty configuration, texture replacement, duplicate names, sRGB rejection, TerrainLayer ownership, no-op polling, narrow density/color invalidation, manual-cache cleanup, saved-bake reuse, output-path aliases, inactive output owners and read-only player preflight over saved scenes. Ground-bake cases require a graphics device and native URP. These tests exercise generic Unity subassets; they do not replace validation against the installed MicroVerse version.
-
-- Start with a black mask and confirm no grass appears. Add one spline area and check that blades appear only within its white/gray coverage.
-- Check the same spline falloff and filters on the Texture Stamp and Mask Stamp. Inspect both density preview and terrain texture weights, especially on slopes and near the edge.
-- Move, resize, and delete the spline with a stationary camera. Let generation finish, then refresh. Confirm grass disappears from the previous region, appears in the current region, and follows Undo/Redo.
-- Change mask resolution and format, regenerate, and refresh. Verify the resolved texture reference changes and the region remains correct.
-- Test a spline crossing two differently positioned or sized terrains. Confirm each bridge points to that tile's generated texture.
-- Check the transition with the selected TerrainLayer and then with a blended ground color override if several terrain textures meet there.
-- Make both a clean and an incremental standalone build and confirm coverage, ground tint, and contact shadow settings match the editor. Replace a generated texture without saving corrected scene bindings and verify that both paths reject the stale configuration before building.
-
-## Native integration follow-up
-
-Public publisher manuals describe update and cancellation behavior but do not publish the event signatures or MaskTarget getter needed for a native adapter. The public [MicroVerse demo](https://github.com/JDB-Tech-INC/MicroVerse-Demo) requires separately installed MicroVerse modules and does not contain those native implementations. Its public source tree was checked on 2026-10-03. Native completion/cancellation integration remains pending.
-
-The concrete inputs needed from a licensed installation are:
-
-- The `MicroVerse` class source containing update-start, completion and cancellation declarations **and the call sites** that establish their order.
-- `MaskTarget` and the supported per-Terrain getter, including replacement behavior. The Masks manual points to `AmbientArea.GetFalloff` as its consumer example.
-- Core, Splines and Masks package manifests/assembly definitions so a version-specific adapter can target the correct modules.
-- Any generation/save/build callbacks that affect those outputs or strip authoring objects.
-
-With that verified API, a native adapter can suspend observation of partial generation, refresh affected terrains on a successful completion, and preserve the previous committed state after cancellation. The generic `Refresh`/baker path is available for the final commit step. No guessed event names, private reflection or proprietary source are included in this sample.
+- Start with a black mask and confirm no grass grows. Add one spline area and check that grass appears only inside its white and grey coverage.
+- Compare the Texture Stamp and Mask Stamp falloff and filters, especially on slopes and at the edge.
+- Move, resize and delete the spline, let generation finish, then refresh. Grass should follow, including through Undo and Redo.
+- For a spline across two terrains, check that each bridge points at its own terrain's texture.
+- Make a build and compare the grass, ground colour and edges with the editor.
 
 ## References
 
-- [MicroVerse main manual](https://docs.google.com/document/d/1R4Ru7GKdVLLNVmfVwcX7RPRPrvkN0l36LNqm9LIMtno/edit): Spline Areas, Texture Stamps, scripting updates.
-- [MicroVerse Masks manual](https://docs.google.com/document/d/1mFY_H88cyvHL8rtae7f0fWhdW7o7oabjzE7G0Cnuw9w/edit): per-terrain generated subassets, formats, and replacement behavior.
-- [Unity 6.6: AssetDatabase.LoadAllAssetsAtPath](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/AssetDatabase.LoadAllAssetsAtPath.html).
-- [Unity 6.6: AssetPostprocessor.OnPostprocessAllAssets](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/AssetPostprocessor.OnPostprocessAllAssets.html).
-- [Unity 6.6: Texture.updateCount](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/Texture-updateCount.html): GPU producers must advance this counter themselves.
-- [Unity 6.6: IProcessSceneWithReport](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/Build.IProcessSceneWithReport.html): scene processing and incremental build behavior.
-- [Unity 6.6: BuildPipelineContext](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/Build.BuildPipelineContext.html): limits of explicit scene dependency tracking.
-- [Unity 6.6: BuildPlayerProcessor](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/Build.BuildPlayerProcessor.html): unconditional player build preparation.
-- [Unity 6.6: OpenPreviewScene](https://docs.unity3d.com/6000.6/Documentation/ScriptReference/SceneManagement.EditorSceneManager.OpenPreviewScene.html): isolated inspection of saved scene objects.
+- [MicroVerse main manual](https://docs.google.com/document/d/1R4Ru7GKdVLLNVmfVwcX7RPRPrvkN0l36LNqm9LIMtno/edit): Spline Areas, Texture Stamps.
+- [MicroVerse Masks manual](https://docs.google.com/document/d/1mFY_H88cyvHL8rtae7f0fWhdW7o7oabjzE7G0Cnuw9w/edit): per-terrain generated textures, formats and replacement.

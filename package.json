@@ -1,12 +1,29 @@
 {
   "name": "com.cone.grass",
-  "version": "2.0.0-preview.7",
+  "version": "2.0.0",
   "displayName": "Infinite Grass",
-  "description": "GPU procedural grass for Unity 6.6 URP with authored density areas, geometric LOD, ground blending, and optional contact shadows.",
+  "description": "GPU procedural grass and meadow flowers for URP terrain. Authored placement areas and painted density, plant kinds with flower heads, geometric LOD, terrain colour matching, collider-driven bending with recovery, and optional contact shadows and motion vectors. Rendered through RenderGraph with compute-generated, indirect draws.",
   "unity": "6000.6",
   "author": {
-    "name": "Youssef Afella"
+    "name": "coen22",
+    "url": "https://github.com/coen22"
   },
+  "keywords": [
+    "grass",
+    "foliage",
+    "flowers",
+    "meadow",
+    "terrain",
+    "vegetation",
+    "gpu",
+    "compute",
+    "urp",
+    "rendergraph",
+    "interaction"
+  ],
+  "documentationUrl": "https://github.com/coen22/com.cone.grass/blob/v2.0.0/Documentation~/index.md",
+  "changelogUrl": "https://github.com/coen22/com.cone.grass/blob/v2.0.0/CHANGELOG.md",
+  "licensesUrl": "https://github.com/coen22/com.cone.grass/blob/v2.0.0/LICENSE.md",
   "dependencies": {
     "com.unity.render-pipelines.universal": "17.6.0",
     "com.unity.modules.imgui": "1.0.0",
@@ -16,13 +33,13 @@
   },
   "samples": [
     {
-      "displayName": "Sample Scene",
-      "description": "Demonstrates usage of the Infinite Grass renderer.",
-      "path": "Samples~/SampleScene"
+      "displayName": "Meadow",
+      "description": "A terrain meadow with flowers at grass height and a character whose collider bends the grass as it walks. WASD to walk, Shift to run, right mouse to orbit; the character walks on its own when idle.",
+      "path": "Samples~/Meadow"
     },
     {
       "displayName": "MicroVerse Mask Bridge",
-      "description": "Connects saved MicroVerse mask outputs to authored grass areas and matching terrain colors.",
+      "description": "Optional: connects saved MicroVerse mask outputs to grass placement areas and matching terrain colours. Requires MicroVerse.",
       "path": "Integrations~/MicroVerse"
     }
   ]

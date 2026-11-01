@@ -1,7 +1,0 @@
-{
-  "name": "com.cone.grass",
-  "references": [
-    "Unity.RenderPipelines.Core.Runtime",
-    "Unity.RenderPipelines.Universal.Runtime"
-  ]
-}
