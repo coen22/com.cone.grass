@@ -31,7 +31,11 @@ dotnet_separate_import_directive_groups = false
 
 # Language: explicit accessibility, readonly where possible, var only when the type is apparent, predefined type names.
 dotnet_style_require_accessibility_modifiers = always:warning
-dotnet_style_readonly_field = true:warning
+# Off: dotnet format would add readonly to [SerializeField]/[SerializeReference] fields set only in an initializer, and
+# Unity never serializes readonly fields, so scene and asset data would be lost (caves, 2026-11-01). Without
+# Microsoft.Unity.Analyzers' USP0004 suppressor the IDE cannot tell serialized fields apart. Apply readonly by hand.
+dotnet_style_readonly_field = true:none
+dotnet_diagnostic.IDE0044.severity = none
 dotnet_style_predefined_type_for_locals_parameters_members = true:warning
 dotnet_style_predefined_type_for_member_access = true:warning
 dotnet_style_qualification_for_field = false:warning
