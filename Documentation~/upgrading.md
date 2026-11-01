@@ -39,7 +39,36 @@ The assemblies are renamed. Update the **Assembly Definition References** of you
 | `com.cone.grass.microverse.sample.editor` | `Cone.Grass.MicroVerse.Editor` |
 | `com.cone.grass.microverse.sample.tests` | `Cone.Grass.MicroVerse.Tests` |
 
-References by GUID keep working; references by name must be changed. If you imported the MicroVerse bridge sample before, delete the old copy and import it again.
+References by name must be changed. References by GUID keep working for `Cone.Grass` and the MicroVerse assemblies, and `Cone.Grass.Editor` keeps the old placement editor's GUID; a reference to the ground-colour editor assembly by GUID breaks and must be replaced with `Cone.Grass.Editor`. If you imported the MicroVerse bridge sample before, delete the old copy and import it again.
+
+## Scripting API
+
+Settings that were public fields are now properties with PascalCase names. Change the member name; the value and its
+meaning are the same:
+
+```csharp
+// 1.x and the 2.0 previews
+renderer.spacing = 0.08f;
+renderer.grassMaterial = blades;
+// 2.0.0
+renderer.Spacing = 0.08f;
+renderer.GrassMaterial = blades;
+```
+
+This applies to every setting of `InfiniteGrassRenderer`, `GrassInteractor`, `GrassVariantProfile`, `GrassVariantKind`
+and the contact-shadow and motion-vector `Settings`. Enum values keep their names.
+
+Saved data is kept: every renamed serialized field reads its old name. Two kinds of reference to the old field names do
+not follow, and need updating by hand:
+
+- `SerializedObject.FindProperty` paths in your editor code. The fields are now private and start with an underscore,
+  for example `FindProperty("_spacing")`. Prefer the property where one exists.
+- Animation and Timeline curves that animate a grass setting. Rebind them to the new field.
+
+These types were public implementation details and are now internal: `GrassVariantSelection` (and
+`GrassVariantProfile.GetMix`), `GrassVariantGpuData`, `GrassHeadDraws`, `GrassInteractionField`, `GrassInteractionMesh`,
+`GrassInteractorSupport`, `GrassDispatchMath`, and the placement, interactor and density editors. The opt-in test reload
+guard (`-grassBatchReloadGuard`) is removed.
 
 ## The old sample is removed
 

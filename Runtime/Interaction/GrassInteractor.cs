@@ -54,7 +54,8 @@ namespace Cone.Grass
         /// <summary>Discovers <see cref="Body"/> when it is unassigned, then registers the interactor.</summary>
         protected override void OnEnable()
         {
-            if (ReferenceEquals(_body, null))
+            // An empty serialized field loads in the Editor as Unity's null placeholder, not a C# null.
+            if (!GrassPlacementArea.HasAssignedReference(_body))
             {
                 Collider candidate = null;
                 foreach (Collider local in GetComponents<Collider>())

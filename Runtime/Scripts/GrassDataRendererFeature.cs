@@ -19,6 +19,7 @@ namespace Cone.Grass
         [SerializeField, FormerlySerializedAs("computeShader")] private ComputeShader _computeShader;
 
         private GrassDataPass _grassPass;
+        private bool _warnedMissingCompute;
 
         /// <summary>
         /// Creates the grass pass, assigning the package's compute shader and height material in the editor when they
@@ -42,7 +43,7 @@ namespace Cone.Grass
 #if UNITY_EDITOR
         // A feature added by hand in the renderer inspector starts with the package's own compute shader and height
         // material, so it works without further setup.
-        private void AssignPackageDefaults()
+        internal void AssignPackageDefaults()
         {
             // Only features saved in a renderer asset; a feature built in code keeps exactly what its creator assigned.
             if (!UnityEditor.EditorUtility.IsPersistent(this))
@@ -50,16 +51,25 @@ namespace Cone.Grass
                 return;
             }
 
+            bool changed = false;
             if (!_computeShader)
             {
                 _computeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(
                     UnityEditor.AssetDatabase.GUIDToAssetPath("6faaeebb3c9e1434a9a262ec25b9c479"));
+                changed |= _computeShader;
             }
 
             if (!_heightMapMat)
             {
                 _heightMapMat = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
                     UnityEditor.AssetDatabase.GUIDToAssetPath("95d63adac2015d142aac17b9b535fd20"));
+                changed |= _heightMapMat;
+            }
+
+            if (changed)
+            {
+                // Save the filled defaults with the renderer asset, not only in memory.
+                UnityEditor.EditorUtility.SetDirty(this);
             }
         }
 #endif
@@ -90,6 +100,13 @@ namespace Cone.Grass
             InfiniteGrassRenderer owner = InfiniteGrassRenderer.Instance;
             // Without blades only the interaction capture runs: it needs no blade material, compute or indirect draws.
             bool blades = owner && owner.DrawBlades;
+            if (blades && owner && owner.IsReadyForRendering && !_computeShader && !_warnedMissingCompute)
+            {
+                _warnedMissingCompute = true;
+                Debug.LogWarning("The Grass Data Renderer Feature has no compute shader, so no grass is drawn. " +
+                    "Assign GrassPositionsCompute on the feature.", this);
+            }
+
             if (!owner || !owner.IsReadyForRendering || blades && (!owner.GrassMaterial || !_computeShader ||
                 !SystemInfo.supportsComputeShaders || !SystemInfo.supportsInstancing || !SystemInfo.supportsIndirectArgumentsBuffer))
             {

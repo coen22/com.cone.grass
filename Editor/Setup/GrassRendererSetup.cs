@@ -52,11 +52,33 @@ namespace Cone.Grass.Editor
             return null;
         }
 
-        /// <summary>True when the active renderer has an enabled grass feature.</summary>
+        /// <summary>True when URP is the active render pipeline, whatever kind of renderer it uses by default.</summary>
+        public static bool IsUrpActive() => GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset;
+
+        /// <summary>
+        /// True when any renderer of the active URP asset has an enabled grass feature. Cameras can pick any renderer
+        /// from the asset's list, so the default renderer is not the only one that counts.
+        /// </summary>
         public static bool IsInstalled()
         {
-            GrassDataRendererFeature feature = FindFeature(ActiveRendererData());
-            return feature && feature.isActive;
+            if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset pipeline))
+            {
+                return false;
+            }
+
+            using var serialized = new SerializedObject(pipeline);
+            SerializedProperty list = serialized.FindProperty("m_RendererDataList");
+            for (int i = 0; list != null && i < list.arraySize; i++)
+            {
+                GrassDataRendererFeature feature =
+                    FindFeature(list.GetArrayElementAtIndex(i).objectReferenceValue as ScriptableRendererData);
+                if (feature && feature.isActive)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -83,8 +105,11 @@ namespace Cone.Grass.Editor
             }
             else
             {
+                // As URP's own Add Renderer Feature: a hidden sub-asset named after its type, with Undo.
                 feature = ScriptableObject.CreateInstance<GrassDataRendererFeature>();
-                feature.name = "Grass Data";
+                feature.name = nameof(GrassDataRendererFeature);
+                feature.hideFlags |= HideFlags.HideInHierarchy;
+                Undo.RegisterCreatedObjectUndo(feature, "Add Grass Data Renderer Feature");
                 AssetDatabase.AddObjectToAsset(feature, renderer);
                 AssetDatabase.TryGetGUIDAndLocalFileIdentifier(feature, out _, out long localId);
                 using (var serialized = new SerializedObject(renderer))

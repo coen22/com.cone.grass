@@ -19,7 +19,8 @@ The first stable release of the 2.x line, for Unity 6000.6 and URP 17.6 with Ren
   collider and lets it recover over time; the interaction capture is also published as a shared field for other effects.
 - **Geometric LOD** with near, middle and far blade meshes, distance density fade and per-LOD GPU queues.
 - **Optional contact shadows** between grass and the visible scene, and optional per-blade motion vectors.
-- An inspector button that adds the Grass Data Renderer Feature to the active URP renderer.
+- An inspector button that adds the Grass Data Renderer Feature to the active URP renderer, and default assets for
+  the feature that are filled in before every player build.
 - Optional MicroVerse mask bridge sample.
 - EditMode and PlayMode test suites.
 
@@ -28,11 +29,21 @@ The first stable release of the 2.x line, for Unity 6000.6 and URP 17.6 with Ren
 - All types are in the `Cone.Grass` namespace and the assemblies are named `Cone.Grass`, `Cone.Grass.Editor` and so
   on. Add `using Cone.Grass;` to scripts that use the package, and update assembly definition references from
   `com.cone.grass` to `Cone.Grass`.
-- New renderers default to **Authored Areas** placement. Scenes from 1.x keep working in **Legacy Surface Layer** mode.
+- Settings that were public fields are now PascalCase properties (`renderer.spacing` is now `renderer.Spacing`).
+  Serialized data is kept; editor `FindProperty` paths and animation curves on old field names need updating.
+- Implementation types such as `GrassVariantSelection`, `GrassInteractionField` and `GrassDispatchMath` are internal.
+- New renderers default to **Authored Areas** placement. A 1.x scene loads in that mode too and shows no grass until
+  you set **Placement Mode** to **Legacy Surface Layer** or add Placement Areas (see the upgrade guide).
 - GPU buffers persist per camera and are rebuilt only when capacity changes; all compute dispatches are bounded.
+
+### Fixed
+- A Grass Collider Interactor or Grass Interactor in a saved scene bends grass in the Editor; an empty capture
+  shader or Body field no longer stops it.
+- Capture passes no longer declare textures a capture material kept from a previous shader.
 
 ### Removed
 - The original ball-and-effects demo scene, replaced by the Meadow sample.
+- The opt-in batch test reload guard.
 
 ## [1.0.0] - 2025-06-15
 

@@ -10,18 +10,27 @@ namespace Cone.Grass.Editor
     {
         public override void OnInspectorGUI()
         {
-            if (GrassRendererSetup.ActiveRendererData() == null)
+            if (!GrassRendererSetup.IsUrpActive())
             {
                 EditorGUILayout.HelpBox("Infinite Grass needs the Universal Render Pipeline. Assign a URP asset in " +
                     "Project Settings > Graphics.", MessageType.Error);
             }
             else if (!GrassRendererSetup.IsInstalled())
             {
-                EditorGUILayout.HelpBox("The active URP renderer has no Grass Data Renderer Feature, so no grass is drawn.",
-                    MessageType.Warning);
-                if (GUILayout.Button("Add Grass Data Renderer Feature"))
+                if (GrassRendererSetup.ActiveRendererData() == null)
                 {
-                    GrassRendererSetup.Install();
+                    EditorGUILayout.HelpBox("No renderer of the active URP asset has a Grass Data Renderer Feature, and " +
+                        "its default renderer is not a Universal Renderer. Add the feature to the Universal Renderer " +
+                        "your cameras use.", MessageType.Warning);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("No renderer of the active URP asset has a Grass Data Renderer Feature, so " +
+                        "no grass is drawn. The button adds it to the default renderer.", MessageType.Warning);
+                    if (GUILayout.Button("Add Grass Data Renderer Feature"))
+                    {
+                        GrassRendererSetup.Install();
+                    }
                 }
             }
 

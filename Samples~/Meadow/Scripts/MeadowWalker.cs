@@ -47,11 +47,14 @@ namespace Cone.Grass.Samples.Meadow
             Vector3 velocity;
             if (AutopilotActive)
             {
-                // A lemniscate around the start point at walking pace.
-                _autopilotPhase += _walkSpeed * deltaTime / (_autopilotRadius * 1.9f);
-                Vector3 toTarget = _autopilotCentre + Lemniscate(_autopilotPhase + 0.05f) - transform.position;
+                // Walk the figure of eight at walking pace: advance along the curve by its own arc length, then move
+                // exactly onto the next point, so the character neither overshoots nor waits for the target.
+                Vector3 tangent = Lemniscate(_autopilotPhase + 0.001f) - Lemniscate(_autopilotPhase);
+                float arcPerPhase = Mathf.Max(tangent.magnitude / 0.001f, 0.01f);
+                _autopilotPhase += _walkSpeed * deltaTime / arcPerPhase;
+                Vector3 toTarget = _autopilotCentre + Lemniscate(_autopilotPhase) - transform.position;
                 toTarget.y = 0f;
-                velocity = toTarget.sqrMagnitude > 1e-4f ? toTarget.normalized * _walkSpeed : Vector3.zero;
+                velocity = deltaTime > 0f ? Vector3.ClampMagnitude(toTarget / deltaTime, _runSpeed) : Vector3.zero;
             }
             else
             {
