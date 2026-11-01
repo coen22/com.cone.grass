@@ -302,9 +302,11 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out ui
     float fadeRange = max(_DrawDistance - fullDensityDistance, 1e-4);
     float distanceDensity = pow(saturate((_DrawDistance - distanceToCamera) / fadeRange), max(_DensityFalloffExponent, 0.0));
     float population = _DensityShortensBlades != 0 ? 1.0 : authoredDensity;
-    float probability = saturate(population * surfaceValidity * (1.0 - exclusion) * distanceDensity);
-    if (!isfinite(probability))
+    // Reject a non-finite product before saturate, which would turn infinity into one.
+    float rawProbability = population * surfaceValidity * (1.0 - exclusion) * distanceDensity;
+    if (!isfinite(rawProbability))
         return false;
+    float probability = saturate(rawProbability);
     float coverage = GrassDensityCoverage(probability, GrassRandom(seed, 0xb5297a4du));
     if (coverage <= 0.0)
         return false;
