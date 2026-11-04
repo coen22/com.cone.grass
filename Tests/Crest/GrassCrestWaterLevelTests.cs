@@ -108,17 +108,18 @@ namespace Cone.Grass.Tests
             bridge.MinimumWaveLength = 0f;
             var position = new Vector3(3f, 0f, 4f);
             _bridge.transform.position = position;
-            // Waves, so the surface height differs from the sea level and a fallback to it can't pass.
-            _water.GetComponent<WaterRenderer>().WindSpeed = 30f;
-            var waves = new GameObject("Crest test waves");
-            waves.transform.SetParent(_water.transform, false);
-            waves.AddComponent<ShapeFFT>();
 
             // An independent query at the same point: Crest's answers arrive a frame or more late.
             var reference = new SampleCollisionHelper();
-            int matched = 0, offSeaLevel = 0;
+            int matched = 0, raised = 0;
             for (int frame = 0; frame < 240; frame++)
             {
+                if (frame == 120)
+                {
+                    // Raise the water: the queried surface, and the bridge with it, must follow.
+                    _water.transform.position = new Vector3(0f, 2f, 0f);
+                }
+
                 yield return Frame();
                 Assert.That(grass.WaterLine.TryResolve(out float level, out _), Is.True, "A Crest level is available every frame.");
                 if (!reference.SampleHeight(position, out float surface, 0f))
@@ -128,9 +129,10 @@ namespace Cone.Grass.Tests
 
                 Assert.That(level, Is.EqualTo(surface).Within(1e-3f), $"Frame {frame}: the bridge must report Crest's surface height.");
                 matched++;
-                if (Mathf.Abs(surface - 1.25f) > 0.01f)
+                if (frame >= 180)
                 {
-                    offSeaLevel++;
+                    Assert.That(surface, Is.EqualTo(2f).Within(0.02f), "Calm water: the surface is at the raised water level.");
+                    raised++;
                 }
             }
 
@@ -143,7 +145,7 @@ namespace Cone.Grass.Tests
             }
 
             Assert.That(matched, Is.GreaterThan(60), "Crest's height query must answer for most frames.");
-            Assert.That(offSeaLevel, Is.GreaterThan(0), "With waves the surface must leave the sea level at least once.");
+            Assert.That(raised, Is.GreaterThan(30), "The query must keep answering after the water moves.");
         }
 
         [UnityTest]

@@ -12,6 +12,9 @@ GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 - **Geometric LOD.** Near, middle and far blade meshes, a distance density fade and per-LOD GPU queues.
 - **Ground colour matching.** Blade roots take the colour of the terrain below, from a TerrainLayer or a baked blend of all terrain layers.
 - **Collider interaction.** Characters bend the grass as they walk, and it recovers over time. The contact field is shared with other effects.
+- **Water line.** No grass or flowers below a water level, with a shoreline band where they thin in; optionally driven by Crest 5 water.
+
+  ![Water line disabled and enabled at a Crest 5 lake shore](Documentation~/images/waterline-compare.png)
 - **Optional extras.** Screen-space contact shadows, per-blade motion vectors for TAA and motion blur, and a MicroVerse mask bridge.
 
 ## Requirements

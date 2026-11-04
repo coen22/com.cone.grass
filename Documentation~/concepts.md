@@ -70,6 +70,10 @@ Density maps hold linear values in the red channel: black is no grass, white is 
 
 ## Water line
 
+![Water line disabled and enabled at a Crest 5 lake shore](images/waterline-compare.png)
+
+*The same camera at a Crest 5 lake. Disabled: blades grow on the lake bed and stand out of the water. Enabled: none below the water, thinning in over the 0.6 m shoreline band.*
+
 The renderer's **Water Line** keeps grass and flowers above a water level. A root on ground at or below the level never grows, and above it the population thins in over the **Shore Fade** band: the chance that a root grows is zero at the water and rises linearly to full at the top of the band. The band thins blades like the other density factors (Density Transition softens each one as it fades), so the shore reads as sparser grass rather than a cut line. Heads grow on their blades, so flowers follow the same line.
 
 The level is one world height per frame, either the setting's **Level** or a level source such as the [Crest bridge](integrations.md#crest-5-water-level). It applies to every camera that draws grass, so the view from under the water matches the view from above. Grass draws for Game cameras (and the Scene view when enabled), not for Crest's planar reflection cameras, so a reflection shows no grass either way.
