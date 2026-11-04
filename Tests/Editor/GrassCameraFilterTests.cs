@@ -79,12 +79,45 @@ namespace Cone.Grass.Tests
         }
 
         [Test]
-        public void OnlyGameViewsAndTheEnabledSceneViewDrawTheGrass()
+        public void PlanarReflectionCamerasDrawTheGrassButProbeCapturesDoNot()
+        {
+            _camera.cameraType = CameraType.Reflection;
+            _camera.aspect = 16f / 9f;
+            _camera.fieldOfView = 60f;
+            Assert.That(_owner.Reflections.Cameras, Is.EqualTo(GrassReflectionCameras.Planar), "Planar reflections draw grass by default.");
+            Assert.That(_owner.DrawsFor(_camera), Is.True, "A planar reflection camera, such as Crest's.");
+
+            _camera.fieldOfView = 90f;
+            _camera.aspect = 1f;
+            Assert.That(GrassReflectionSettings.IsProbeCapture(_camera), Is.True);
+            Assert.That(_owner.DrawsFor(_camera), Is.False, "A reflection-probe cube face pays nothing for the grass.");
+            _owner.Reflections.Cameras = GrassReflectionCameras.All;
+            Assert.That(_owner.DrawsFor(_camera), Is.True);
+            _camera.cullingMask = 0;
+            Assert.That(_owner.DrawsFor(_camera), Is.False, "A reflection that culls the owner's layer draws none.");
+        }
+
+        [Test]
+        public void ReflectionScalesAreClamped()
+        {
+            var settings = new GrassReflectionSettings { SpacingScale = 20f, DrawDistanceScale = 0f };
+            Assert.That(settings.EffectiveSpacingScale, Is.EqualTo(8f));
+            Assert.That(settings.EffectiveDrawDistanceScale, Is.EqualTo(0.05f));
+            settings.SpacingScale = float.NaN;
+            settings.DrawDistanceScale = float.PositiveInfinity;
+            Assert.That(settings.EffectiveSpacingScale, Is.EqualTo(1f));
+            Assert.That(settings.EffectiveDrawDistanceScale, Is.EqualTo(1f));
+            Assert.That(new GrassReflectionSettings().EffectiveSpacingScale, Is.EqualTo(2f), "A quarter of the blades by default.");
+        }
+
+        [Test]
+        public void OnlyGameViewsTheEnabledSceneViewAndAdmittedReflectionsDrawTheGrass()
         {
             _camera.cameraType = CameraType.Preview;
             Assert.That(_owner.DrawsFor(_camera), Is.False);
             _camera.cameraType = CameraType.Reflection;
-            Assert.That(_owner.DrawsFor(_camera), Is.False);
+            _owner.Reflections.Cameras = GrassReflectionCameras.None;
+            Assert.That(_owner.DrawsFor(_camera), Is.False, "Reflections off.");
             _camera.cameraType = CameraType.SceneView;
             _owner.RenderInSceneView = true;
             Assert.That(_owner.DrawsFor(_camera), Is.True);
