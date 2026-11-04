@@ -72,6 +72,15 @@ namespace Cone.Grass
         /// </summary>
         public bool DensityShortensBlades { get => _densityShortensBlades; set => _densityShortensBlades = value; }
 
+        [Header("Water Line"), SerializeField]
+        private GrassWaterLine _waterLine = new GrassWaterLine();
+
+        /// <summary>
+        /// Keeps grass and flowers above a water level, with a shoreline band where they thin in. Off by default; a
+        /// level source such as the Crest bridge can drive it.
+        /// </summary>
+        public GrassWaterLine WaterLine { get => _waterLine ??= new GrassWaterLine(); set => _waterLine = value ?? new GrassWaterLine(); }
+
         [Header("Plant Kinds")]
         [Tooltip("Several kinds of blade, herb and flower, mixed by weight and gathered into drifts. Empty grows the material's one blade."), SerializeField, FormerlySerializedAs("variants")]
         private GrassVariantProfile _variants;

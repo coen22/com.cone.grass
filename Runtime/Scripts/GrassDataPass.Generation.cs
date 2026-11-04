@@ -247,6 +247,7 @@ namespace Cone.Grass
                     pass.DensityShortens = state.DensityShortens;
                     pass.ArgumentStride = _argumentStride;
                     pass.ArgumentCountOffset = _argumentCountOffset;
+                    pass.WaterLine = WaterLineData.From(owner);
                     builder.UseTexture(height, AccessFlags.Read);
                     builder.UseTexture(density, AccessFlags.Read);
                     builder.UseTexture(mask, AccessFlags.Read);
@@ -285,6 +286,7 @@ namespace Cone.Grass
                         cmd.SetComputeIntParam(shader, Id.DensityShortens, data.DensityShortens ? 1 : 0);
                         cmd.SetComputeIntParam(shader, Id.ArgsStride, data.ArgumentStride);
                         cmd.SetComputeIntParam(shader, Id.ArgsCountOffset, data.ArgumentCountOffset);
+                        data.WaterLine.Apply(cmd, shader);
                         // Kinds and heads. Zero head queues keep the earlier counter and argument layout.
                         data.Variants.Apply(cmd, shader);
                         cmd.SetComputeIntParam(shader, Id.HeadQueues, data.Variants.HeadQueues);

@@ -161,6 +161,7 @@ namespace Cone.Grass
                 public Vector4 LodDistances;
                 public bool Authored, DensityShortens;
                 public int ArgumentStride, ArgumentCountOffset;
+                public WaterLineData WaterLine;
             }
 
             private sealed class DrawPass

@@ -2,6 +2,7 @@
 
 - [Terrain ground-albedo baker](#terrain-ground-albedo-baker): match grass roots to a blend of terrain layers.
 - [MicroVerse mask bridge](#microverse-mask-bridge): drive grass placement from MicroVerse splines.
+- [Crest 5 water level](#crest-5-water-level): keep grass above Crest water.
 - [Reading the interaction field](#reading-the-interaction-field): use character contacts in your own shaders.
 
 ## Terrain ground-albedo baker
@@ -114,6 +115,22 @@ Changing the bridge's Terrain or Mask Target clears the selected texture, and ch
 Before building: let MicroVerse finish, save its assets, refresh the bridge, bake if needed, and save the scene. The Placement Area stores the resolved texture and terrain in the scene, so the player needs no MicroVerse code.
 
 Every player build, including incremental builds, checks the saved scenes. A stale binding or bake fails the build with the scene, the object and the fix. The build removes the bridge component from the built scene; the Placement Area stays. Custom content pipelines can call `GrassMicroVerseBridgeBuildProcessor.ValidateSavedScenes(scenePaths)` themselves.
+
+## Crest 5 water level
+
+**Grass Crest Water Level** (`Cone.Grass.Crest.GrassCrestWaterLevel`) feeds the Crest 5 water height into the renderer's [Water Line](reference.md#water-line), so no grass grows below Crest water and the shore thins in over the **Shore Fade** band. It lives in the `Cone.Grass.Crest` assembly, which compiles only when the Crest package (`com.waveharmonic.crest` 5.0 or later) is installed (a `versionDefines` entry sets `CONE_GRASS_CREST`). Without Crest the package compiles and runs as before.
+
+Add the component anywhere in the scene, near the water you care about. It attaches itself to the active Infinite Grass Renderer and turns its water line on; disabling it detaches it again.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Renderer | none | The grass renderer to drive. Empty uses the active Infinite Grass Renderer. |
+| Mode | Surface Height | **Sea Level** reads the Water Renderer's height. **Surface Height** asks Crest's collision query for the water surface at the sample point, which includes waves and level inputs such as a raised lake; it falls back to the sea level while the query has no result yet. |
+| Sample Point | none | Where Surface Height is queried. Empty uses the component's own position. |
+| Offset | 0 m | Added to the Crest height. A few centimetres keep blades out of wave troughs and the meniscus. |
+| Minimum Wave Length | 1 m | Smallest wave length the surface query resolves. Larger values ignore ripples. |
+
+The water line is one height per frame, not a per-blade surface lookup: on a rough sea, add the wave amplitude to **Offset** or widen **Shore Fade**. The component queries Crest once per frame however many cameras render.
 
 ## Reading the interaction field
 
