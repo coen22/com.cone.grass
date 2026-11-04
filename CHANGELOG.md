@@ -3,6 +3,16 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Water line.** `InfiniteGrassRenderer.WaterLine` keeps grass and flowers above a world-space water level: no root
+  grows at or below it, and density thins in over a **Shore Fade** band above it (0.5 m by default), so the grass
+  doesn't stop in a hard line. Off by default; placement is unchanged until it is enabled or given a level source
+  (`IGrassWaterLevelSource`).
+- **Crest 5 water level.** `Cone.Grass.Crest.GrassCrestWaterLevel` drives the water line from Crest's sea level or
+  its queried surface height. The `Cone.Grass.Crest` assembly compiles only when `com.waveharmonic.crest` is installed.
+
 ## [2.0.0] - 2026-11-01
 
 The first stable release of the 2.x line, for Unity 6000.6 and URP 17.6 with RenderGraph.

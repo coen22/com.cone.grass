@@ -59,13 +59,20 @@ Several factors multiply into the chance that a root grows:
 
 - the area's **Density**, its shape and **Edge Falloff**, and its density map;
 - the exclusion mask;
-- the distance fade (below).
+- the distance fade (below);
+- the water line's shoreline band (below).
 
 Each root compares that chance with its own stable random number. Near the threshold, **Density Transition** fades a blade's coverage instead of switching it on or off, so thinning is smooth rather than popping.
 
 With **Density Shortens Blades**, authored density no longer thins the blades. Every root with density above zero grows, shortened in proportion. A painted falloff then tapers to stubble at the edge.
 
 Density maps hold linear values in the red channel: black is no grass, white is full density. A missing or empty map grows nothing.
+
+## Water line
+
+The renderer's **Water Line** keeps grass and flowers above a water level. A root on ground at or below the level never grows, and above it the population thins in over the **Shore Fade** band: the chance that a root grows is zero at the water and rises linearly to full at the top of the band. The band thins blades like the other density factors (Density Transition softens each one as it fades), so the shore reads as sparser grass rather than a cut line. Heads grow on their blades, so flowers follow the same line.
+
+The level is one world height per frame, either the setting's **Level** or a level source such as the [Crest bridge](integrations.md#crest-5-water-level). It applies to every camera that draws grass, Crest's planar reflection cameras included, so reflections and the view from under the water match the direct view.
 
 ## Distance: fade and LOD
 

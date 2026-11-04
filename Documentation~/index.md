@@ -13,6 +13,7 @@ You decide *where* grass grows with Placement Areas and painted density maps. Yo
 - Ground colour matching: blade roots take the colour of the terrain beneath them.
 - Collider-driven bending with timed recovery, published as a shared field other effects can read.
 - Optional screen-space contact shadows and optional per-blade motion vectors.
+- A water line with a shoreline fade band, optionally driven by Crest 5 water.
 - Optional MicroVerse mask bridge and a terrain ground-albedo baker.
 
 ## Requirements
@@ -42,7 +43,7 @@ Grass draws for Game view cameras and, when **Render In Scene View** is on, for 
 5. [Interaction](interaction.md): bending grass with colliders.
 6. [Performance](performance.md): budgets and what each setting costs.
 7. [Troubleshooting](troubleshooting.md): common problems and their fixes.
-8. [Integrations](integrations.md): MicroVerse, the terrain albedo baker and the shared interaction field.
+8. [Integrations](integrations.md): MicroVerse, Crest 5 water, the terrain albedo baker and the shared interaction field.
 9. [Upgrading](upgrading.md): moving from 1.x or a 2.0 preview.
 10. [Changelog](../CHANGELOG.md): what changed in each release.
 

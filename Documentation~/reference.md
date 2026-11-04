@@ -36,6 +36,18 @@ Every inspector setting, with its default and what it does. Names are as the ins
 | Density Transition | 0.05 | Width of the soft band where a thinning blade fades in coverage instead of popping. 0 to 0.25. |
 | Density Shortens Blades | off | Authored density shortens blades instead of thinning them. A painted falloff then tapers to stubble. |
 
+### Water Line
+
+Keeps grass and flowers out of water. See [Water line](concepts.md#water-line).
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enabled | off | Grow no grass at or below **Level**. A level source (such as the [Crest bridge](integrations.md#crest-5-water-level)) turns the water line on too. |
+| Level | 0 m | World-space water height (Y). A level source overrides it while it reports a level. |
+| Shore Fade | 0.5 m | Height of the shoreline band above the water. Density rises linearly from zero at the water to full at this height, so the grass doesn't stop in a hard line. 0 is a hard line. |
+
+From a script, `InfiniteGrassRenderer.WaterLine.Source` takes any `IGrassWaterLevelSource`; it isn't serialized. A destroyed Unity object counts as no source.
+
 ### Plant Kinds
 
 | Setting | Default | What it does |

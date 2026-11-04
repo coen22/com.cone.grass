@@ -44,8 +44,13 @@ namespace Cone.Grass.Tests
             _camera.transform.position = new Vector3(0f, 6f, -10f);
 
             _water = new GameObject("Crest test water");
+            _water.SetActive(false);
             _water.transform.position = new Vector3(0f, 1.25f, 0f);
-            _water.AddComponent<WaterRenderer>();
+            WaterRenderer water = _water.AddComponent<WaterRenderer>();
+            GiveInternalData(water);
+            // Calm water: the surface height is the sea level.
+            water.WindSpeed = 0f;
+            _water.SetActive(true);
 
             _grass = new GameObject("Crest test grass");
             _grass.AddComponent<InfiniteGrassRenderer>();
@@ -144,6 +149,33 @@ namespace Cone.Grass.Tests
                 Assert.That(minimum, Is.GreaterThan(previousMinimum), "The cut-off rises with the water.");
                 previousMinimum = minimum;
             }
+        }
+
+        // A renderer added from a script doesn't always get Crest's internal resources and chunk prefab from the
+        // script's default references, and Crest's validation then switches it off. Set both, as the defaults would.
+        private static void GiveInternalData(WaterRenderer water)
+        {
+#if UNITY_EDITOR
+            const System.Reflection.BindingFlags Field = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+            const string Folder = "Packages/com.waveharmonic.crest/Runtime/";
+            System.Reflection.FieldInfo resources = typeof(WaterRenderer).GetField("_Resources", Field);
+            System.Reflection.FieldInfo chunk = typeof(SurfaceRenderer).GetField("_ChunkTemplate", Field);
+            if (resources != null && resources.GetValue(water) == null)
+            {
+                resources.SetValue(water, AssetDatabase.LoadAssetAtPath<ScriptableObject>(Folder + "Settings/Resources.asset"));
+            }
+
+            if (chunk != null && chunk.GetValue(water.Surface) == null)
+            {
+                chunk.SetValue(water.Surface, AssetDatabase.LoadAssetAtPath<GameObject>(Folder + "Prefabs/Chunk.prefab"));
+            }
+
+            if (water.Surface.Material == null)
+            {
+                water.Surface.Material = AssetDatabase.LoadAssetAtPath<Material>(Folder + "Materials/Water.mat");
+            }
+#endif
         }
 
         private static IEnumerator WaitFrames(int count)
