@@ -134,6 +134,9 @@ namespace Cone.Grass.Tests
             LogAssert.Expect(LogType.Exception, "InvalidOperationException: source failed");
             Assert.That(waterLine.TryResolve(out float level, out _), Is.True);
             Assert.That(level, Is.EqualTo(1f));
+            // Logged once per source, not once per camera per frame.
+            Assert.That(waterLine.TryResolve(out level, out _), Is.True);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]

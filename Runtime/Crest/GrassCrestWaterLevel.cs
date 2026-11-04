@@ -81,11 +81,9 @@ namespace Cone.Grass.Crest
 
         private void Update()
         {
-            // The active renderer can appear, change or go after this component is enabled.
-            if (Target() != _attached)
-            {
-                Attach();
-            }
+            // The active renderer can appear, change or go after this component is enabled, and another bridge or a
+            // script can take the water line's source; Attach is a no-op while this bridge still drives it.
+            Attach();
         }
 
         private void OnValidate()

@@ -72,7 +72,7 @@ Density maps hold linear values in the red channel: black is no grass, white is 
 
 The renderer's **Water Line** keeps grass and flowers above a water level. A root on ground at or below the level never grows, and above it the population thins in over the **Shore Fade** band: the chance that a root grows is zero at the water and rises linearly to full at the top of the band. The band thins blades like the other density factors (Density Transition softens each one as it fades), so the shore reads as sparser grass rather than a cut line. Heads grow on their blades, so flowers follow the same line.
 
-The level is one world height per frame, either the setting's **Level** or a level source such as the [Crest bridge](integrations.md#crest-5-water-level). It applies to every camera that draws grass, Crest's planar reflection cameras included, so reflections and the view from under the water match the direct view.
+The level is one world height per frame, either the setting's **Level** or a level source such as the [Crest bridge](integrations.md#crest-5-water-level). It applies to every camera that draws grass, so the view from under the water matches the view from above. Grass draws for Game cameras (and the Scene view when enabled), not for Crest's planar reflection cameras, so a reflection shows no grass either way.
 
 ## Distance: fade and LOD
 

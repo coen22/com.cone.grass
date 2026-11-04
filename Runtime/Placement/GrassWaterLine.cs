@@ -51,6 +51,8 @@ namespace Cone.Grass
         /// <summary>Whether the water line applies: <see cref="Enabled"/> is on or a live <see cref="Source"/> is assigned.</summary>
         public bool IsActive => _enabled || HasSource;
 
+        [NonSerialized] private IGrassWaterLevelSource _failedSource;
+
         private bool HasSource => Source != null && !(Source is UnityEngine.Object unityObject && unityObject == null);
 
         /// <summary>
@@ -75,7 +77,13 @@ namespace Cone.Grass
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    // Once per source: this runs for every camera every frame.
+                    if (!ReferenceEquals(_failedSource, Source))
+                    {
+                        _failedSource = Source;
+                        Debug.LogException(exception);
+                    }
+
                     fromSource = false;
                 }
             }

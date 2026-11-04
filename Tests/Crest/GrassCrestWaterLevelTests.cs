@@ -101,17 +101,37 @@ namespace Cone.Grass.Tests
             var bridge = _bridge.GetComponent<GrassCrestWaterLevel>();
             var grass = _grass.GetComponent<InfiniteGrassRenderer>();
             bridge.Mode = GrassCrestWaterLevel.LevelMode.SurfaceHeight;
-            _bridge.transform.position = new Vector3(3f, 0f, 4f);
+            bridge.MinimumWaveLength = 0f;
+            var position = new Vector3(3f, 0f, 4f);
+            _bridge.transform.position = position;
+            // Waves, so the surface height differs from the sea level and a fallback to it can't pass.
+            _water.GetComponent<WaterRenderer>().WindSpeed = 30f;
+            var waves = new GameObject("Crest test waves");
+            waves.transform.SetParent(_water.transform, false);
+            waves.AddComponent<ShapeFFT>();
 
-            // Crest's collision queries return a frame or more late; with no wave inputs the surface is the sea level.
-            float level = float.NaN;
-            for (int frame = 0; frame < 120; frame++)
+            // An independent query at the same point: Crest's answers arrive a frame or more late.
+            var reference = new SampleCollisionHelper();
+            int matched = 0, offSeaLevel = 0;
+            for (int frame = 0; frame < 240; frame++)
             {
                 yield return null;
-                Assert.That(grass.WaterLine.TryResolve(out level, out _), Is.True, "A Crest level is available every frame.");
+                Assert.That(grass.WaterLine.TryResolve(out float level, out _), Is.True, "A Crest level is available every frame.");
+                if (!reference.SampleHeight(position, out float surface, 0f))
+                {
+                    continue;
+                }
+
+                Assert.That(level, Is.EqualTo(surface).Within(1e-3f), $"Frame {frame}: the bridge must report Crest's surface height.");
+                matched++;
+                if (Mathf.Abs(surface - 1.25f) > 0.01f)
+                {
+                    offSeaLevel++;
+                }
             }
 
-            Assert.That(level, Is.EqualTo(1.25f).Within(0.02f), "Flat water: the surface height is the sea level.");
+            Assert.That(matched, Is.GreaterThan(60), "Crest's height query must answer for most frames.");
+            Assert.That(offSeaLevel, Is.GreaterThan(0), "With waves the surface must leave the sea level at least once.");
         }
 
         [UnityTest]
