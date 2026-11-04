@@ -1,0 +1,26 @@
+{
+  "name": "Cone.Grass.Tests.Crest",
+  "rootNamespace": "Cone.Grass.Tests",
+  "references": [
+    "Cone.Grass",
+    "Cone.Grass.Crest",
+    "WaveHarmonic.Crest",
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner"
+  ],
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "overrideReferences": true,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.waveharmonic.crest",
+      "expression": "5.0.0",
+      "define": "CONE_GRASS_CREST"
+    }
+  ],
+  "autoReferenced": false
+}

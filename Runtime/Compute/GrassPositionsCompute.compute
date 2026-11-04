@@ -51,6 +51,15 @@ CBUFFER_START(GrassHeadParameters)
     int2 _GrassHeadCapacities;
 CBUFFER_END
 
+// Water line (InfiniteGrassRenderer.WaterLine): no roots at or below the level, thinning in over the shoreline band.
+// Zero enabled (the default of an unset buffer) leaves placement exactly as without it.
+CBUFFER_START(GrassWaterParameters)
+    float _GrassWaterLevel;
+    float _GrassWaterShoreFade;
+    int _GrassWaterEnabled;
+    float _GrassWaterPadding;
+CBUFFER_END
+
 SamplerState linearClampSampler;
 SamplerState pointClampSampler;
 
@@ -212,6 +221,19 @@ float GrassDensityCoverage(float probability, float randomValue)
     return saturate((probability + 0.5 * band - randomValue) / max(band, 1e-7));
 }
 
+// Mirrors GrassWaterLine.Coverage: zero at or below the water level (and for a non-finite height), then linear to one
+// at the top of the shoreline band.
+float GrassWaterLineCoverage(float heightWS)
+{
+    if (_GrassWaterEnabled == 0)
+        return 1.0;
+    float above = heightWS - _GrassWaterLevel;
+    if (!(above > 0.0))
+        return 0.0;
+    float band = _GrassWaterShoreFade;
+    return band > 0.0 ? saturate(above / band) : 1.0;
+}
+
 uint GrassSelectLod(float distanceToCamera, float randomValue)
 {
     float nearDistance = max(_LodDistances.x, 0.0);
@@ -290,6 +312,11 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out ui
             return false;
     }
 
+    // Before the frustum test: submerged roots cost no further work.
+    float waterCoverage = GrassWaterLineCoverage(heightWS);
+    if (waterCoverage <= 0.0)
+        return false;
+
     float3 positionWS = float3(positionXZ.x, heightWS, positionXZ.y);
     if (!GrassInFrustum(positionWS))
         return false;
@@ -303,7 +330,7 @@ bool GrassEvaluateCandidate(uint2 id, out float4 candidate, out uint lod, out ui
     float distanceDensity = pow(saturate((_DrawDistance - distanceToCamera) / fadeRange), max(_DensityFalloffExponent, 0.0));
     float population = _DensityShortensBlades != 0 ? 1.0 : authoredDensity;
     // Reject a non-finite product before saturate, which would turn infinity into one.
-    float rawProbability = population * surfaceValidity * (1.0 - exclusion) * distanceDensity;
+    float rawProbability = population * surfaceValidity * (1.0 - exclusion) * distanceDensity * waterCoverage;
     if (!isfinite(rawProbability))
         return false;
     float probability = saturate(rawProbability);

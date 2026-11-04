@@ -1,0 +1,19 @@
+{
+  "name": "Cone.Grass.Crest",
+  "rootNamespace": "Cone.Grass.Crest",
+  "references": [
+    "Cone.Grass",
+    "WaveHarmonic.Crest"
+  ],
+  "defineConstraints": [
+    "CONE_GRASS_CREST"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.waveharmonic.crest",
+      "expression": "5.0.0",
+      "define": "CONE_GRASS_CREST"
+    }
+  ],
+  "autoReferenced": true
+}
