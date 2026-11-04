@@ -34,11 +34,14 @@ namespace Cone.Grass.Tests
         [Test]
         public void BladeCutOffFollowsTheCrestSurface() => Assert.Ignore(NoCrest);
 #else
-        private GameObject _camera, _water, _grass, _bridge;
+        private GameObject _sun, _camera, _water, _grass, _bridge;
 
         [UnitySetUp]
         public IEnumerator SetUp()
         {
+            _sun = new GameObject("Crest test sun", typeof(Light));
+            _sun.GetComponent<Light>().type = LightType.Directional;
+            RenderSettings.sun = _sun.GetComponent<Light>();
             _camera = new GameObject("Crest test camera", typeof(Camera));
             _camera.tag = "MainCamera";
             _camera.transform.position = new Vector3(0f, 6f, -10f);
@@ -67,6 +70,7 @@ namespace Cone.Grass.Tests
             Object.Destroy(_grass);
             Object.Destroy(_water);
             Object.Destroy(_camera);
+            Object.Destroy(_sun);
             yield return null;
         }
 
@@ -79,7 +83,7 @@ namespace Cone.Grass.Tests
             Assert.That(WaterRenderer.Instance, Is.Not.Null, "The Crest Water Renderer must be the active instance.");
             Assert.That(bridge.AttachedRenderer, Is.SameAs(grass), "With no renderer set, the bridge drives the active one.");
             Assert.That(grass.WaterLine.Source, Is.SameAs(bridge));
-            yield return null;
+            yield return Frame();
 
             Assert.That(grass.WaterLine.TryResolve(out float level, out _), Is.True);
             Assert.That(level, Is.EqualTo(1.25f).Within(1e-4f));
@@ -115,7 +119,7 @@ namespace Cone.Grass.Tests
             int matched = 0, offSeaLevel = 0;
             for (int frame = 0; frame < 240; frame++)
             {
-                yield return null;
+                yield return Frame();
                 Assert.That(grass.WaterLine.TryResolve(out float level, out _), Is.True, "A Crest level is available every frame.");
                 if (!reference.SampleHeight(position, out float surface, 0f))
                 {
@@ -198,12 +202,19 @@ namespace Cone.Grass.Tests
 #endif
         }
 
-        private static IEnumerator WaitFrames(int count)
+        private IEnumerator WaitFrames(int count)
         {
             for (int frame = 0; frame < count; frame++)
             {
-                yield return null;
+                yield return Frame();
             }
+        }
+
+        // Crest moves its water and answers height queries for cameras that render; batch mode renders none by itself.
+        private IEnumerator Frame()
+        {
+            yield return null;
+            _camera.GetComponent<Camera>().Render();
         }
 
         /// <summary>The shipped placement kernel over captured ground rising 0.1 m per metre along X.</summary>

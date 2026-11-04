@@ -119,7 +119,8 @@ namespace Cone.Grass.Crest
                 return false;
             }
 
-            level = water.SeaLevel;
+            // The Water Renderer's height. Crest's own SeaLevel follows it only once a camera has rendered the water.
+            level = water.transform.position.y;
             if (_mode == LevelMode.SurfaceHeight)
             {
                 Vector3 position = _samplePoint != null ? _samplePoint.position : transform.position;
