@@ -5,6 +5,7 @@
     "Cone.Grass",
     "Cone.Grass.Crest",
     "WaveHarmonic.Crest",
+    "WaveHarmonic.Crest.Shared",
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner"
   ],

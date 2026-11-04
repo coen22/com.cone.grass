@@ -3,7 +3,8 @@
   "rootNamespace": "Cone.Grass.Crest",
   "references": [
     "Cone.Grass",
-    "WaveHarmonic.Crest"
+    "WaveHarmonic.Crest",
+    "WaveHarmonic.Crest.Shared"
   ],
   "defineConstraints": [
     "CONE_GRASS_CREST"
