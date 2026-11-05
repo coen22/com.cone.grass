@@ -46,12 +46,12 @@ namespace Cone.Grass
         /// </summary>
         public bool DrawBlades { get => _drawBlades; set => _drawBlades = value; }
         [Tooltip("After Opaque Copies keeps contact shadows and motion vectors. Before Opaque Copies puts the grass in the depth and " +
-            "opaque textures, so water refraction and Crest's underwater fog include it."), SerializeField]
+            "opaque textures, so water refraction seen from above includes it."), SerializeField]
         private GrassDrawOrder _drawOrder = GrassDrawOrder.AfterOpaqueCopies;
 
         /// <summary>
         /// When the grass draws relative to URP's depth and opaque texture copies. <see cref="GrassDrawOrder.BeforeOpaqueCopies"/>
-        /// lets water refraction and Crest's underwater fog include the grass, without contact shadows or grass motion vectors.
+        /// lets water refraction include the grass, without contact shadows or grass motion vectors. Crest's underwater fog covers the grass fully after the copies and only partly before them (#102).
         /// </summary>
         public GrassDrawOrder DrawOrder { get => _drawOrder; set => _drawOrder = value; }
         [SerializeField]
