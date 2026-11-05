@@ -92,12 +92,22 @@ namespace Cone.Grass.Tests
             _grass.Reflections.SpacingScale = 1f;
             _grass.Reflections.DrawDistanceScale = 1f;
             uint fullReflection = Render(_reflectionObject);
-            Assert.That(fullReflection, Is.GreaterThan(reflection), "The reflection density follows its spacing and distance scales.");
+            Assert.That((double)fullReflection, Is.EqualTo((double)game).Within(5).Percent,
+                "At scale 1 the reflection draws what the game view draws from the same pose.");
+
+            _grass.Reflections.SpacingScale = 2f;
+            uint spacingOnly = Render(_reflectionObject);
+            Assert.That((double)spacingOnly, Is.EqualTo(fullReflection / 4.0).Within(15).Percent, "Spacing x2 grows a quarter of the blades.");
+            _grass.Reflections.SpacingScale = 1f;
+            _grass.Reflections.DrawDistanceScale = 0.5f;
+            uint distanceOnly = Render(_reflectionObject);
+            Assert.That(distanceOnly, Is.LessThan(fullReflection), "Half the draw distance draws fewer blades.");
         }
 
         [Test]
         public void ReflectionsOffDrawNoGrass()
         {
+            Assert.That(Render(_reflectionObject), Is.GreaterThan(0u), "With Planar the reflection draws grass first.");
             _grass.Reflections.Cameras = GrassReflectionCameras.None;
             _reflectionObject.GetComponent<Camera>().Render();
             Assert.That(_feature.TryReadCounts(_reflectionObject.GetComponent<Camera>(), new uint[4]), Is.False,

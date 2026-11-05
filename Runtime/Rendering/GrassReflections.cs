@@ -29,9 +29,10 @@ namespace Cone.Grass
         AfterOpaqueCopies = 0,
 
         /// <summary>
-        /// Right after the opaques, before URP copies the depth and opaque textures, so the grass is in both: water seen
+        /// After the opaques and before URP's after-opaques depth and opaque copies, so the grass is in both: water seen
         /// from above refracts it and Crest's underwater effect fogs it. Contact shadows and grass motion vectors need
-        /// those textures before the grass and are skipped in this order.
+        /// those textures before the grass and are skipped in this order. The grass is left out of the depth texture when
+        /// URP writes it from a prepass (no depth priming) or copies it after the G-buffer (Deferred).
         /// </summary>
         BeforeOpaqueCopies = 1,
     }

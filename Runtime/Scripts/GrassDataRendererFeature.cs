@@ -120,7 +120,8 @@ namespace Cone.Grass
             }
 
             Camera camera = renderingData.cameraData.camera;
-            if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera))
+            if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera) ||
+                !blades && camera.cameraType == CameraType.Reflection)
             {
                 _grassPass?.ReleaseCamera(camera);
                 return;
@@ -130,7 +131,7 @@ namespace Cone.Grass
             // texture for the contact shadows and motion vectors to augment.
             bool full = camera.cameraType != CameraType.Reflection && owner.DrawOrder == GrassDrawOrder.AfterOpaqueCopies;
             _grassPass.renderPassEvent = owner.DrawOrder == GrassDrawOrder.BeforeOpaqueCopies
-                ? RenderPassEvent.AfterRenderingOpaques - 1
+                ? RenderPassEvent.AfterRenderingOpaques
                 : RenderPassEvent.BeforeRenderingTransparents;
             bool contacts = full && blades && GrassContactShadows.TryGetParameters(owner.ContactShadows, out _, out _, out _);
             bool motion = full && blades && _grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
@@ -375,6 +376,12 @@ namespace Cone.Grass
                 }
                 if (!blades)
                 {
+                    if (camera.cameraType == CameraType.Reflection)
+                    {
+                        ReleaseCamera(camera);
+                        return;
+                    }
+
                     RecordInteractionField(graph, camera, owner);
                     return;
                 }
@@ -430,6 +437,10 @@ namespace Cone.Grass
                 }
 
                 state.MotionSpacing = spacing;
+                if (!full)
+                {
+                    _motion.Release(camera);
+                }
                 Vector3 cameraPosition = camera.transform.position;
                 if (!IsFinite(cameraPosition))
                 {
@@ -548,8 +559,8 @@ namespace Cone.Grass
                     state.OwnerInteractionRevision != owner.InteractionRevision;
                 if (reflection)
                 {
-                    // The bend field is captured when the window moves, not every frame.
-                    recaptureInteraction = captureMappingChanged || !state.CacheValid;
+                    // Slope modifiers stay current with the other modifiers; the interactor bend is left out.
+                    recaptureInteraction = recaptureModifiers || !state.CacheValid;
                 }
 
                 if (recaptureHeight)
@@ -583,7 +594,7 @@ namespace Cone.Grass
                     }
 
                     BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default,
-                        captureVP, Color.clear, state.InteractionDraws);
+                        captureVP, Color.clear, reflection ? null : state.InteractionDraws);
                 }
 
                 state.CacheValid = true;

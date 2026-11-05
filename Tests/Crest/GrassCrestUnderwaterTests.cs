@@ -31,6 +31,7 @@ namespace Cone.Grass.Tests
         private Texture2D _coverage, _readback;
         private RenderTexture _target;
         private Material _cubeMaterial, _waterMaterial;
+        private Light _previousSun;
 
         [UnitySetUp]
         public IEnumerator SetUp()
@@ -45,6 +46,7 @@ namespace Cone.Grass.Tests
             _sun = new GameObject("Underwater test sun", typeof(Light));
             _sun.GetComponent<Light>().type = LightType.Directional;
             _sun.transform.rotation = Quaternion.Euler(50f, 30f, 0f);
+            _previousSun = RenderSettings.sun;
             RenderSettings.sun = _sun.GetComponent<Light>();
 
             _terrainData = new TerrainData { heightmapResolution = 33 };
@@ -121,6 +123,7 @@ namespace Cone.Grass.Tests
         [UnityTearDown]
         public IEnumerator TearDown()
         {
+            RenderSettings.sun = _previousSun;
             foreach (Object owned in new Object[] { _water, _camera, _cube, _grass, _terrainObject, _sun, _cubeMaterial, _waterMaterial, _readback, _coverage })
             {
                 if (owned)
@@ -148,7 +151,7 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer grass = _grass.GetComponent<InfiniteGrassRenderer>();
             Camera camera = _camera.GetComponent<Camera>();
             Vector2 grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
-            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.9f, 5.85f));
+            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.5f, 5.85f));
 
             foreach (GrassDrawOrder order in new[] { GrassDrawOrder.BeforeOpaqueCopies, GrassDrawOrder.AfterOpaqueCopies })
             {
@@ -158,6 +161,13 @@ namespace Cone.Grass.Tests
                 _water.transform.position = new Vector3(0f, -5f, 0f);
                 yield return Frames(20);
                 Color grassAir = Mean(grassPixel);
+                grass.enabled = false;
+                yield return Frames(10);
+                Color groundAir = Mean(grassPixel);
+                grass.enabled = true;
+                yield return Frames(10);
+                Assert.That(DeltaE(grassAir, groundAir), Is.GreaterThan(10.0),
+                    $"The sampled patch must show grass ({grassAir}), not the bare ground ({groundAir}).");
                 _cubeMaterial.SetColor("_BaseColor", grassAir.linear);
                 yield return Frames(10);
                 Color cubeAir = Mean(cubePixel);

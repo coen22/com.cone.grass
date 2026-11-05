@@ -119,10 +119,11 @@ namespace Cone.Grass
                     int bladeCapacity = Mathf.Max(3, owner.Capacity);
                     if (IsReflection)
                     {
-                        // Wider reflection spacing grows 1 / scale^2 of the blades: size the queues to match.
+                        // Wider reflection spacing grows 1 / scale^2 of the blades: size the middle and far queues to match,
+                        // with 1.5x headroom for a reflection frustum wider than the view; the near queue keeps its share.
                         float scale = owner.Reflections.EffectiveSpacingScale;
-                        float share = 1f / (scale * scale);
-                        for (int lod = 0; lod < 3; lod++)
+                        float share = Mathf.Min(1f, 1.5f / (scale * scale));
+                        for (int lod = 1; lod < 3; lod++)
                         {
                             LodCapacities[lod] = Mathf.Max(1, Mathf.CeilToInt(LodCapacities[lod] * share));
                         }
@@ -174,11 +175,25 @@ namespace Cone.Grass
                 public void EnsureInteractionResource(InfiniteGrassRenderer owner) =>
                     Allocate(ref Slope, CaptureResolution(owner), GraphicsFormat.R8G8B8A8_UNorm, "Grass Interaction");
 
-                // A reflection camera reaches half as far (by default), so half the capture resolution keeps its texel size.
+                // A reflection's capture window shrinks with its draw distance; scale the resolution by the extent ratio so
+                // the texel size stays the same, rounded up to a power of two.
                 private int CaptureResolution(InfiniteGrassRenderer owner)
                 {
                     int resolution = Mathf.Clamp(owner.CaptureResolution, 128, SystemInfo.maxTextureSize);
-                    return IsReflection ? Mathf.Max(128, resolution / 2) : resolution;
+                    if (!IsReflection)
+                    {
+                        return resolution;
+                    }
+
+                    float distance = Mathf.Max(0.01f, owner.DrawDistance);
+                    float padding = Mathf.Max(0.01f, owner.TextureUpdateThreshold);
+                    float ratio = (distance * owner.Reflections.EffectiveDrawDistanceScale + padding) / (distance + padding);
+                    if (float.IsNaN(ratio) || float.IsInfinity(ratio))
+                    {
+                        return resolution;
+                    }
+
+                    return Mathf.Clamp(Mathf.NextPowerOfTwo(Mathf.CeilToInt(resolution * Mathf.Clamp01(ratio))), 128, resolution);
                 }
 
                 private bool IsReflection => Camera != null && Camera.cameraType == CameraType.Reflection;
