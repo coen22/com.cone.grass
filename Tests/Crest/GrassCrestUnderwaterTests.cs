@@ -14,7 +14,7 @@ namespace Cone.Grass.Tests
 {
     /// <summary>
     /// Play Mode, windowed: grass under Crest water is fogged like any other submerged surface. A patch of blades and an
-    /// unlit cube given the blades' own colour in air stand side by side at the same distance; under water the blades'
+    /// lit cube given the blades' own colour in air stand side by side at the same distance; under water the blades'
     /// colour must shift about as far as the cube's (0.75 to 1.25 times) when the grass draws before URP's opaque copies,
     /// and much less when it draws after them.
     /// </summary>
@@ -31,7 +31,9 @@ namespace Cone.Grass.Tests
         private TerrainData _terrainData;
         private Texture2D _coverage, _readback;
         private RenderTexture _target;
+        private const int AverageFrames = 10;
         private Material _cubeMaterial, _waterMaterial;
+        private Color _averageA, _averageB;
         private Light _previousSun;
 
         [UnitySetUp]
@@ -73,12 +75,16 @@ namespace Cone.Grass.Tests
             _grass.AddComponent<GrassPlacementArea>().ConfigureTexture(_terrainObject.GetComponent<Terrain>(), _coverage);
             _grass.SetActive(true);
 
-            // An unlit cube to the right of the grass patch, at the same distance from the camera.
+            // A lit cube to the right of the grass patch, at the same distance from the camera.
             _cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
             Object.Destroy(_cube.GetComponent<Collider>());
             _cube.transform.position = new Vector3(2.4f, 0.6f, 6f);
             _cube.transform.localScale = new Vector3(1.4f, 1.8f, 0.2f);
-            _cubeMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+            // Lit, like the blades: under water both then get the same lighting changes (Crest's light absorption and
+            // caustics), so the comparison isolates the fog.
+            _cubeMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            _cubeMaterial.SetFloat("_Smoothness", 0f);
+            _cubeMaterial.SetFloat("_Metallic", 0f);
             _cube.GetComponent<MeshRenderer>().sharedMaterial = _cubeMaterial;
 
             _target = new RenderTexture(Size, Size, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
@@ -114,6 +120,8 @@ namespace Cone.Grass.Tests
             water.Underwater.CopyWaterMaterialParametersEachFrame = true;
             water.Underwater.Enabled = true;
             _water.SetActive(true);
+            // Frozen water time: waves and caustics stand still, so readings repeat run to run.
+            water.TimeProviders.Push(new FrozenTime());
             yield return Frames(30);
 #else
             Assert.Ignore("Needs the Editor to load Crest's materials.");
@@ -158,10 +166,12 @@ namespace Cone.Grass.Tests
             {
                 grass.DrawOrder = order;
 
-                // In air: give the unlit cube the blades' mean colour.
+                // In air: give the lit cube the blades' mean colour. Every reading is averaged over AverageFrames frames
+                // (the blades sway), and Crest's time is frozen (caustics and waves stand still).
                 _water.transform.position = new Vector3(0f, -5f, 0f);
                 yield return Frames(20);
-                Color grassAir = Mean(grassPixel);
+                yield return Average(grassPixel, cubePixel);
+                Color grassAir = _averageA;
                 grass.enabled = false;
                 yield return Frames(10);
                 Color groundAir = Mean(grassPixel);
@@ -177,7 +187,8 @@ namespace Cone.Grass.Tests
                 {
                     _cubeMaterial.SetColor("_BaseColor", cubeBase);
                     yield return Frames(10);
-                    cubeAir = Mean(cubePixel);
+                    yield return Average(grassPixel, cubePixel);
+                    cubeAir = _averageB;
                     if (DeltaE(grassAir, cubeAir) <= 1.0)
                     {
                         break;
@@ -196,8 +207,9 @@ namespace Cone.Grass.Tests
                 // Under water: both behind the same water column.
                 _water.transform.position = new Vector3(0f, 3f, 0f);
                 yield return Frames(120);
-                Color grassWet = Mean(grassPixel);
-                Color cubeWet = Mean(cubePixel);
+                yield return Average(grassPixel, cubePixel);
+                Color grassWet = _averageA;
+                Color cubeWet = _averageB;
                 Assert.That(DeltaE(cubeAir, cubeWet), Is.GreaterThan(10.0),
                     $"Crest's underwater fog must visibly change the cube ({cubeAir} in air, {cubeWet} under water) for the comparison to mean anything.");
                 // Blades stand at many depths along the view ray, so the patch and the cube never sit under exactly
@@ -217,6 +229,21 @@ namespace Cone.Grass.Tests
                     Assert.That(ratio, Is.LessThan(0.75), $"Drawn after the copies, Crest's effect misses the grass: the test must see it (grass wet {grassWet}, cube wet {cubeWet}).");
                 }
             }
+        }
+
+        // The mean of two pixels' block colours over AverageFrames consecutive frames, into _averageA and _averageB.
+        private IEnumerator Average(Vector2 a, Vector2 b)
+        {
+            Color sumA = Color.clear, sumB = Color.clear;
+            for (int i = 0; i < AverageFrames; i++)
+            {
+                yield return null;
+                sumA += Mean(a);
+                sumB += Mean(b);
+            }
+
+            _averageA = sumA / AverageFrames;
+            _averageB = sumB / AverageFrames;
         }
 
         private static IEnumerator Frames(int count)
@@ -272,6 +299,15 @@ namespace Cone.Grass.Tests
             double F(double t) => t > 0.008856 ? System.Math.Pow(t, 1.0 / 3.0) : 7.787 * t + 16.0 / 116.0;
             double fx = F(x / 0.95047), fy = F(y), fz = F(z / 1.08883);
             return new Vector3((float)(116 * fy - 16), (float)(500 * (fx - fy)), (float)(200 * (fy - fz)));
+        }
+#endif
+
+#if CONE_GRASS_CREST
+        private sealed class FrozenTime : WaveHarmonic.Crest.ITimeProvider
+        {
+            public float Time => 10f;
+
+            public float Delta => 1f / 60f;
         }
 #endif
     }
