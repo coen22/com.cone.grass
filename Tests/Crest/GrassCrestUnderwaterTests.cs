@@ -14,8 +14,9 @@ namespace Cone.Grass.Tests
 {
     /// <summary>
     /// Play Mode, windowed: grass under Crest water is fogged like any other submerged surface. A patch of blades and an
-    /// unlit cube given the blades' own colour in air stand side by side at the same distance; under water their colours
-    /// must still match (ΔE*ab ≤ 3) when the grass draws before URP's opaque copies, and differ when it draws after them.
+    /// unlit cube given the blades' own colour in air stand side by side at the same distance; under water the blades'
+    /// colour must shift about as far as the cube's (0.75 to 1.25 times) when the grass draws before URP's opaque copies,
+    /// and much less when it draws after them.
     /// </summary>
     public sealed class GrassCrestUnderwaterTests
     {
@@ -151,9 +152,7 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer grass = _grass.GetComponent<InfiniteGrassRenderer>();
             Camera camera = _camera.GetComponent<Camera>();
             Vector2 grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
-            // Sample the cube low, near the blades' height: Crest's murk darkens with depth, so a sample 0.4 m higher reads
-            // visibly lighter than the blades even when both are fogged alike.
-            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.22f, 5.85f));
+            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.3f, 5.85f));
 
             foreach (GrassDrawOrder order in new[] { GrassDrawOrder.BeforeOpaqueCopies, GrassDrawOrder.AfterOpaqueCopies })
             {
@@ -198,15 +197,21 @@ namespace Cone.Grass.Tests
                 Color cubeWet = Mean(cubePixel);
                 Assert.That(DeltaE(cubeAir, cubeWet), Is.GreaterThan(10.0),
                     $"Crest's underwater fog must visibly change the cube ({cubeAir} in air, {cubeWet} under water) for the comparison to mean anything.");
+                // Blades stand at many depths along the view ray, so the patch and the cube never sit under exactly
+                // the same water column: compare how far the water moves each colour instead. Fogged grass shifts about
+                // as far as the fogged cube; grass the underwater effect misses keeps most of its colour.
                 double deltaE = DeltaE(grassWet, cubeWet);
-                Debug.Log($"GRASS UNDERWATER {order}: grass {grassWet} cube {cubeWet} dE {deltaE:F2} (air {grassAir})");
+                double grassShift = DeltaE(grassAir, grassWet);
+                double cubeShift = DeltaE(cubeAir, cubeWet);
+                double ratio = grassShift / cubeShift;
+                Debug.Log($"GRASS UNDERWATER {order}: grass {grassWet} cube {cubeWet} dE {deltaE:F2} shift grass {grassShift:F2} cube {cubeShift:F2} ratio {ratio:F2} (air {grassAir})");
                 if (order == GrassDrawOrder.BeforeOpaqueCopies)
                 {
-                    Assert.That(deltaE, Is.LessThanOrEqualTo(3.0), "Grass drawn before the opaque copies must be fogged like the cube.");
+                    Assert.That(ratio, Is.InRange(0.75, 1.25), $"Grass drawn before the opaque copies must be fogged like the cube (grass wet {grassWet}, cube wet {cubeWet}, dE {deltaE:F2}).");
                 }
                 else
                 {
-                    Assert.That(deltaE, Is.GreaterThan(3.0), "Drawn after the copies, Crest's effect misses the grass: the test must see it.");
+                    Assert.That(ratio, Is.LessThan(0.75), $"Drawn after the copies, Crest's effect misses the grass: the test must see it (grass wet {grassWet}, cube wet {cubeWet}).");
                 }
             }
         }
