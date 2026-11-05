@@ -11,7 +11,7 @@ This page covers moving to 2.0.0 from 1.x and from the 2.0 previews. Back up the
 Change the package's git URL in Package Manager (or in `Packages/manifest.json`) to:
 
 ```
-https://github.com/coen22/com.cone.grass.git#v2.0.0
+https://github.com/coen22/com.cone.grass.git#v2.1.0
 ```
 
 ## Namespace

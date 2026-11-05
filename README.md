@@ -28,7 +28,7 @@ GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 In **Window > Package Manager**, click **+ > Install package from git URL...** and enter:
 
 ```
-https://github.com/coen22/com.cone.grass.git#v2.0.0
+https://github.com/coen22/com.cone.grass.git#v2.1.0
 ```
 
 ## Quick start
