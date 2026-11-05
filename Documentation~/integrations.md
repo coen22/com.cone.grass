@@ -130,6 +130,8 @@ Add the component anywhere in the scene, near the water you care about. It attac
 | Offset | 0 m | Added to the Crest height. A few centimetres keep blades out of wave troughs and the meniscus. |
 | Minimum Wave Length | 1 m | Smallest wave length the surface query resolves. Larger values ignore ripples. |
 
+For the view from under the water, set the renderer's **Draw Order** to **Before Opaque Copies**: Crest's underwater effect fogs what is in URP's depth and opaque textures, and grass drawn after them would stay unfogged. Grass also draws in Crest's planar reflections (the renderer's **Reflections** settings, Planar by default), at a quarter of the density and half the draw distance.
+
 The water line is one height per frame, not a per-blade surface lookup: on a rough sea, add the wave amplitude to **Offset** or widen **Shore Fade**. The component queries Crest once per frame however many cameras render.
 
 ## Reading the interaction field

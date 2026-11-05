@@ -6,6 +6,19 @@ All notable changes to this package are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Grass in planar reflections.** Reflection cameras such as Crest's water reflections draw the grass through a
+  cheaper path: `InfiniteGrassRenderer.Reflections` sets which reflection cameras (Planar by default; reflection-probe
+  captures are left out), a spacing multiplier (2, a quarter of the blades) and a draw distance multiplier (0.5).
+  Reflections skip the per-frame interaction capture, contact shadows, motion vectors and diagnostics (#98).
+- **Draw Order.** `InfiniteGrassRenderer.DrawOrder = BeforeOpaqueCopies` draws the grass before URP copies the depth
+  and opaque textures, so water refraction and Crest's underwater effect include it. Contact shadows and grass motion
+  vectors are skipped in that order (#98).
+
+### Changed
+- Planar reflection cameras (`CameraType.Reflection`) now draw grass by default; set Reflections > Cameras to None
+  for the 2.1.0 behaviour.
+
+### Added
 - **Water line.** `InfiniteGrassRenderer.WaterLine` keeps grass and flowers above a world-space water level: no root
   grows at or below it, and density thins in over a **Shore Fade** band above it (0.5 m by default), so the grass
   doesn't stop in a hard line. Off by default; placement is unchanged until it is enabled or given a level source

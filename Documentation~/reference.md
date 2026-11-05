@@ -24,6 +24,10 @@ Every inspector setting, with its default and what it does. Names are as the ins
 | Placement Mode | Authored Areas | **Authored Areas**: grass grows only inside Placement Areas. **Legacy Surface Layer**: grass grows on every surface on the feature's Height Map Layer. |
 | Render In Scene View | on | Also draws in the Scene view. |
 | Draw Blades | on | Off draws no grass but keeps the interaction capture running, so effects that read the [interaction field](interaction.md#shared-interaction-field) still see contacts. Needs no material or compute support. |
+| Draw Order | After Opaque Copies | **After Opaque Copies**: the grass draws just before transparents, after URP copies the depth and opaque textures; contact shadows and motion vectors work. **Before Opaque Copies**: the grass draws right after the opaques, so it is in the depth and opaque textures: water refraction shows submerged grass and Crest's underwater effect fogs it. Contact shadows and grass motion vectors are skipped in this order, and it needs URP's depth texture to be copied after opaques (no depth prepass). |
+| Reflections > Cameras | Planar | Which reflection cameras draw grass. **Planar** includes planar reflections such as Crest's water reflections and leaves out reflection-probe captures (square 90° cube faces). **None** or **All**. |
+| Reflections > Spacing Scale | 2 | Spacing multiplier in reflections; 2 draws a quarter of the blades. 1 to 8. |
+| Reflections > Draw Distance Scale | 0.5 | Draw distance multiplier in reflections. 0.05 to 1. Reflections also skip the per-frame interaction capture, contact shadows, motion vectors and diagnostics. |
 
 ### Population
 

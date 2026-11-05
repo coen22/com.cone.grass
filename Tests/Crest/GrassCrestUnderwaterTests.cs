@@ -36,8 +36,8 @@ namespace Cone.Grass.Tests
         public IEnumerator SetUp()
         {
 #if UNITY_EDITOR
-            if (!(GraphicsSettings.currentRenderPipeline is UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset) ||
-                Application.isBatchMode)
+            if (GraphicsSettings.currentRenderPipeline == null ||
+                GraphicsSettings.currentRenderPipeline.GetType().Name != "UniversalRenderPipelineAsset" || Application.isBatchMode)
             {
                 Assert.Ignore("Needs URP and a windowed editor: Crest's underwater effect renders only for cameras that render.");
             }
