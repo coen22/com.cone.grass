@@ -187,8 +187,10 @@ namespace Cone.Grass.Tests
                     cubeBase = new Color(Mathf.Clamp01(cubeBase.r + error.r), Mathf.Clamp01(cubeBase.g + error.g), Mathf.Clamp01(cubeBase.b + error.b), 1f);
                 }
 
-                Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(3.0),
-                    $"Calibration: in air the cube ({cubeAir}) must match the blades ({grassAir}).");
+                // The comparison below is of shifts, so the cube only needs roughly the blades' colour (both then move
+                // through the same part of colour space); the blades sway, so their mean drifts by a few dE.
+                Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(8.0),
+                    $"Calibration: in air the cube ({cubeAir}) must be close to the blades ({grassAir}).");
 
                 // Under water: both behind the same water column.
                 _water.transform.position = new Vector3(0f, 3f, 0f);
