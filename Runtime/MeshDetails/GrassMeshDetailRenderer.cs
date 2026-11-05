@@ -20,10 +20,10 @@ namespace Cone.Grass
         internal const int InstanceBytes = 48 + 48 + 16;
         private const int HeaderBytes = 64;
         private static readonly List<GrassMeshDetailRenderer> s_renderers = new List<GrassMeshDetailRenderer>();
-        private static readonly int s_objectToWorld = Shader.PropertyToID("unity_ObjectToWorld");
-        private static readonly int s_worldToObject = Shader.PropertyToID("unity_WorldToObject");
-        private static readonly int s_baseColor = Shader.PropertyToID("_BaseColor");
-        private static readonly int s_color = Shader.PropertyToID("_Color");
+        private static readonly int s_objectToWorld = UnityEngine.Shader.PropertyToID("unity_ObjectToWorld");
+        private static readonly int s_worldToObject = UnityEngine.Shader.PropertyToID("unity_WorldToObject");
+        private static readonly int s_baseColor = UnityEngine.Shader.PropertyToID("_BaseColor");
+        private static readonly int s_color = UnityEngine.Shader.PropertyToID("_Color");
 
         private readonly ComputeShader _shader;
         private readonly BatchRendererGroup _brg;
@@ -572,6 +572,7 @@ namespace Cone.Grass
             commands->proceduralDrawCommandCount = 0;
             commands->proceduralIndirectDrawCommands = null;
             commands->proceduralIndirectDrawCommandCount = 0;
+            commands->drawCommandPickingEntityIds = null;
 
             int written = 0;
             uint visibleBytes = (uint)state.VisibleBytes;

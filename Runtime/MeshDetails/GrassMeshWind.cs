@@ -146,7 +146,9 @@ namespace Cone.Grass
         private static readonly int s_direction = Shader.PropertyToID("_ConeWindDirection");
         private static readonly int s_parameters = Shader.PropertyToID("_ConeWindParams");
         private static readonly int s_offset = Shader.PropertyToID("_ConeWindOffset");
+#if CONE_GRASS_RENDER_FEATURES
         private static bool? s_available;
+#endif
 
         /// <summary>
         /// Whether the shared wind is installed: com.cone.render-features is in the project (the

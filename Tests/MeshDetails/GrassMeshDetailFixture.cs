@@ -244,7 +244,7 @@ namespace Cone.Grass.Tests
             Camera.fieldOfView = fieldOfView;
         }
 
-        protected CameraReadback Render(int frames = 1)
+        private protected CameraReadback Render(int frames = 1)
         {
             for (int i = 0; i < frames; i++)
             {
@@ -259,7 +259,7 @@ namespace Cone.Grass.Tests
         }
 
         /// <summary>Visible entries of one list: (instance slot, packed fade or 127 for solid).</summary>
-        protected static IEnumerable<(int slot, int fade)> Entries(CameraReadback readback, int list, bool fadeList)
+        private protected static IEnumerable<(int slot, int fade)> Entries(CameraReadback readback, int list, bool fadeList)
         {
             uint count = System.Math.Min(readback.ListCounts[list], readback.ListCapacities[list]);
             for (uint i = 0; i < count; i++)
@@ -272,7 +272,7 @@ namespace Cone.Grass.Tests
         }
 
         /// <summary>The object-to-world matrix of an instance slot, as the compute shader wrote it.</summary>
-        protected static Matrix4x4 InstanceMatrix(CameraReadback readback, int slot)
+        private protected static Matrix4x4 InstanceMatrix(CameraReadback readback, int slot)
         {
             int b = 64 / 4 + slot * 12;
             float[] f = readback.InstanceData;
@@ -284,7 +284,7 @@ namespace Cone.Grass.Tests
             return m;
         }
 
-        protected static uint CameraCount(CameraReadback readback, int kind)
+        private protected static uint CameraCount(CameraReadback readback, int kind)
         {
             uint total = 0;
             int lists = readback.KindLodCount[kind] * 2;
@@ -296,7 +296,7 @@ namespace Cone.Grass.Tests
             return total;
         }
 
-        protected static uint ShadowCount(CameraReadback readback, int kind)
+        private protected static uint ShadowCount(CameraReadback readback, int kind)
         {
             uint total = 0;
             int lods = readback.KindLodCount[kind];

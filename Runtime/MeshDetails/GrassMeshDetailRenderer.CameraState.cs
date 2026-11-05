@@ -42,7 +42,6 @@ namespace Cone.Grass
             public uint[] LastCounts;
             public uint[] LastCounters;
             public uint LastCountsLayout;
-            private uint _readbackLayout;
             private bool _grow;
             private int[] _needed = Array.Empty<int>();
             private int _neededInstances;
@@ -187,7 +186,6 @@ namespace Cone.Grass
                 }
 
                 LayoutRevision = layout.Revision;
-                _readbackLayout = 0;
                 _grow = false;
                 Valid = layout.Draws.Count > 0;
             }

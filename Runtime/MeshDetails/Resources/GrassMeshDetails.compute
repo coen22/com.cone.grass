@@ -139,9 +139,9 @@ float3 TerrainNormal(float2 uv)
     float hr = TerrainHeight01(saturate(uv + float2(texel.x, 0)));
     float hd = TerrainHeight01(saturate(uv - float2(0, texel.y)));
     float hu = TerrainHeight01(saturate(uv + float2(0, texel.y)));
-    float2 step = 2.0 * texel * _TerrainSize.xz;
-    float dx = (hr - hl) * _TerrainSize.y / step.x;
-    float dz = (hu - hd) * _TerrainSize.y / step.y;
+    float2 span = 2.0 * texel * _TerrainSize.xz;
+    float dx = (hr - hl) * _TerrainSize.y / span.x;
+    float dz = (hu - hd) * _TerrainSize.y / span.y;
     return normalize(float3(-dx, 1.0, -dz));
 }
 
