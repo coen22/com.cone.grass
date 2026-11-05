@@ -75,7 +75,7 @@ namespace Cone.Grass.Tests
             // An unlit cube to the right of the grass patch, at the same distance from the camera.
             _cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
             Object.Destroy(_cube.GetComponent<Collider>());
-            _cube.transform.position = new Vector3(2.4f, 0.9f, 6f);
+            _cube.transform.position = new Vector3(2.4f, 0.6f, 6f);
             _cube.transform.localScale = new Vector3(1.4f, 1.8f, 0.2f);
             _cubeMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
             _cube.GetComponent<MeshRenderer>().sharedMaterial = _cubeMaterial;
@@ -151,7 +151,9 @@ namespace Cone.Grass.Tests
             InfiniteGrassRenderer grass = _grass.GetComponent<InfiniteGrassRenderer>();
             Camera camera = _camera.GetComponent<Camera>();
             Vector2 grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
-            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.5f, 5.85f));
+            // Sample the cube low, near the blades' height: Crest's murk darkens with depth, so a sample 0.4 m higher reads
+            // visibly lighter than the blades even when both are fogged alike.
+            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.22f, 5.85f));
 
             foreach (GrassDrawOrder order in new[] { GrassDrawOrder.BeforeOpaqueCopies, GrassDrawOrder.AfterOpaqueCopies })
             {
