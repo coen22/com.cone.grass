@@ -4,7 +4,7 @@ GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 
 ## Evidence
 
-Before | After and Disabled | Enabled pairs from the Meadow sample, the plant-kinds meadow and a Crest 5 lake; main `9ba6124` (11-05). Films: [water line along the shore](https://github.com/coen22/com.cone.grass/blob/pr-media/97/grass-waterline-shoreline-60hz.mp4) (#97), [30 s meadow walk, before | after plant kinds](https://github.com/coen22/com.cone.grass/blob/pr-media/88/59f5919/walk-30s-before-after.mp4) (#89).
+Stills from the Meadow sample, the plant-kinds meadow, a stone slab and a Crest 5 lake, labels burnt in; main `9ba6124` (11-05). Films: [water line along the shore](https://github.com/coen22/com.cone.grass/blob/pr-media/97/grass-waterline-shoreline-60hz.mp4) (#97), [30 s meadow walk, before | after plant kinds](https://github.com/coen22/com.cone.grass/blob/pr-media/88/59f5919/walk-30s-before-after.mp4) (#89).
 
 | | | |
 |---|---|---|
