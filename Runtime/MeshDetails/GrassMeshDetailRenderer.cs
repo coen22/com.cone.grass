@@ -692,14 +692,13 @@ namespace Cone.Grass
                     continue;
                 }
 
-                int local = list - entry.ListBase;
+                // Instance draws: an instance cross-fading between two LODs is drawn (and counted) in both.
                 if (_layout.ListShadow[list])
                 {
                     shadowInstances[entry.Index] += (int)counts[list];
                 }
-                else if (local % 2 == 0 || local / 2 == 0)
+                else
                 {
-                    // Fade lists double-count instances that are in two LODs; count the solid lists and the first LOD's fade list.
                     cameraInstances[entry.Index] += (int)counts[list];
                 }
             }

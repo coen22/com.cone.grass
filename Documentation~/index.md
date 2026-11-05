@@ -14,6 +14,7 @@ You decide *where* grass grows with Placement Areas and painted density maps. Yo
 - Collider-driven bending with timed recovery, published as a shared field other effects can read.
 - Optional screen-space contact shadows and optional per-blade motion vectors.
 - A water line with a shoreline fade band, optionally driven by Crest 5 water.
+- Mesh details: terrain detail meshes (ferns, heather, bushes) scattered and culled on the GPU from the terrain's detail layers, drawn with any URP material.
 - Optional MicroVerse mask bridge and a terrain ground-albedo baker.
 
 ## Requirements
@@ -41,11 +42,12 @@ Grass draws for Game view cameras and, when **Render In Scene View** is on, for 
 3. [Reference](reference.md): every component, asset and material setting with its default.
 4. [Plant kinds and flowers](plant-kinds.md): mixing grasses, herbs and flowers.
 5. [Interaction](interaction.md): bending grass with colliders.
-6. [Performance](performance.md): budgets and what each setting costs.
-7. [Troubleshooting](troubleshooting.md): common problems and their fixes.
-8. [Integrations](integrations.md): MicroVerse, Crest 5 water, the terrain albedo baker and the shared interaction field.
-9. [Upgrading](upgrading.md): moving from 1.x or a 2.0 preview.
-10. [Changelog](../CHANGELOG.md): what changed in each release.
+6. [Mesh details](mesh-details.md): terrain detail meshes as GPU mesh kinds.
+7. [Performance](performance.md): budgets and what each setting costs.
+8. [Troubleshooting](troubleshooting.md): common problems and their fixes.
+9. [Integrations](integrations.md): MicroVerse, Crest 5 water, the terrain albedo baker and the shared interaction field.
+10. [Upgrading](upgrading.md): moving from 1.x or a 2.0 preview.
+11. [Changelog](../CHANGELOG.md): what changed in each release.
 
 ## Known limits
 

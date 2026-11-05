@@ -139,8 +139,9 @@ namespace Cone.Grass
         public void Refresh() => MarkChanged();
 
         /// <summary>
-        /// Reads the most recent per-kind counts the GPU reported for <paramref name="camera"/>: instances drawn by the camera
-        /// (all LODs) and in the shadow cascades. They arrive a few frames late. Returns false before the first report.
+        /// Reads the most recent per-kind counts the GPU reported for <paramref name="camera"/>: instance draws by the camera
+        /// (an instance cross-fading between two LODs counts in both) and in the shadow cascades (once per cascade). They
+        /// arrive a few frames late. Returns false before the first report.
         /// </summary>
         public bool TryGetCounts(Camera camera, out int[] cameraInstances, out int[] shadowInstances)
         {

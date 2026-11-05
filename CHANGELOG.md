@@ -12,6 +12,14 @@ All notable changes to this package are documented here. The format follows
   (`IGrassWaterLevelSource`).
 - **Crest 5 water level.** `Cone.Grass.Crest.GrassCrestWaterLevel` drives the water line from Crest's sea level or
   its queried surface height. The `Cone.Grass.Crest` assembly compiles only when `com.waveharmonic.crest` is installed.
+- **Mesh details (mesh kinds).** `GrassMeshDetails` draws terrain detail meshes (ferns, heather, bushes) from the
+  terrains' own detail density layers: GPU scatter with Unity's density rules, frustum and Hi-Z occlusion culling, per-cascade
+  shadow casters, up to four mesh LODs with a fixed-dither cross-fade (no TAA), per-instance size, rotation, ground
+  alignment and Healthy/Dry colour, wind (com.cone.render-features' `ConeWind` when installed, else its own) and the
+  grass water line. Instances are drawn through a BatchRendererGroup, so URP Lit, Shader Graph and Cone/Foliage
+  materials render in every URP pass. Needs the new `Grass Mesh Detail Renderer Feature`; **Tools > Cone > Grass >
+  Convert Terrain Details to Mesh Kinds** builds the kinds and turns Unity's own detail drawing off. New assemblies
+  `Cone.Grass.MeshDetails` and `Cone.Grass.MeshDetails.Editor`.
 
 ## [2.0.0] - 2026-11-01
 
