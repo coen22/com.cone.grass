@@ -1,8 +1,8 @@
 {
   "name": "com.cone.grass",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "displayName": "Infinite Grass",
-  "description": "GPU procedural grass and meadow flowers for URP terrain. Authored placement areas and painted density, plant kinds with flower heads, geometric LOD, terrain colour matching, collider-driven bending with recovery, and optional contact shadows and motion vectors. Rendered through RenderGraph with compute-generated, indirect draws.",
+  "description": "Moved to com.cone.render-features (1.3.0 and later); this repository is archived. Never install both. GPU procedural grass and meadow flowers for URP terrain. Authored placement areas and painted density, plant kinds with flower heads, geometric LOD, terrain colour matching, collider-driven bending with recovery, and optional contact shadows and motion vectors. Rendered through RenderGraph with compute-generated, indirect draws.",
   "unity": "6000.6",
   "author": {
     "name": "coen22",
@@ -21,9 +21,9 @@
     "rendergraph",
     "interaction"
   ],
-  "documentationUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.0/Documentation~/index.md",
-  "changelogUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.0/CHANGELOG.md",
-  "licensesUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.0/LICENSE.md",
+  "documentationUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.1/Documentation~/index.md",
+  "changelogUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.1/CHANGELOG.md",
+  "licensesUrl": "https://github.com/coen22/com.cone.grass/blob/v2.2.1/LICENSE.md",
   "dependencies": {
     "com.unity.render-pipelines.universal": "17.6.0",
     "com.unity.modules.imgui": "1.0.0",

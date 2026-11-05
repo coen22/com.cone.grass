@@ -5,6 +5,11 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-05
+
+### Changed
+- README and package description: Infinite Grass moved to `com.cone.render-features` (1.3.0 and later) as its Grass feature; this repository is archived. Never install both. No code change.
+
 ## [2.2.0] - 2026-11-05
 
 ### Added
