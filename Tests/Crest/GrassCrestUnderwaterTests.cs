@@ -187,9 +187,10 @@ namespace Cone.Grass.Tests
                     cubeBase = new Color(Mathf.Clamp01(cubeBase.r + error.r), Mathf.Clamp01(cubeBase.g + error.g), Mathf.Clamp01(cubeBase.b + error.b), 1f);
                 }
 
-                // The comparison below is of shifts, so the cube only needs roughly the blades' colour (both then move
-                // through the same part of colour space); the blades sway, so their mean drifts by a few dE.
-                Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(8.0),
+                // The comparison below is of shifts, so the cube only needs to be near the blades' colour (both then move
+                // through the same part of colour space); the blades sway, so their mean drifts by a few dE (3.85 seen).
+                // 5 dE of start difference can move the shift ratio by about 0.16 at most, well inside its 0.75-1.25 band.
+                Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(5.0),
                     $"Calibration: in air the cube ({cubeAir}) must be close to the blades ({grassAir}).");
 
                 // Under water: both behind the same water column.
