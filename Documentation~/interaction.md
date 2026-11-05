@@ -2,6 +2,9 @@
 
 A **Grass Collider Interactor** makes a character's collider bend the grass it walks through. The bent grass recovers smoothly over a set time after the character leaves. The same bend drives the blade colour pass, contact shadows and motion vectors, so they always agree.
 
+![interaction-bending-trail-recovered](images/interaction-bending-trail-recovered.jpg)
+*Trail | Recovered, Meadow sample · 2.0.0 · 11-01*
+
 ## Set up
 
 1. Select the character and add **Add Component > Cone > Grass > Collider Interactor**.
