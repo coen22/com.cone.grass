@@ -168,9 +168,24 @@ namespace Cone.Grass.Tests
                 yield return Frames(10);
                 Assert.That(DeltaE(grassAir, groundAir), Is.GreaterThan(10.0),
                     $"The sampled patch must show grass ({grassAir}), not the bare ground ({groundAir}).");
-                _cubeMaterial.SetColor("_BaseColor", grassAir.linear);
-                yield return Frames(10);
-                Color cubeAir = Mean(cubePixel);
+                // The camera's colour path (tonemapping, sky fog) need not be the identity, so correct the cube's
+                // colour against what it actually renders as, a few times, until it matches the blades.
+                Color cubeBase = grassAir.linear;
+                Color cubeAir = Color.clear;
+                for (int pass = 0; pass < 4; pass++)
+                {
+                    _cubeMaterial.SetColor("_BaseColor", cubeBase);
+                    yield return Frames(10);
+                    cubeAir = Mean(cubePixel);
+                    if (DeltaE(grassAir, cubeAir) <= 1.0)
+                    {
+                        break;
+                    }
+
+                    Color error = grassAir.linear - cubeAir.linear;
+                    cubeBase = new Color(Mathf.Clamp01(cubeBase.r + error.r), Mathf.Clamp01(cubeBase.g + error.g), Mathf.Clamp01(cubeBase.b + error.b), 1f);
+                }
+
                 Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(3.0),
                     $"Calibration: in air the cube ({cubeAir}) must match the blades ({grassAir}).");
 
