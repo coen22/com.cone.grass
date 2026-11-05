@@ -5,6 +5,8 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-05
+
 ### Added
 - **Water line.** `InfiniteGrassRenderer.WaterLine` keeps grass and flowers above a world-space water level: no root
   grows at or below it, and density thins in over a **Shore Fade** band above it (0.5 m by default), so the grass
