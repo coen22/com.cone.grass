@@ -5,7 +5,7 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
-## [2.1.0] - 2026-11-05
+## [2.2.0] - 2026-11-05
 
 ### Added
 - **Grass in planar reflections.** Reflection cameras such as Crest's water reflections draw the grass through a
@@ -13,18 +13,27 @@ All notable changes to this package are documented here. The format follows
   captures are left out), a spacing multiplier (2, a quarter of the blades) and a draw distance multiplier (0.5).
   Reflections capture no interactor bend and skip contact shadows, motion vectors and diagnostics (#98).
 - **Draw Order.** `InfiniteGrassRenderer.DrawOrder = BeforeOpaqueCopies` draws the grass after the opaques and before
-  URP's depth and opaque copies, so water refraction and Crest's underwater effect include it. Contact shadows and
-  grass motion vectors are skipped in that order (#98).
+  URP's depth and opaque copies, so water refraction seen from above includes it. Contact shadows and grass motion
+  vectors are skipped in that order (#98). Crest's underwater fog covers grass in this order only partly (#102).
+
+### Changed
+- Planar reflection cameras (`CameraType.Reflection`) now draw grass by default; set Reflections > Cameras to None
+  for the previous behaviour.
+
+### Fixed
+- Under Crest water, grass drawn after the opaque copies (the default) cancelled Crest's underwater fog for the whole
+  frame. The grass pass now runs one step before `BeforeRenderingTransparents`, ahead of Crest's effect, so the grass
+  and the scene are fogged (#100).
+
+## [2.1.0] - 2026-11-05
+
+### Added
 - **Water line.** `InfiniteGrassRenderer.WaterLine` keeps grass and flowers above a world-space water level: no root
   grows at or below it, and density thins in over a **Shore Fade** band above it (0.5 m by default), so the grass
   doesn't stop in a hard line. Off by default; placement is unchanged until it is enabled or given a level source
   (`IGrassWaterLevelSource`).
 - **Crest 5 water level.** `Cone.Grass.Crest.GrassCrestWaterLevel` drives the water line from Crest's sea level or
   its queried surface height. The `Cone.Grass.Crest` assembly compiles only when `com.waveharmonic.crest` is installed.
-
-### Changed
-- Planar reflection cameras (`CameraType.Reflection`) now draw grass by default; set Reflections > Cameras to None
-  for the previous behaviour.
 
 ## [2.0.0] - 2026-11-01
 
