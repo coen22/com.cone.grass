@@ -13,17 +13,21 @@ using UnityEditor;
 namespace Cone.Grass.Tests
 {
     /// <summary>
-    /// Play Mode, windowed: grass under Crest water is fogged like any other submerged surface. A patch of blades and an
+    /// Play Mode, windowed: grass under Crest water is fogged like any other submerged surface. A patch of blades and a
     /// lit cube given the blades' own colour in air stand side by side at the same distance; under water the blades'
-    /// colour must shift about as far as the cube's (0.75 to 1.25 times) when the grass draws before URP's opaque copies,
-    /// and much less when it draws after them.
+    /// colour (blade pixels only, averaged over 30 frames) must shift about as far as the cube's (0.75 to 1.25 times)
+    /// when the grass draws before URP's opaque copies, and much less (under 0.75) when it draws after them.
     /// </summary>
     public sealed class GrassCrestUnderwaterTests
     {
 #if !CONE_GRASS_CREST
+        private const string NoCrest = "Crest 5 (com.waveharmonic.crest) is not installed in this project. Install Crest 5 to run this test.";
+
         [Test]
-        public void SubmergedGrassIsFoggedLikeASubmergedCube() => Assert.Ignore(
-            "Crest 5 (com.waveharmonic.crest) is not installed in this project. Install Crest 5 to run this test.");
+        public void DrawnBeforeOpaqueCopies_SubmergedGrassIsFoggedLikeACube() => Assert.Ignore(NoCrest);
+
+        [Test]
+        public void DrawnAfterOpaqueCopies_UnderwaterFogMissesTheGrass() => Assert.Ignore(NoCrest);
 #else
         private const string CrestFolder = "Packages/com.waveharmonic.crest/Runtime/";
         private const int Size = 256;
@@ -31,9 +35,9 @@ namespace Cone.Grass.Tests
         private TerrainData _terrainData;
         private Texture2D _coverage, _readback;
         private RenderTexture _target;
-        private const int AverageFrames = 10;
+        private const int AverageFrames = 30, GrassBlock = 48, CubeBlock = 24;
         private Material _cubeMaterial, _waterMaterial;
-        private Color _averageA, _averageB;
+        private double _ratio;
         private Light _previousSun;
 
         [UnitySetUp]
@@ -120,8 +124,6 @@ namespace Cone.Grass.Tests
             water.Underwater.CopyWaterMaterialParametersEachFrame = true;
             water.Underwater.Enabled = true;
             _water.SetActive(true);
-            // Frozen water time: waves and caustics stand still, so readings repeat run to run.
-            water.TimeProviders.Push(new FrozenTime());
             yield return Frames(30);
 #else
             Assert.Ignore("Needs the Editor to load Crest's materials.");
@@ -155,95 +157,140 @@ namespace Cone.Grass.Tests
         }
 
         [UnityTest]
-        public IEnumerator SubmergedGrassIsFoggedLikeASubmergedCube()
+        public IEnumerator DrawnBeforeOpaqueCopies_SubmergedGrassIsFoggedLikeACube()
+        {
+            yield return Measure(GrassDrawOrder.BeforeOpaqueCopies);
+            Assert.That(_ratio, Is.InRange(0.75, 1.25), "Grass drawn before the opaque copies must be fogged like the cube.");
+        }
+
+        [UnityTest]
+        public IEnumerator DrawnAfterOpaqueCopies_UnderwaterFogMissesTheGrass()
+        {
+            yield return Measure(GrassDrawOrder.AfterOpaqueCopies);
+            Assert.That(_ratio, Is.LessThan(0.75), "Drawn after the copies, Crest's effect misses the grass: the test must see it.");
+        }
+
+        // One draw order per test, each on a fresh scene. The water rises once; the ratio is how far it moves the
+        // blades' colour over how far it moves the cube's, into _ratio.
+        private IEnumerator Measure(GrassDrawOrder order)
         {
             InfiniteGrassRenderer grass = _grass.GetComponent<InfiniteGrassRenderer>();
             Camera camera = _camera.GetComponent<Camera>();
-            Vector2 grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
-            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.3f, 5.85f));
+            Vector2Int grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
+            Vector2Int cubePixel = Pixel(camera, new Vector3(2.4f, 0.3f, 5.85f));
+            grass.DrawOrder = order;
+            _water.transform.position = new Vector3(0f, -5f, 0f);
 
-            foreach (GrassDrawOrder order in new[] { GrassDrawOrder.BeforeOpaqueCopies, GrassDrawOrder.AfterOpaqueCopies })
+            // Blade mask: the block's pixels whose colour with grass differs from the bare ground's. Only those are
+            // compared, so blade placement and sway don't mix ground into the reading.
+            grass.enabled = false;
+            yield return Frames(20);
+            Color[] ground = null;
+            yield return AverageBlock(grassPixel, GrassBlock, r => ground = r);
+            grass.enabled = true;
+            yield return Frames(20);
+            Color[] grassAirBlock = null;
+            yield return AverageBlock(grassPixel, GrassBlock, r => grassAirBlock = r);
+            bool[] blades = new bool[grassAirBlock.Length];
+            int bladeCount = 0;
+            for (int i = 0; i < blades.Length; i++)
             {
-                grass.DrawOrder = order;
-
-                // In air: give the lit cube the blades' mean colour. Every reading is averaged over AverageFrames frames
-                // (the blades sway), and Crest's time is frozen (caustics and waves stand still).
-                _water.transform.position = new Vector3(0f, -5f, 0f);
-                yield return Frames(20);
-                yield return Average(grassPixel, cubePixel);
-                Color grassAir = _averageA;
-                grass.enabled = false;
-                yield return Frames(10);
-                Color groundAir = Mean(grassPixel);
-                grass.enabled = true;
-                yield return Frames(10);
-                Assert.That(DeltaE(grassAir, groundAir), Is.GreaterThan(10.0),
-                    $"The sampled patch must show grass ({grassAir}), not the bare ground ({groundAir}).");
-                // The camera's colour path (tonemapping, sky fog) need not be the identity, so correct the cube's
-                // colour against what it actually renders as, a few times, until it matches the blades.
-                Color cubeBase = grassAir.linear;
-                Color cubeAir = Color.clear;
-                for (int pass = 0; pass < 4; pass++)
-                {
-                    _cubeMaterial.SetColor("_BaseColor", cubeBase);
-                    yield return Frames(10);
-                    yield return Average(grassPixel, cubePixel);
-                    cubeAir = _averageB;
-                    if (DeltaE(grassAir, cubeAir) <= 1.0)
-                    {
-                        break;
-                    }
-
-                    Color error = grassAir.linear - cubeAir.linear;
-                    cubeBase = new Color(Mathf.Clamp01(cubeBase.r + error.r), Mathf.Clamp01(cubeBase.g + error.g), Mathf.Clamp01(cubeBase.b + error.b), 1f);
-                }
-
-                // The comparison below is of shifts, so the cube only needs to be near the blades' colour (both then move
-                // through the same part of colour space); the blades sway, so their mean drifts by a few dE (3.85 seen).
-                // 5 dE of start difference can move the shift ratio by about 0.16 at most, well inside its 0.75-1.25 band.
-                Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(5.0),
-                    $"Calibration: in air the cube ({cubeAir}) must be close to the blades ({grassAir}).");
-
-                // Under water: both behind the same water column.
-                _water.transform.position = new Vector3(0f, 3f, 0f);
-                yield return Frames(120);
-                yield return Average(grassPixel, cubePixel);
-                Color grassWet = _averageA;
-                Color cubeWet = _averageB;
-                Assert.That(DeltaE(cubeAir, cubeWet), Is.GreaterThan(10.0),
-                    $"Crest's underwater fog must visibly change the cube ({cubeAir} in air, {cubeWet} under water) for the comparison to mean anything.");
-                // Blades stand at many depths along the view ray, so the patch and the cube never sit under exactly
-                // the same water column: compare how far the water moves each colour instead. Fogged grass shifts about
-                // as far as the fogged cube; grass the underwater effect misses keeps most of its colour.
-                double deltaE = DeltaE(grassWet, cubeWet);
-                double grassShift = DeltaE(grassAir, grassWet);
-                double cubeShift = DeltaE(cubeAir, cubeWet);
-                double ratio = grassShift / cubeShift;
-                Debug.Log($"GRASS UNDERWATER {order}: grass {grassWet} cube {cubeWet} dE {deltaE:F2} shift grass {grassShift:F2} cube {cubeShift:F2} ratio {ratio:F2} (air {grassAir})");
-                if (order == GrassDrawOrder.BeforeOpaqueCopies)
-                {
-                    Assert.That(ratio, Is.InRange(0.75, 1.25), $"Grass drawn before the opaque copies must be fogged like the cube (grass wet {grassWet}, cube wet {cubeWet}, dE {deltaE:F2}).");
-                }
-                else
-                {
-                    Assert.That(ratio, Is.LessThan(0.75), $"Drawn after the copies, Crest's effect misses the grass: the test must see it (grass wet {grassWet}, cube wet {cubeWet}).");
-                }
+                blades[i] = DeltaE(grassAirBlock[i], ground[i]) > 10.0;
+                bladeCount += blades[i] ? 1 : 0;
             }
+
+            Assert.That(bladeCount, Is.GreaterThan(blades.Length / 4), "The sampled block must show blades.");
+            Color grassAir = MaskedMean(grassAirBlock, blades);
+
+            // The camera's colour path (tonemapping, sky fog) need not be the identity, so correct the lit cube's
+            // colour against what it renders as, a few times, until it is near the blades'.
+            Color cubeBase = grassAir.linear;
+            Color cubeAir = Color.clear;
+            for (int pass = 0; pass < 4; pass++)
+            {
+                _cubeMaterial.SetColor("_BaseColor", cubeBase);
+                yield return Frames(10);
+                Color[] cubeBlock = null;
+                yield return AverageBlock(cubePixel, CubeBlock, r => cubeBlock = r);
+                cubeAir = MaskedMean(cubeBlock, null);
+                if (DeltaE(grassAir, cubeAir) <= 1.0)
+                {
+                    break;
+                }
+
+                Color error = grassAir.linear - cubeAir.linear;
+                cubeBase = new Color(Mathf.Clamp01(cubeBase.r + error.r), Mathf.Clamp01(cubeBase.g + error.g), Mathf.Clamp01(cubeBase.b + error.b), 1f);
+            }
+
+            // The comparison is of shifts, so the cube only needs to be near the blades' colour (both then move through
+            // the same part of colour space). 5 dE of start difference moves the shift ratio by about 0.16 at most.
+            Assert.That(DeltaE(grassAir, cubeAir), Is.LessThanOrEqualTo(5.0),
+                $"Calibration: in air the cube ({cubeAir}) must be close to the blades ({grassAir}).");
+
+            // Under water: both behind a few metres of murky water.
+            _water.transform.position = new Vector3(0f, 3f, 0f);
+            yield return Frames(120);
+            Color[] grassWetBlock = null, cubeWetBlock = null;
+            yield return AverageBlock(grassPixel, GrassBlock, r => grassWetBlock = r);
+            yield return AverageBlock(cubePixel, CubeBlock, r => cubeWetBlock = r);
+            Color grassWet = MaskedMean(grassWetBlock, blades);
+            Color cubeWet = MaskedMean(cubeWetBlock, null);
+            double cubeShift = DeltaE(cubeAir, cubeWet);
+            Assert.That(cubeShift, Is.GreaterThan(10.0),
+                $"Crest's underwater fog must visibly change the cube ({cubeAir} in air, {cubeWet} under water) for the comparison to mean anything.");
+
+            // Blades stand at many depths along the view ray, so the patch and the cube never sit under exactly the
+            // same water column: compare how far the water moves each colour. Fogged grass shifts about as far as
+            // the fogged cube; grass the underwater effect misses keeps most of its colour.
+            double grassShift = DeltaE(grassAir, grassWet);
+            _ratio = grassShift / cubeShift;
+            Debug.Log($"GRASS UNDERWATER {order}: blades {bladeCount}/{blades.Length} px, grass {grassAir} -> {grassWet} shift {grassShift:F2}, cube {cubeAir} -> {cubeWet} shift {cubeShift:F2}, ratio {_ratio:F2}");
         }
 
-        // The mean of two pixels' block colours over AverageFrames consecutive frames, into _averageA and _averageB.
-        private IEnumerator Average(Vector2 a, Vector2 b)
+        // Each pixel of a size x size block around a pixel, averaged over AverageFrames consecutive frames.
+        private IEnumerator AverageBlock(Vector2Int centre, int size, System.Action<Color[]> done)
         {
-            Color sumA = Color.clear, sumB = Color.clear;
-            for (int i = 0; i < AverageFrames; i++)
+            var sum = new Color[size * size];
+            for (int f = 0; f < AverageFrames; f++)
             {
                 yield return null;
-                sumA += Mean(a);
-                sumB += Mean(b);
+                RenderTexture previous = RenderTexture.active;
+                RenderTexture.active = _target;
+                _readback.ReadPixels(new Rect(0, 0, Size, Size), 0, 0, false);
+                _readback.Apply(false);
+                RenderTexture.active = previous;
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        int px = Mathf.Clamp(centre.x - (size / 2) + x, 0, Size - 1), py = Mathf.Clamp(centre.y - (size / 2) + y, 0, Size - 1);
+                        sum[(y * size) + x] += _readback.GetPixel(px, py);
+                    }
+                }
             }
 
-            _averageA = sumA / AverageFrames;
-            _averageB = sumB / AverageFrames;
+            for (int i = 0; i < sum.Length; i++)
+            {
+                sum[i] /= AverageFrames;
+            }
+
+            done(sum);
+        }
+
+        private static Color MaskedMean(Color[] block, bool[] mask)
+        {
+            Color sum = Color.clear;
+            int count = 0;
+            for (int i = 0; i < block.Length; i++)
+            {
+                if (mask == null || mask[i])
+                {
+                    sum += block[i];
+                    count++;
+                }
+            }
+
+            return count > 0 ? sum / count : Color.clear;
         }
 
         private static IEnumerator Frames(int count)
@@ -254,33 +301,10 @@ namespace Cone.Grass.Tests
             }
         }
 
-        private static Vector2 Pixel(Camera camera, Vector3 world)
+        private static Vector2Int Pixel(Camera camera, Vector3 world)
         {
             Vector3 screen = camera.WorldToScreenPoint(world);
-            return new Vector2(screen.x, screen.y);
-        }
-
-        // The mean sRGB colour of a 16 x 16 block around a pixel of the camera's target.
-        private Color Mean(Vector2 pixel)
-        {
-            RenderTexture previous = RenderTexture.active;
-            RenderTexture.active = _target;
-            _readback.ReadPixels(new Rect(0, 0, Size, Size), 0, 0, false);
-            _readback.Apply(false);
-            RenderTexture.active = previous;
-            Color sum = Color.clear;
-            int count = 0;
-            for (int y = -8; y < 8; y++)
-            {
-                for (int x = -8; x < 8; x++)
-                {
-                    int px = Mathf.Clamp((int)pixel.x + x, 0, Size - 1), py = Mathf.Clamp((int)pixel.y + y, 0, Size - 1);
-                    sum += _readback.GetPixel(px, py);
-                    count++;
-                }
-            }
-
-            return sum / count;
+            return new Vector2Int((int)screen.x, (int)screen.y);
         }
 
         // CIE76 ΔE*ab between two sRGB colours.
@@ -299,15 +323,6 @@ namespace Cone.Grass.Tests
             double F(double t) => t > 0.008856 ? System.Math.Pow(t, 1.0 / 3.0) : 7.787 * t + 16.0 / 116.0;
             double fx = F(x / 0.95047), fy = F(y), fz = F(z / 1.08883);
             return new Vector3((float)(116 * fy - 16), (float)(500 * (fx - fy)), (float)(200 * (fy - fz)));
-        }
-#endif
-
-#if CONE_GRASS_CREST
-        private sealed class FrozenTime : WaveHarmonic.Crest.ITimeProvider
-        {
-            public float Time => 10f;
-
-            public float Delta => 1f / 60f;
         }
 #endif
     }
