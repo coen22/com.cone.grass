@@ -30,7 +30,7 @@ namespace Cone.Grass.Tests
         private TerrainData _terrainData;
         private Texture2D _coverage, _readback;
         private RenderTexture _target;
-        private Material _cubeMaterial;
+        private Material _cubeMaterial, _waterMaterial;
 
         [UnitySetUp]
         public IEnumerator SetUp()
@@ -73,7 +73,7 @@ namespace Cone.Grass.Tests
             // An unlit cube to the right of the grass patch, at the same distance from the camera.
             _cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
             Object.Destroy(_cube.GetComponent<Collider>());
-            _cube.transform.position = new Vector3(1.6f, 0.9f, 2f);
+            _cube.transform.position = new Vector3(2.4f, 0.9f, 6f);
             _cube.transform.localScale = new Vector3(1.4f, 1.8f, 0.2f);
             _cubeMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
             _cube.GetComponent<MeshRenderer>().sharedMaterial = _cubeMaterial;
@@ -97,7 +97,14 @@ namespace Cone.Grass.Tests
                 AssetDatabase.LoadAssetAtPath<ScriptableObject>(CrestFolder + "Settings/Resources.asset"));
             typeof(SurfaceRenderer).GetField("_ChunkTemplate", Field)?.SetValue(water.Surface,
                 AssetDatabase.LoadAssetAtPath<GameObject>(CrestFolder + "Prefabs/Chunk.prefab"));
-            water.Surface.Material = AssetDatabase.LoadAssetAtPath<Material>(CrestFolder + "Materials/Water.mat");
+            // Murky water, so the fog over a few metres is far above the ΔE tolerance.
+            _waterMaterial = new Material(AssetDatabase.LoadAssetAtPath<Material>(CrestFolder + "Materials/Water.mat"));
+            var murk = new Color(0.25f, 0.45f, 0.5f, 0.6f);
+            float Channel(float c) => -murk.a * 32f * Mathf.Log(Mathf.Max(c, 0.0001f)) / 5f;
+            _waterMaterial.SetColor("_Crest_AbsorptionColor", murk);
+            _waterMaterial.SetVector("_Crest_Absorption", new Vector4(Channel(murk.r), Channel(murk.g), Channel(murk.b), 1f));
+            _waterMaterial.SetColor("_Crest_Scattering", new Color(0.05f, 0.12f, 0.14f));
+            water.Surface.Material = _waterMaterial;
             water.WindSpeed = 0f;
             water.PrimaryLight = RenderSettings.sun;
             water.Underwater.Material = AssetDatabase.LoadAssetAtPath<Material>(CrestFolder + "Materials/Water Volume.mat");
@@ -114,7 +121,7 @@ namespace Cone.Grass.Tests
         [UnityTearDown]
         public IEnumerator TearDown()
         {
-            foreach (Object owned in new Object[] { _water, _camera, _cube, _grass, _terrainObject, _sun, _cubeMaterial, _readback, _coverage })
+            foreach (Object owned in new Object[] { _water, _camera, _cube, _grass, _terrainObject, _sun, _cubeMaterial, _waterMaterial, _readback, _coverage })
             {
                 if (owned)
                 {
@@ -140,8 +147,8 @@ namespace Cone.Grass.Tests
         {
             InfiniteGrassRenderer grass = _grass.GetComponent<InfiniteGrassRenderer>();
             Camera camera = _camera.GetComponent<Camera>();
-            Vector2 grassPixel = Pixel(camera, new Vector3(-1.6f, 0.12f, 2f));
-            Vector2 cubePixel = Pixel(camera, new Vector3(1.6f, 0.9f, 1.85f));
+            Vector2 grassPixel = Pixel(camera, new Vector3(-2.4f, 0.12f, 6f));
+            Vector2 cubePixel = Pixel(camera, new Vector3(2.4f, 0.9f, 5.85f));
 
             foreach (GrassDrawOrder order in new[] { GrassDrawOrder.BeforeOpaqueCopies, GrassDrawOrder.AfterOpaqueCopies })
             {
@@ -159,9 +166,11 @@ namespace Cone.Grass.Tests
 
                 // Under water: both behind the same water column.
                 _water.transform.position = new Vector3(0f, 3f, 0f);
-                yield return Frames(60);
+                yield return Frames(120);
                 Color grassWet = Mean(grassPixel);
                 Color cubeWet = Mean(cubePixel);
+                Assert.That(DeltaE(cubeAir, cubeWet), Is.GreaterThan(10.0),
+                    $"Crest's underwater fog must visibly change the cube ({cubeAir} in air, {cubeWet} under water) for the comparison to mean anything.");
                 double deltaE = DeltaE(grassWet, cubeWet);
                 Debug.Log($"GRASS UNDERWATER {order}: grass {grassWet} cube {cubeWet} dE {deltaE:F2} (air {grassAir})");
                 if (order == GrassDrawOrder.BeforeOpaqueCopies)

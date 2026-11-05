@@ -117,6 +117,20 @@ namespace Cone.Grass
 
                     owner.GetLodCapacity(LodCapacities, LodOffsets);
                     int bladeCapacity = Mathf.Max(3, owner.Capacity);
+                    if (IsReflection)
+                    {
+                        // Wider reflection spacing grows 1 / scale^2 of the blades: size the queues to match.
+                        float scale = owner.Reflections.EffectiveSpacingScale;
+                        float share = 1f / (scale * scale);
+                        for (int lod = 0; lod < 3; lod++)
+                        {
+                            LodCapacities[lod] = Mathf.Max(1, Mathf.CeilToInt(LodCapacities[lod] * share));
+                        }
+
+                        LodOffsets[1] = LodCapacities[0];
+                        LodOffsets[2] = LodCapacities[0] + LodCapacities[1];
+                        bladeCapacity = LodCapacities[0] + LodCapacities[1] + LodCapacities[2];
+                    }
                     // Head queues follow the three LOD ranges in the same buffer.
                     HeadMeshes[0] = owner.GetHeadMesh();
                     HeadMeshes[1] = owner.Variants ? owner.Variants.HeadMesh : null;
@@ -160,8 +174,14 @@ namespace Cone.Grass
                 public void EnsureInteractionResource(InfiniteGrassRenderer owner) =>
                     Allocate(ref Slope, CaptureResolution(owner), GraphicsFormat.R8G8B8A8_UNorm, "Grass Interaction");
 
-                private static int CaptureResolution(InfiniteGrassRenderer owner) =>
-                    Mathf.Clamp(owner.CaptureResolution, 128, SystemInfo.maxTextureSize);
+                // A reflection camera reaches half as far (by default), so half the capture resolution keeps its texel size.
+                private int CaptureResolution(InfiniteGrassRenderer owner)
+                {
+                    int resolution = Mathf.Clamp(owner.CaptureResolution, 128, SystemInfo.maxTextureSize);
+                    return IsReflection ? Mathf.Max(128, resolution / 2) : resolution;
+                }
+
+                private bool IsReflection => Camera != null && Camera.cameraType == CameraType.Reflection;
 
                 private bool UpdateArgumentData(Mesh[] meshes)
                 {
