@@ -9,7 +9,7 @@ This page takes a clean URP project to a terrain with grass, then shows you the 
 3. Enter:
 
    ```
-   https://github.com/coen22/com.cone.grass.git#v2.1.0
+   https://github.com/coen22/com.cone.grass.git#v2.2.0
    ```
 
 Package Manager installs **Infinite Grass** and its dependencies, including URP 17.6.
@@ -73,7 +73,7 @@ For a map that covers a whole terrain, turn on **Use Terrain Bounds**: the map t
 
 1. In Package Manager, select **Infinite Grass** and open the **Samples** tab.
 2. Click **Import** next to **Meadow**.
-3. Open the Meadow scene from `Assets/Samples/Infinite Grass/2.1.0/Meadow` and press Play.
+3. Open the Meadow scene from `Assets/Samples/Infinite Grass/2.2.0/Meadow` and press Play.
 
 The sample shows a terrain meadow with flowers at grass height and a character that bends the grass. **WASD** walks, **Shift** runs, and holding the **right mouse button** orbits the camera. Left alone, the character walks a figure of eight by itself.
 

@@ -35,7 +35,7 @@ Stills from the Meadow sample, the plant-kinds meadow, a stone slab and a Crest 
 In **Window > Package Manager**, click **+ > Install package from git URL...** and enter:
 
 ```
-https://github.com/coen22/com.cone.grass.git#v2.1.0
+https://github.com/coen22/com.cone.grass.git#v2.2.0
 ```
 
 ## Quick start

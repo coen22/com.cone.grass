@@ -117,6 +117,21 @@ namespace Cone.Grass
 
                     owner.GetLodCapacity(LodCapacities, LodOffsets);
                     int bladeCapacity = Mathf.Max(3, owner.Capacity);
+                    if (IsReflection)
+                    {
+                        // Wider reflection spacing grows 1 / scale^2 of the blades: size the middle and far queues to match,
+                        // with 1.5x headroom for a reflection frustum wider than the view; the near queue keeps its share.
+                        float scale = owner.Reflections.EffectiveSpacingScale;
+                        float share = Mathf.Min(1f, 1.5f / (scale * scale));
+                        for (int lod = 1; lod < 3; lod++)
+                        {
+                            LodCapacities[lod] = Mathf.Max(1, Mathf.CeilToInt(LodCapacities[lod] * share));
+                        }
+
+                        LodOffsets[1] = LodCapacities[0];
+                        LodOffsets[2] = LodCapacities[0] + LodCapacities[1];
+                        bladeCapacity = LodCapacities[0] + LodCapacities[1] + LodCapacities[2];
+                    }
                     // Head queues follow the three LOD ranges in the same buffer.
                     HeadMeshes[0] = owner.GetHeadMesh();
                     HeadMeshes[1] = owner.Variants ? owner.Variants.HeadMesh : null;
@@ -160,8 +175,28 @@ namespace Cone.Grass
                 public void EnsureInteractionResource(InfiniteGrassRenderer owner) =>
                     Allocate(ref Slope, CaptureResolution(owner), GraphicsFormat.R8G8B8A8_UNorm, "Grass Interaction");
 
-                private static int CaptureResolution(InfiniteGrassRenderer owner) =>
-                    Mathf.Clamp(owner.CaptureResolution, 128, SystemInfo.maxTextureSize);
+                // A reflection's capture window shrinks with its draw distance; scale the resolution by the extent ratio so
+                // the texel size stays the same, rounded up to a power of two.
+                private int CaptureResolution(InfiniteGrassRenderer owner)
+                {
+                    int resolution = Mathf.Clamp(owner.CaptureResolution, 128, SystemInfo.maxTextureSize);
+                    if (!IsReflection)
+                    {
+                        return resolution;
+                    }
+
+                    float distance = Mathf.Max(0.01f, owner.DrawDistance);
+                    float padding = Mathf.Max(0.01f, owner.TextureUpdateThreshold);
+                    float ratio = (distance * owner.Reflections.EffectiveDrawDistanceScale + padding) / (distance + padding);
+                    if (float.IsNaN(ratio) || float.IsInfinity(ratio))
+                    {
+                        return resolution;
+                    }
+
+                    return Mathf.Clamp(Mathf.NextPowerOfTwo(Mathf.CeilToInt(resolution * Mathf.Clamp01(ratio))), 128, resolution);
+                }
+
+                private bool IsReflection => Camera != null && Camera.cameraType == CameraType.Reflection;
 
                 private bool UpdateArgumentData(Mesh[] meshes)
                 {

@@ -4,7 +4,7 @@ A terrain meadow: a short, lush lawn with small flowers standing at the height o
 
 ## Open it
 
-1. Import **Meadow** from the package's **Samples** tab in Package Manager. It lands in `Assets/Samples/Infinite Grass/2.1.0/Meadow`.
+1. Import **Meadow** from the package's **Samples** tab in Package Manager. It lands in `Assets/Samples/Infinite Grass/2.2.0/Meadow`.
 2. Open the Meadow scene in that folder and press **Play**.
 
 **No grass?** Select **Meadow Grass** in the Hierarchy and click **Add Grass Data Renderer Feature** in its inspector. The grass draws only through that renderer feature, and a fresh project's URP renderer does not have it yet. If the button does not appear, check that a URP asset is active in **Project Settings > Graphics**.
@@ -40,4 +40,4 @@ Leave the keyboard alone for a few seconds and the character walks a figure of e
 - **The interactor.** Add **Cone > Grass > Collider Interactor** next to your own character's CharacterController, and compare its settings with the sample character's.
 - **The scripts.** `MeadowWalker`, `MeadowCamera` and `MeadowInput` are in the `Cone.Grass.Samples.Meadow` assembly and namespace. They are sample code: copy them into your project if you want to change them, rather than editing the imported sample.
 
-See the [manual](https://github.com/coen22/com.cone.grass/blob/v2.1.0/Documentation~/index.md) for every setting.
+See the [manual](https://github.com/coen22/com.cone.grass/blob/v2.2.0/Documentation~/index.md) for every setting.

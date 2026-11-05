@@ -45,6 +45,23 @@ namespace Cone.Grass
         /// see contacts where nothing grows.
         /// </summary>
         public bool DrawBlades { get => _drawBlades; set => _drawBlades = value; }
+        [Tooltip("After Opaque Copies keeps contact shadows and motion vectors. Before Opaque Copies puts the grass in the depth and " +
+            "opaque textures, so water refraction seen from above includes it."), SerializeField]
+        private GrassDrawOrder _drawOrder = GrassDrawOrder.AfterOpaqueCopies;
+
+        /// <summary>
+        /// When the grass draws relative to URP's depth and opaque texture copies. <see cref="GrassDrawOrder.BeforeOpaqueCopies"/>
+        /// lets water refraction include the grass, without contact shadows or grass motion vectors. Crest's underwater fog covers the grass fully after the copies and only partly before them (#102).
+        /// </summary>
+        public GrassDrawOrder DrawOrder { get => _drawOrder; set => _drawOrder = value; }
+        [SerializeField]
+        private GrassReflectionSettings _reflections = new GrassReflectionSettings();
+
+        /// <summary>
+        /// Which reflection cameras draw the grass (planar ones such as Crest's water reflections by default) and the cheaper
+        /// path they take: wider spacing, a shorter draw distance, no interaction capture, contact shadows or motion vectors.
+        /// </summary>
+        public GrassReflectionSettings Reflections { get => _reflections ??= new GrassReflectionSettings(); set => _reflections = value ?? new GrassReflectionSettings(); }
 
         [Header("Population")]
         [Min(0.01f), SerializeField, FormerlySerializedAs("spacing")] private float _spacing = 0.1f;
@@ -258,8 +275,8 @@ namespace Cone.Grass
         public bool IsReadyForRendering => Instance == this && isActiveAndEnabled && IsSceneInstance();
 
         /// <summary>
-        /// Whether a camera draws this grass: a game view, or the scene view when <see cref="RenderInSceneView"/> is on, that
-        /// sees the layer this owner is on. A utility camera that culls everything, such as a depth or ground capture that
+        /// Whether a camera draws this grass: a game view, the scene view when <see cref="RenderInSceneView"/> is on, or a
+        /// reflection camera <see cref="Reflections"/> admits, that sees the layer this owner is on. A utility camera that culls everything, such as a depth or ground capture that
         /// submits its own renders through the pipeline, then costs the grass no capture or generation pass.
         /// </summary>
         public bool DrawsFor(Camera camera)
@@ -269,7 +286,8 @@ namespace Cone.Grass
                 return false;
             }
 
-            return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && _renderInSceneView);
+            return camera.cameraType == CameraType.Game || (camera.cameraType == CameraType.SceneView && _renderInSceneView) ||
+                Reflections.Admits(camera);
         }
 
         /// <summary>

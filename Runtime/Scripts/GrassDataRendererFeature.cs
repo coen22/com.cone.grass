@@ -13,6 +13,10 @@ namespace Cone.Grass
     /// <summary>Persistent, single-view grass rendering for the URP RenderGraph path.</summary>
     public partial class GrassDataRendererFeature : ScriptableRendererFeature
     {
+        /// <summary>Where the grass draws in <see cref="GrassDrawOrder.AfterOpaqueCopies"/>: after URP's opaque copies,
+        /// before passes that enqueue at <see cref="RenderPassEvent.BeforeRenderingTransparents"/> such as Crest's.</summary>
+        internal const RenderPassEvent AfterOpaqueCopiesEvent = RenderPassEvent.BeforeRenderingTransparents - 1;
+
         // Keep these serialized names so existing renderer assets retain their references.
         [SerializeField, FormerlySerializedAs("heightMapLayer")] private LayerMask _heightMapLayer;
         [SerializeField, FormerlySerializedAs("heightMapMat")] private Material _heightMapMat;
@@ -34,7 +38,7 @@ namespace Cone.Grass
             _grassPass = new GrassDataPass(_heightMapLayer, _heightMapMat, _computeShader)
             {
                 // Opaque depth and lighting are available; grass still precedes transparents.
-                renderPassEvent = RenderPassEvent.BeforeRenderingTransparents
+                renderPassEvent = AfterOpaqueCopiesEvent
             };
             RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
             RenderPipelineManager.beginContextRendering += OnBeginContextRendering;
@@ -120,14 +124,23 @@ namespace Cone.Grass
             }
 
             Camera camera = renderingData.cameraData.camera;
-            if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera))
+            if (!(renderer is UniversalRenderer) || renderingData.cameraData.renderType != CameraRenderType.Base || !owner.AdmitCamera(camera) ||
+                !blades && camera.cameraType == CameraType.Reflection)
             {
                 _grassPass?.ReleaseCamera(camera);
                 return;
             }
 
-            bool contacts = blades && GrassContactShadows.TryGetParameters(owner.ContactShadows, out _, out _, out _);
-            bool motion = blades && _grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
+            // Reflection cameras take the cheap path, and drawing before the opaque copies leaves no depth or motion
+            // texture for the contact shadows and motion vectors to augment.
+            bool full = camera.cameraType != CameraType.Reflection && owner.DrawOrder == GrassDrawOrder.AfterOpaqueCopies;
+            // After the copies, one step before the transparents: Crest's underwater effect enqueues at
+            // BeforeRenderingTransparents, and grass drawn after it cancels the effect for the whole frame (#100).
+            _grassPass.renderPassEvent = owner.DrawOrder == GrassDrawOrder.BeforeOpaqueCopies
+                ? RenderPassEvent.AfterRenderingOpaques
+                : AfterOpaqueCopiesEvent;
+            bool contacts = full && blades && GrassContactShadows.TryGetParameters(owner.ContactShadows, out _, out _, out _);
+            bool motion = full && blades && _grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
                 renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,
                 owner.MotionVectors, owner.GrassMaterial);
             ScriptableRenderPassInput inputs = contacts || motion ? ScriptableRenderPassInput.Depth : ScriptableRenderPassInput.None;
@@ -156,6 +169,9 @@ namespace Cone.Grass
         }
 
         private void OnDisable() => Dispose(true);
+
+        /// <summary>Tests: the last generated counts (near, middle, far, overflow) for a camera, read synchronously.</summary>
+        internal bool TryReadCounts(Camera camera, uint[] counts) => _grassPass != null && _grassPass.TryReadCounts(camera, counts);
 
         private static class Id
         {
@@ -366,6 +382,12 @@ namespace Cone.Grass
                 }
                 if (!blades)
                 {
+                    if (camera.cameraType == CameraType.Reflection)
+                    {
+                        ReleaseCamera(camera);
+                        return;
+                    }
+
                     RecordInteractionField(graph, camera, owner);
                     return;
                 }
@@ -407,8 +429,13 @@ namespace Cone.Grass
                 bool headsNeeded = state.Variants.HeadQueues > 0;
                 bool drawsHeads = state.UpdateHeadMaterial(headsNeeded ? EnsureHeadShader() : null, headsNeeded);
 
-                float spacing = Mathf.Max(0.001f, FiniteOr(owner.Spacing, 0.1f));
-                float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.DrawDistance, 300f));
+                // Reflections: wider spacing, a shorter reach, and no interaction, contacts, motion or diagnostics.
+                bool reflection = camera.cameraType == CameraType.Reflection;
+                bool full = !reflection && owner.DrawOrder == GrassDrawOrder.AfterOpaqueCopies;
+                float spacing = Mathf.Max(0.001f, FiniteOr(owner.Spacing, 0.1f)) *
+                    (reflection ? owner.Reflections.EffectiveSpacingScale : 1f);
+                float distanceLimit = Mathf.Max(0.01f, FiniteOr(owner.DrawDistance, 300f)) *
+                    (reflection ? owner.Reflections.EffectiveDrawDistanceScale : 1f);
                 float capturePadding = Mathf.Max(0.01f, FiniteOr(owner.TextureUpdateThreshold, 10f));
                 if (ownerChanged || materialChanged || variantsChanged || state.MotionSpacing != spacing)
                 {
@@ -416,6 +443,10 @@ namespace Cone.Grass
                 }
 
                 state.MotionSpacing = spacing;
+                if (!full)
+                {
+                    _motion.Release(camera);
+                }
                 Vector3 cameraPosition = camera.transform.position;
                 if (!IsFinite(cameraPosition))
                 {
@@ -532,6 +563,11 @@ namespace Cone.Grass
                 CollectInteractionDraws(state, captureBounds);
                 bool recaptureInteraction = recaptureModifiers || state.InteractionVersion != state.NextInteractionVersion ||
                     state.OwnerInteractionRevision != owner.InteractionRevision;
+                if (reflection)
+                {
+                    // Slope modifiers stay current with the other modifiers; the interactor bend is left out.
+                    recaptureInteraction = recaptureModifiers || !state.CacheValid;
+                }
 
                 if (recaptureHeight)
                 {
@@ -564,14 +600,17 @@ namespace Cone.Grass
                     }
 
                     BuildRendererCapture(graph, state, "Grass Interaction", state.SlopeDraws, slope, default,
-                        captureVP, Color.clear, state.InteractionDraws);
+                        captureVP, Color.clear, reflection ? null : state.InteractionDraws);
                 }
 
                 state.CacheValid = true;
                 state.Owner = owner;
                 state.Center = center;
                 state.CaptureExtent = extent;
-                GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
+                if (!reflection)
+                {
+                    GrassInteractionPublisher.Publish(state.Slope.rt, center, extent);
+                }
                 state.CaptureRange = captureRange;
                 state.Authored = authored;
                 state.DensityShortens = authored && owner.DensityShortensBlades;
@@ -593,7 +632,10 @@ namespace Cone.Grass
 
                 float bladeRadius = CalculateBladeRadius(state.BladeMaterial, owner, camera, scaledHeight);
                 Bounds cameraBounds = CalculateCameraBounds(camera, distanceLimit, bladeRadius);
-                owner.CameraBounds = cameraBounds;
+                if (!reflection)
+                {
+                    owner.CameraBounds = cameraBounds;
+                }
                 GeometryUtility.CalculateFrustumPlanes(camera, state.Planes);
                 for (int i = 0; i < 6; i++)
                 {
@@ -610,7 +652,11 @@ namespace Cone.Grass
                     // Counts and indirect instance counts still reset to zero, but
                     // there is no grass to draw, snapshot, or ray-march this frame.
                     _motion.Release(camera);
-                    BuildReadback(graph, state, counts, owner);
+                    if (!reflection)
+                    {
+                        BuildReadback(graph, state, counts, owner);
+                    }
+
                     state.PruneTextureWrappers();
                     return;
                 }
@@ -682,7 +728,7 @@ namespace Cone.Grass
                 var heads = drawsHeads
                     ? new GrassHeadDraws(state.HeadMaterial, state.HeadMeshes, state.HeadProperties, state.HeadCapacities)
                     : default;
-                if (WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
+                if (full && WantsMotion(camera, cameraData.postProcessEnabled, cameraData.antialiasing,
                         cameraData.cameraTargetDescriptor.msaaSamples, owner.MotionVectors, state.BladeMaterial))
                 {
                     _motion.Record(graph, frameData, positions, counts, arguments, state.Positions,
@@ -690,11 +736,31 @@ namespace Cone.Grass
                         state.VertexTextures, state.LodOffsets, state.LodCapacities, spacing, heads);
                 }
 
-                _contacts.Record(graph, frameData, positions, arguments, state.Positions,
-                    state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.ContactShadows,
-                    state.VertexTextures, heads);
-                BuildReadback(graph, state, counts, owner);
+                if (full)
+                {
+                    _contacts.Record(graph, frameData, positions, arguments, state.Positions,
+                        state.Arguments, meshes, state.BladeMaterial, state.DrawProperties, owner.ContactShadows,
+                        state.VertexTextures, heads);
+                }
+
+                if (!reflection)
+                {
+                    BuildReadback(graph, state, counts, owner);
+                }
                 state.PruneTextureWrappers();
+            }
+
+            /// <summary>Tests: the camera's last generated counts (near, middle, far, overflow), read synchronously.</summary>
+            internal bool TryReadCounts(Camera camera, uint[] counts)
+            {
+                if (camera == null || counts == null || counts.Length < 4 || !_cameras.TryGetValue(camera, out CameraState state) ||
+                    state.Counts == null || !state.Counts.IsValid())
+                {
+                    return false;
+                }
+
+                state.Counts.GetData(counts, 0, 0, 4);
+                return true;
             }
 
             public void PruneCameras()
