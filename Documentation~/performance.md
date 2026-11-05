@@ -2,6 +2,9 @@
 
 Grass cost scales with the number of blades drawn and the pixels they cover. This page lists the settings that matter, in rough order of impact, and what each one allocates. Always profile your own scene at your target resolution: the GPU Profiler and the Frame Debugger show the grass passes by name.
 
+![performance-meadow-10m](images/performance-meadow-10m.jpg)
+*Meadow sample at 10 m · 2.0.0 · 11-01*
+
 ## Blade count
 
 The number of candidate roots is about `π × Draw Distance² / Spacing²`, thinned by density and the distance fade. Most of the cost sits within **Full Density Distance**, where every root grows.
