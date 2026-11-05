@@ -5,6 +5,8 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-05
+
 ### Added
 - **Grass in planar reflections.** Reflection cameras such as Crest's water reflections draw the grass through a
   cheaper path: `InfiniteGrassRenderer.Reflections` sets which reflection cameras (Planar by default; reflection-probe
