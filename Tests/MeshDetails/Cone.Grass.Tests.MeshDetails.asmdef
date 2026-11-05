@@ -1,0 +1,32 @@
+{
+  "name": "Cone.Grass.Tests.MeshDetails",
+  "rootNamespace": "Cone.Grass.Tests",
+  "references": [
+    "Cone.Grass",
+    "Cone.Grass.MeshDetails",
+    "Cone.Grass.MeshDetails.Editor",
+    "Cone.Grass.Editor",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime",
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "overrideReferences": true,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "autoReferenced": false,
+  "versionDefines": [
+    {
+      "name": "com.cone.render-features",
+      "expression": "1.0.0",
+      "define": "CONE_GRASS_RENDER_FEATURES"
+    }
+  ]
+}

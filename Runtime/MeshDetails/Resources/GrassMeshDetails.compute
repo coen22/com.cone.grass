@@ -1,0 +1,490 @@
+// Cone Grass mesh detail kinds: GPU scatter of terrain detail meshes from the terrain's own detail density layers,
+// frustum and Hi-Z occlusion culling, distance LOD with a screen-dither crossfade (no TAA), per-instance scale,
+// rotation, ground alignment, colour variation, wind shear and the grass water line. The output is the instance data
+// and visible-instance lists of a BatchRendererGroup, drawn by URP's own passes through indirect draw commands.
+#pragma kernel ResetLists
+#pragma kernel Scatter
+#pragma kernel FinalizeArgs
+#pragma kernel BuildHiZ
+#pragma kernel ReduceHiZ
+
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+
+#define MAX_LODS 4
+#define MAX_SPLITS 4
+#define MAX_SLICES 16
+
+// Lists per kind: camera lists [lod * 2 + (fade ? 1 : 0)], then shadow lists [2 * lodCount + lod * MAX_SPLITS + split].
+struct KindData
+{
+    float4 lodDistance;     // end distance of each LOD, metres
+    float4 scaleRange;      // min width, max width, min height, max height
+    float4 healthy;         // per-instance _BaseColor at noise 0 (material colour times the healthy tint)
+    float4 dry;             // per-instance _BaseColor at noise 1
+    float4 boundsCenter;    // xyz mesh-local bounds centre, w shadow distance
+    float4 boundsExtent;    // xyz mesh-local bounds extent, w cross-fade width
+    float4 placement;       // x noise spread, y noise seed, z align to ground, w position jitter
+    float4 wind;            // x bend, y flutter, zw unused
+    int4 info;              // x lod count, y casts shadows, z list base, w colour mode
+};
+
+CBUFFER_START(GrassMeshDetailParameters)
+    float4 _CameraPosition;     // xyz, w max draw distance
+    float4 _FrustumPlanes[6];
+    float4x4 _HiZViewProjection; // the view-projection the Hi-Z history was rendered with
+    float4 _HiZSize;            // mip0 width, height, mip count, enabled
+    float4 _ShadowLight;        // xyz direction towards the light, w split count
+    float4 _ShadowSplits[MAX_SPLITS]; // xyz sphere centre, w radius
+    float4 _WindDirection;      // xyz unit direction the wind blows along, w strength now
+    float4 _WindParams;         // x turbulence, y gust scale (1/m), z time (s), w gust period (cells)
+    float4 _WindOffset;         // xyz drift of the air (m), wrapped at 1024
+    float4 _Water;              // x enabled, y level, z shore fade
+    float4 _StatsRect;          // xz min, xz max of the count statistics rectangle
+    float4 _TerrainOrigin;      // xyz origin, w detail resolution
+    float4 _TerrainSize;        // xyz size, w terrain density scale
+    int4 _CellStart;            // xy first cell, zw cell count
+    int4 _TerrainInfo;          // x scatter mode (0 coverage, 1 instance count), y slice count, z has holes, w terrain seed
+    int4 _SliceInfo;            // x first texture slice of this dispatch
+    int4 _SliceKinds[MAX_SLICES / 4];
+    float4 _SliceScale[MAX_SLICES / 4]; // per slice: the density multiplier (prototype density, terrain density, global scale)
+    uint4 _Capacity;            // x instance slots, y list count, z draw count, w reversed Z
+    uint4 _Layout;              // x object-to-world offset, y world-to-object offset, z colour offset (bytes), w frame
+CBUFFER_END
+
+StructuredBuffer<KindData> _Kinds;
+StructuredBuffer<uint> _ListOffset;
+StructuredBuffer<uint> _ListCapacity;
+StructuredBuffer<uint> _DrawList;
+RWStructuredBuffer<uint> _ListCount;
+RWStructuredBuffer<uint> _Counters;     // 0 instance slots used, 1 overflowed instances, 2 slot overflow
+RWStructuredBuffer<uint> _Stats;        // per kind: instances with their root inside _StatsRect (before culling)
+RWByteAddressBuffer _Visible;
+RWByteAddressBuffer _InstanceData;
+RWByteAddressBuffer _Args;
+
+Texture2D<float4> _TerrainHeightmap;
+Texture2D<float> _TerrainHoles;
+Texture2DArray<float> _Density;
+Texture2D<float> _HiZ;
+SamplerState linearClampSampler;
+SamplerState pointClampSampler;
+
+uint Hash(uint x)
+{
+    x ^= x >> 16; x *= 0x7feb352dU;
+    x ^= x >> 15; x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+uint Hash4(uint a, uint b, uint c, uint d) { return Hash(a ^ Hash(b ^ Hash(c ^ Hash(d)))); }
+float Unit(uint h) { return (h >> 8) * (1.0 / 16777216.0); }
+
+// Smooth value noise in [0, 1], periodic with `period` lattice cells (0: not periodic).
+float LatticeValue(int2 p, uint seed, int period)
+{
+    if (period > 0) p = ((p % period) + period) % period;
+    return Unit(Hash4((uint)p.x, (uint)p.y, seed, 0x9E3779B9u));
+}
+
+float ValueNoise(float2 x, uint seed, int period)
+{
+    float2 i = floor(x);
+    float2 f = x - i;
+    float2 u = f * f * (3.0 - 2.0 * f);
+    int2 p = (int2)i;
+    float a = LatticeValue(p, seed, period);
+    float b = LatticeValue(p + int2(1, 0), seed, period);
+    float c = LatticeValue(p + int2(0, 1), seed, period);
+    float d = LatticeValue(p + int2(1, 1), seed, period);
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+[numthreads(64, 1, 1)]
+void ResetLists(uint id : SV_DispatchThreadID)
+{
+    if (id < _Capacity.y) _ListCount[id] = 0;
+    if (id < 3) _Counters[id] = 0;
+}
+
+[numthreads(64, 1, 1)]
+void FinalizeArgs(uint id : SV_DispatchThreadID)
+{
+    if (id >= _Capacity.z) return;
+    uint list = _DrawList[id];
+    uint count = min(_ListCount[list], _ListCapacity[list]);
+    // IndirectDrawIndexedArgs: index count, instance count, start index, base vertex, start instance.
+    _Args.Store((id * 5 + 1) * 4, count);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+float TerrainHeight01(float2 uv)
+{
+    uint width, height;
+    _TerrainHeightmap.GetDimensions(width, height);
+    float2 resolution = float2(width, height);
+    float2 heightUV = (uv * (resolution - 1.0) + 0.5) / resolution;
+    return UnpackHeightmap(_TerrainHeightmap.SampleLevel(linearClampSampler, heightUV, 0)) * (65535.0 / 32766.0);
+}
+
+float3 TerrainNormal(float2 uv)
+{
+    uint width, height;
+    _TerrainHeightmap.GetDimensions(width, height);
+    float2 texel = 1.0 / max(float2(width, height) - 1.0, 1.0);
+    float hl = TerrainHeight01(saturate(uv - float2(texel.x, 0)));
+    float hr = TerrainHeight01(saturate(uv + float2(texel.x, 0)));
+    float hd = TerrainHeight01(saturate(uv - float2(0, texel.y)));
+    float hu = TerrainHeight01(saturate(uv + float2(0, texel.y)));
+    float2 step = 2.0 * texel * _TerrainSize.xz;
+    float dx = (hr - hl) * _TerrainSize.y / step.x;
+    float dz = (hu - hd) * _TerrainSize.y / step.y;
+    return normalize(float3(-dx, 1.0, -dz));
+}
+
+bool SphereInFrustum(float3 c, float r)
+{
+    [unroll] for (int i = 0; i < 6; i++)
+        if (dot(_FrustumPlanes[i].xyz, c) + _FrustumPlanes[i].w < -r) return false;
+    return true;
+}
+
+// Conservative Hi-Z test against last frame's farthest-depth pyramid. True when the sphere may be visible.
+bool HiZVisible(float3 c, float r)
+{
+    if (_HiZSize.w < 0.5) return true;
+    float2 lo = 1e9, hi = -1e9;
+    float nearest = _Capacity.w != 0 ? 0.0 : 1.0;
+    [unroll] for (uint k = 0; k < 8; k++)
+    {
+        float3 corner = c + r * float3((k & 1) ? 1 : -1, (k & 2) ? 1 : -1, (k & 4) ? 1 : -1);
+        float4 clip = mul(_HiZViewProjection, float4(corner, 1.0));
+        if (clip.w <= 1e-4) return true; // crosses the camera plane
+        float3 ndc = clip.xyz / clip.w;
+        lo = min(lo, ndc.xy);
+        hi = max(hi, ndc.xy);
+        nearest = _Capacity.w != 0 ? max(nearest, ndc.z) : min(nearest, ndc.z);
+    }
+    if (any(hi < -1.0) || any(lo > 1.0)) return true; // was off-screen last frame: no history to trust
+    lo = saturate(lo * 0.5 + 0.5);
+    hi = saturate(hi * 0.5 + 0.5);
+    // D3D-style texture space has y down.
+#if UNITY_UV_STARTS_AT_TOP
+    float2 t = lo; lo.y = 1.0 - hi.y; hi.y = 1.0 - t.y;
+#endif
+    // One extra texel either side: odd mip sizes fold an edge row into their neighbour.
+    float2 extent = (hi - lo) * _HiZSize.xy + 2.0;
+    float mip = ceil(log2(max(max(extent.x, extent.y), 1.0)));
+    mip = clamp(mip, 0, _HiZSize.z - 1);
+    uint2 size = max(uint2(1, 1), (uint2)_HiZSize.xy >> (uint)mip);
+    int2 b = (int2)floor(lo * size - 0.5);
+    int2 e = (int2)floor(hi * size + 0.5);
+    if (any(e - b > 1)) return true;
+    float farthest = _Capacity.w != 0 ? 1.0 : 0.0;
+    [unroll] for (uint y = 0; y < 2; y++)
+    [unroll] for (uint x = 0; x < 2; x++)
+    {
+        int2 p = min(b + int2(x, y), e);
+        p = clamp(p, 0, (int2)size - 1);
+        float z = _HiZ.Load(int3(p, (int)mip));
+        farthest = _Capacity.w != 0 ? min(farthest, z) : max(farthest, z);
+    }
+    // Reversed Z: larger is nearer. The object is hidden when even its nearest point lies beyond the farthest occluder.
+    return _Capacity.w != 0 ? nearest >= farthest : nearest <= farthest;
+}
+
+bool InShadowSplit(float3 c, float r, uint split)
+{
+    float4 s = _ShadowSplits[split];
+    float3 v = c - s.xyz;
+    float along = dot(v, _ShadowLight.xyz);           // towards the light is positive
+    float perp2 = max(dot(v, v) - along * along, 0.0);
+    float reach = s.w + r;
+    return perp2 <= reach * reach && along >= -reach;
+}
+
+void StoreMatrix(uint address, float3x3 m, float3 t)
+{
+    // float3x4 as BatchRendererGroup expects it: the four columns of the affine matrix.
+    _InstanceData.Store4(address, asuint(float4(m[0][0], m[1][0], m[2][0], m[0][1])));
+    _InstanceData.Store4(address + 16, asuint(float4(m[1][1], m[2][1], m[0][2], m[1][2])));
+    _InstanceData.Store4(address + 32, asuint(float4(m[2][2], t.x, t.y, t.z)));
+}
+
+float3x3 Inverse3x3(float3x3 m)
+{
+    float3 a = float3(m[0][0], m[1][0], m[2][0]);
+    float3 b = float3(m[0][1], m[1][1], m[2][1]);
+    float3 c = float3(m[0][2], m[1][2], m[2][2]);
+    float3 r0 = cross(b, c), r1 = cross(c, a), r2 = cross(a, b);
+    float det = dot(a, r0);
+    float inv = abs(det) > 1e-20 ? 1.0 / det : 0.0;
+    return float3x3(r0 * inv, r1 * inv, r2 * inv);
+}
+
+void Append(uint list, uint value)
+{
+    uint index;
+    InterlockedAdd(_ListCount[list], 1, index);
+    if (index < _ListCapacity[list])
+        _Visible.Store((_ListOffset[list] + index) * 4, value);
+    else
+        InterlockedAdd(_Counters[1], 1);
+}
+
+// The 8-bit cross-fade URP reads from the top byte of the visible index (BatchDrawCommandFlags.LODCrossFade):
+// +q keeps q/127 of the pixels, -q the complementary rest, under the same screen dither.
+uint PackFade(uint slot, int q)
+{
+    int v = clamp(q, -127, 127);
+    return slot | ((uint)(v & 0xFF) << 24);
+}
+
+// Expected instances in one detail cell, Unity's semantics (GrassMeshDetailDensity.ExpectedInstancesPerCell mirrors it).
+float ExpectedPerCell(float value, float scale)
+{
+    float cellArea = (_TerrainSize.x / _TerrainOrigin.w) * (_TerrainSize.z / _TerrainOrigin.w);
+    if (_TerrainInfo.x == 1)
+        return value * scale;                                // instance count mode: the value is a count
+    return (value / 255.0) * scale * cellArea;               // coverage mode: coverage x density per square metre
+}
+
+[numthreads(8, 8, 1)]
+void Scatter(uint3 id : SV_DispatchThreadID)
+{
+    if (any((int2)id.xy >= _CellStart.zw)) return;
+    int2 cell = _CellStart.xy + (int2)id.xy;
+    float resolution = _TerrainOrigin.w;
+    float2 cellSize = _TerrainSize.xz / resolution;
+    float2 cellUV = (cell + 0.5) / resolution;
+
+    if (_TerrainInfo.z != 0)
+    {
+        float hole = _TerrainHoles.SampleLevel(pointClampSampler, cellUV, 0);
+        if (hole < 0.0005) return;
+    }
+
+    float3 camera = _CameraPosition.xyz;
+    for (int s = 0; s < _TerrainInfo.y; s++)
+    {
+        int kindIndex = _SliceKinds[s >> 2][s & 3];
+        KindData kind = _Kinds[kindIndex];
+        float value = round(_Density.Load(int4(cell, _SliceInfo.x + s, 0)) * 255.0);
+        if (value <= 0) continue;
+        float expected = ExpectedPerCell(value, _SliceScale[s >> 2][s & 3]);
+        uint seed = Hash4((uint)cell.x, (uint)cell.y, (uint)kindIndex, (uint)_TerrainInfo.w);
+        uint count = (uint)floor(expected);
+        if (Unit(Hash(seed ^ 0x51ED270Bu)) < frac(expected)) count++;
+        count = min(count, 4096u);
+        if (count == 0) continue;
+
+        int lodCount = kind.info.x;
+        float maxDistance = kind.lodDistance[lodCount - 1];
+        uint grid = (uint)ceil(sqrt((float)count));
+        for (uint i = 0; i < count; i++)
+        {
+            uint h = Hash(seed + i * 0x9E3779B9u);
+            float jitter = kind.placement.w;
+            float2 stratum = float2(i % grid, i / grid);
+            float2 random = float2(Unit(h), Unit(Hash(h ^ 0x68E31DA4u)));
+            float2 local = (stratum + lerp(0.5, random, jitter)) / grid;
+            float2 xz = _TerrainOrigin.xz + (cell + local) * cellSize;
+            float2 uv = saturate((xz - _TerrainOrigin.xz) / _TerrainSize.xz);
+            float ground = _TerrainOrigin.y + TerrainHeight01(uv) * _TerrainSize.y;
+            float3 root = float3(xz.x, ground, xz.y);
+
+            // Water line: nothing at or below the level, thinning in over the shore band.
+            if (_Water.x > 0.5)
+            {
+                float above = ground - _Water.y;
+                if (!(above > 0.0)) continue;
+                float coverage = _Water.z > 0.0 ? saturate(above / _Water.z) : 1.0;
+                if (Unit(Hash(h ^ 0x2C1B3C6Du)) >= coverage) continue;
+            }
+
+            if (all(xz >= _StatsRect.xy) && all(xz < _StatsRect.zw))
+                InterlockedAdd(_Stats[kindIndex], 1);
+
+            float distance = length(root - camera);
+            if (distance >= maxDistance + kind.boundsExtent.y * kind.scaleRange.w) continue;
+
+            // Scale and colour follow one noise field, as Unity's detail noise spread does.
+            float noise = ValueNoise(xz * kind.placement.x + kind.placement.y * 17.0, (uint)kindIndex * 7919u, 0);
+            float width = lerp(kind.scaleRange.x, kind.scaleRange.y, noise);
+            float heightScale = lerp(kind.scaleRange.z, kind.scaleRange.w, noise);
+            float yaw = Unit(Hash(h ^ 0x1B873593u)) * 6.2831853;
+
+            float3 up = float3(0, 1, 0);
+            if (kind.placement.z > 0.0)
+                up = normalize(lerp(up, TerrainNormal(uv), kind.placement.z));
+            float3 tangent = normalize(cross(up, float3(0, 0, 1)));
+            float3 bitangent = cross(tangent, up);
+            float sy, cy;
+            sincos(yaw, sy, cy);
+            float3 axisX = tangent * cy + bitangent * sy;
+            float3 axisZ = cross(axisX, up);
+
+            // Wind: a shear that leans the plant downwind, in proportion to height above its root.
+            float3 lean = 0;
+            if (kind.wind.x != 0.0 && _WindDirection.w != 0.0)
+            {
+                float2 air = xz - _WindOffset.xz;
+                int period = (int)_WindParams.w;
+                float gust = ValueNoise(air * _WindParams.y, 0xC0FFEEu, period);
+                float flutter = sin(_WindParams.z * 6.2831853 * (1.3 + Unit(h) * 0.7) + Unit(Hash(h)) * 6.2831853);
+                float strength = _WindDirection.w * (0.5 + gust) + _WindParams.x * kind.wind.y * flutter;
+                lean = _WindDirection.xyz * (kind.wind.x * strength);
+                lean.y = 0;
+            }
+
+            // Columns of the 3x3 part: rotation and scale, then the lean on world Y.
+            float3 cx = axisX * width, cyc = up * heightScale, cz = axisZ * width;
+            float shrink = rsqrt(1.0 + dot(lean, lean));
+            float3x3 basis = float3x3(cx, cyc, cz); // rows = columns of the object-to-world matrix
+            float3x3 m;
+            [unroll] for (int col = 0; col < 3; col++)
+            {
+                float3 v = basis[col];
+                float3 sheared = float3(v.x + lean.x * v.y, v.y, v.z + lean.z * v.y);
+                sheared.y *= shrink;
+                m[0][col] = sheared.x; m[1][col] = sheared.y; m[2][col] = sheared.z;
+            }
+
+            float3 centerLocal = kind.boundsCenter.xyz;
+            float3 center = root + mul(m, centerLocal);
+            float radius = length(kind.boundsExtent.xyz * float3(width, heightScale, width)) * (1.0 + length(lean));
+
+            // LOD with a cross-fade band before each LOD's end distance.
+            float fadeWidth = max(kind.boundsExtent.w, 1e-3);
+            int lod = -1;
+            float t = 1.0;
+            [unroll] for (int l = 0; l < MAX_LODS; l++)
+            {
+                if (l < lodCount && lod < 0 && distance < kind.lodDistance[l])
+                {
+                    lod = l;
+                    t = saturate((kind.lodDistance[l] - distance) / fadeWidth);
+                }
+            }
+
+            bool cameraVisible = lod >= 0 && SphereInFrustum(center, radius) && HiZVisible(center, radius);
+
+            // Shadows use one LOD per instance, the one that covers more of it, and none once a fade-out passes half.
+            uint splitMask = 0;
+            int shadowLod = -1;
+            if (lod >= 0)
+                shadowLod = t >= 0.5 ? lod : (lod + 1 < lodCount ? lod + 1 : -1);
+            if (kind.info.y != 0 && shadowLod >= 0 && distance < kind.boundsCenter.w)
+            {
+                uint splits = (uint)_ShadowLight.w;
+                for (uint sp = 0; sp < splits; sp++)
+                    if (InShadowSplit(center, radius, sp)) splitMask |= 1u << sp;
+            }
+
+            if (!cameraVisible && splitMask == 0) continue;
+
+            uint slot;
+            InterlockedAdd(_Counters[0], 1, slot);
+            if (slot >= _Capacity.x)
+            {
+                InterlockedAdd(_Counters[2], 1);
+                continue;
+            }
+
+            StoreMatrix(_Layout.x + slot * 48, m, root);
+            StoreMatrix(_Layout.y + slot * 48, Inverse3x3(m), -mul(Inverse3x3(m), root));
+            if (_Layout.z != 0)
+                _InstanceData.Store4(_Layout.z + slot * 16, asuint(kind.info.w != 0 ? lerp(kind.healthy, kind.dry, noise) : kind.healthy));
+
+            uint baseList = (uint)kind.info.z;
+            if (cameraVisible)
+            {
+                int q = (int)round(t * 127.0);
+                bool hasNext = lod + 1 < lodCount;
+                if (q >= 127)
+                {
+                    Append(baseList + lod * 2, slot);
+                }
+                else if (q <= 0)
+                {
+                    if (hasNext) Append(baseList + (lod + 1) * 2, slot);
+                }
+                else
+                {
+                    Append(baseList + lod * 2 + 1, PackFade(slot, q));
+                    if (hasNext) Append(baseList + (lod + 1) * 2 + 1, PackFade(slot, -q));
+                }
+            }
+
+            if (splitMask != 0)
+            {
+                uint shadowBase = baseList + (uint)lodCount * 2 + (uint)shadowLod * MAX_SPLITS;
+                [unroll] for (uint sp = 0; sp < MAX_SPLITS; sp++)
+                    if (splitMask & (1u << sp)) Append(shadowBase + sp, slot);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Farthest-depth pyramid from the camera depth (raw device depth). Mip 0 is half resolution.
+
+Texture2D<float> _SourceDepth;
+RWTexture2D<float> _HiZOut;
+Texture2D<float> _HiZIn;
+float4 _HiZSource; // source width, height, destination width, height
+
+[numthreads(8, 8, 1)]
+void BuildHiZ(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint2)_HiZSource.zw)) return;
+    uint2 src = id.xy * 2;
+    uint2 maxSrc = (uint2)_HiZSource.xy - 1;
+    float a = _SourceDepth.Load(int3(min(src, maxSrc), 0));
+    float b = _SourceDepth.Load(int3(min(src + uint2(1, 0), maxSrc), 0));
+    float c = _SourceDepth.Load(int3(min(src + uint2(0, 1), maxSrc), 0));
+    float d = _SourceDepth.Load(int3(min(src + uint2(1, 1), maxSrc), 0));
+    // Odd source sizes: fold the extra row and column in, so no texel is lost.
+    float r = _Capacity.w != 0 ? min(min(a, b), min(c, d)) : max(max(a, b), max(c, d));
+    if (id.x * 2 + 2 == (uint)_HiZSource.x - 1)
+    {
+        float e = _SourceDepth.Load(int3(min(src + uint2(2, 0), maxSrc), 0));
+        float f = _SourceDepth.Load(int3(min(src + uint2(2, 1), maxSrc), 0));
+        r = _Capacity.w != 0 ? min(r, min(e, f)) : max(r, max(e, f));
+    }
+    if (id.y * 2 + 2 == (uint)_HiZSource.y - 1)
+    {
+        float e = _SourceDepth.Load(int3(min(src + uint2(0, 2), maxSrc), 0));
+        float f = _SourceDepth.Load(int3(min(src + uint2(1, 2), maxSrc), 0));
+        float g = _SourceDepth.Load(int3(min(src + uint2(2, 2), maxSrc), 0));
+        r = _Capacity.w != 0 ? min(r, min(min(e, f), g)) : max(r, max(max(e, f), g));
+    }
+    _HiZOut[id.xy] = r;
+}
+
+[numthreads(8, 8, 1)]
+void ReduceHiZ(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint2)_HiZSource.zw)) return;
+    uint2 src = id.xy * 2;
+    uint2 maxSrc = (uint2)_HiZSource.xy - 1;
+    float a = _HiZIn.Load(int3(min(src, maxSrc), 0));
+    float b = _HiZIn.Load(int3(min(src + uint2(1, 0), maxSrc), 0));
+    float c = _HiZIn.Load(int3(min(src + uint2(0, 1), maxSrc), 0));
+    float d = _HiZIn.Load(int3(min(src + uint2(1, 1), maxSrc), 0));
+    float r = _Capacity.w != 0 ? min(min(a, b), min(c, d)) : max(max(a, b), max(c, d));
+    if (id.x * 2 + 2 == (uint)_HiZSource.x - 1)
+    {
+        r = _Capacity.w != 0 ? min(r, min(_HiZIn.Load(int3(min(src + uint2(2, 0), maxSrc), 0)), _HiZIn.Load(int3(min(src + uint2(2, 1), maxSrc), 0))))
+                             : max(r, max(_HiZIn.Load(int3(min(src + uint2(2, 0), maxSrc), 0)), _HiZIn.Load(int3(min(src + uint2(2, 1), maxSrc), 0))));
+    }
+    if (id.y * 2 + 2 == (uint)_HiZSource.y - 1)
+    {
+        r = _Capacity.w != 0 ? min(r, min(_HiZIn.Load(int3(min(src + uint2(0, 2), maxSrc), 0)), _HiZIn.Load(int3(min(src + uint2(1, 2), maxSrc), 0))))
+                             : max(r, max(_HiZIn.Load(int3(min(src + uint2(0, 2), maxSrc), 0)), _HiZIn.Load(int3(min(src + uint2(1, 2), maxSrc), 0))));
+    }
+    _HiZOut[id.xy] = r;
+}

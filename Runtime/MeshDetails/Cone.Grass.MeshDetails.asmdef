@@ -1,0 +1,18 @@
+{
+  "name": "Cone.Grass.MeshDetails",
+  "rootNamespace": "Cone.Grass",
+  "references": [
+    "Cone.Grass",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "allowUnsafeCode": true,
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "com.cone.render-features",
+      "expression": "1.0.0",
+      "define": "CONE_GRASS_RENDER_FEATURES"
+    }
+  ]
+}
