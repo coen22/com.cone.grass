@@ -2,6 +2,9 @@
 
 A **Grass Variant Profile** lets one Infinite Grass Renderer grow several kinds of plant: short and tall grasses, broad herbs, clover, and flowers with heads. Without a profile the renderer grows its one material blade.
 
+![plant-kinds-flowers-1m-before-after](images/plant-kinds-flowers-1m-before-after.jpg)
+*Before | After (lawn preset), meadow at 1 m · #89 · 10-27*
+
 ## Set up
 
 1. **Assets > Create > Cone > Grass > Variant Profile**. A new profile starts as the [meadow preset](#the-meadow-preset): a flowering lawn.

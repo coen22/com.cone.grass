@@ -118,6 +118,9 @@ Every player build, including incremental builds, checks the saved scenes. A sta
 
 ## Crest 5 water level
 
+![integrations-waterline-crest-off-on](images/integrations-waterline-crest-off-on.jpg)
+*Disabled | Enabled (Crest level), Crest 5.10 lake · #97 · 11-04*
+
 **Grass Crest Water Level** (`Cone.Grass.Crest.GrassCrestWaterLevel`) feeds the Crest 5 water height into the renderer's [Water Line](reference.md#water-line), so no grass grows below Crest water and the shore thins in over the **Shore Fade** band. It lives in the `Cone.Grass.Crest` assembly, which compiles only when the Crest package (`com.waveharmonic.crest` 5.0 or later) is installed (a `versionDefines` entry sets `CONE_GRASS_CREST`). Without Crest the package compiles and runs as before.
 
 Add the component anywhere in the scene, near the water you care about. It attaches itself to the active Infinite Grass Renderer and turns its water line on; disabling it detaches it again.

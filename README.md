@@ -2,7 +2,14 @@
 
 GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 
-![Meadow sample](Documentation~/images/meadow.jpg)
+## Evidence
+
+Before | After and Disabled | Enabled pairs from the Meadow sample, the plant-kinds meadow and a Crest 5 lake; main `9ba6124` (11-05). Films: [water line along the shore](https://github.com/coen22/com.cone.grass/blob/pr-media/97/grass-waterline-shoreline-60hz.mp4) (#97), [30 s meadow walk, before | after plant kinds](https://github.com/coen22/com.cone.grass/blob/pr-media/88/59f5919/walk-30s-before-after.mp4) (#89).
+
+| | | |
+|---|---|---|
+| [![Meadow · 2.0.0 · 11-01](Documentation~/images/performance-meadow-10m.jpg)](Samples~/Meadow/README.md)<br>Meadow · 2.0.0 · 11-01 | [![Plant kinds · #89 · 10-27](Documentation~/images/plant-kinds-flowers-1m-before-after.jpg)](Documentation~/plant-kinds.md)<br>Plant kinds · #89 · 10-27 | [![Bending · 2.0.0 · 11-01](Documentation~/images/interaction-bending-trail-recovered.jpg)](Documentation~/interaction.md)<br>Bending · 2.0.0 · 11-01 |
+| [![Water line · #97 · 11-04](Documentation~/images/integrations-waterline-crest-off-on.jpg)](Documentation~/integrations.md#crest-5-water-level)<br>Water line · #97 · 11-04 | [![Head contact shadows · #91 · 10-27](Documentation~/images/contact-shadows-heads-before-after.jpg)](Documentation~/reference.md#optional-contact-shadows)<br>Head contact shadows · #91 · 10-27 | |
 
 ## Features
 
