@@ -13,6 +13,10 @@ namespace Cone.Grass
     /// <summary>Persistent, single-view grass rendering for the URP RenderGraph path.</summary>
     public partial class GrassDataRendererFeature : ScriptableRendererFeature
     {
+        /// <summary>Where the grass draws in <see cref="GrassDrawOrder.AfterOpaqueCopies"/>: after URP's opaque copies,
+        /// before passes that enqueue at <see cref="RenderPassEvent.BeforeRenderingTransparents"/> such as Crest's.</summary>
+        internal const RenderPassEvent AfterOpaqueCopiesEvent = RenderPassEvent.BeforeRenderingTransparents - 1;
+
         // Keep these serialized names so existing renderer assets retain their references.
         [SerializeField, FormerlySerializedAs("heightMapLayer")] private LayerMask _heightMapLayer;
         [SerializeField, FormerlySerializedAs("heightMapMat")] private Material _heightMapMat;
@@ -34,7 +38,7 @@ namespace Cone.Grass
             _grassPass = new GrassDataPass(_heightMapLayer, _heightMapMat, _computeShader)
             {
                 // Opaque depth and lighting are available; grass still precedes transparents.
-                renderPassEvent = RenderPassEvent.BeforeRenderingTransparents
+                renderPassEvent = AfterOpaqueCopiesEvent
             };
             RenderPipelineManager.beginContextRendering -= OnBeginContextRendering;
             RenderPipelineManager.beginContextRendering += OnBeginContextRendering;
@@ -130,9 +134,11 @@ namespace Cone.Grass
             // Reflection cameras take the cheap path, and drawing before the opaque copies leaves no depth or motion
             // texture for the contact shadows and motion vectors to augment.
             bool full = camera.cameraType != CameraType.Reflection && owner.DrawOrder == GrassDrawOrder.AfterOpaqueCopies;
+            // After the copies, one step before the transparents: Crest's underwater effect enqueues at
+            // BeforeRenderingTransparents, and grass drawn after it cancels the effect for the whole frame (#100).
             _grassPass.renderPassEvent = owner.DrawOrder == GrassDrawOrder.BeforeOpaqueCopies
                 ? RenderPassEvent.AfterRenderingOpaques
-                : RenderPassEvent.BeforeRenderingTransparents;
+                : AfterOpaqueCopiesEvent;
             bool contacts = full && blades && GrassContactShadows.TryGetParameters(owner.ContactShadows, out _, out _, out _);
             bool motion = full && blades && _grassPass.WantsMotion(camera, renderingData.cameraData.postProcessEnabled,
                 renderingData.cameraData.antialiasing, renderingData.cameraData.cameraTargetDescriptor.msaaSamples,

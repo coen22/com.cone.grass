@@ -16,7 +16,7 @@ namespace Cone.Grass.Tests
     /// Play Mode, windowed: grass under Crest water is fogged like any other submerged surface. A patch of blades and a
     /// lit cube given the blades' own colour in air stand side by side at the same distance; under water the blades'
     /// colour (blade pixels only, averaged over 30 frames) must shift about as far as the cube's (0.75 to 1.25 times)
-    /// when the grass draws before URP's opaque copies, and much less (under 0.75) when it draws after them.
+    /// when the grass draws before URP's opaque copies. Drawn after them, the grass must not cancel Crest's effect.
     /// </summary>
     public sealed class GrassCrestUnderwaterTests
     {
@@ -27,7 +27,7 @@ namespace Cone.Grass.Tests
         public void DrawnBeforeOpaqueCopies_SubmergedGrassIsFoggedLikeACube() => Assert.Ignore(NoCrest);
 
         [Test]
-        public void DrawnAfterOpaqueCopies_UnderwaterFogMissesTheGrass() => Assert.Ignore(NoCrest);
+        public void DrawnAfterOpaqueCopies_CrestStillFogsTheScene() => Assert.Ignore(NoCrest);
 #else
         private const string CrestFolder = "Packages/com.waveharmonic.crest/Runtime/";
         private const int Size = 256;
@@ -163,11 +163,12 @@ namespace Cone.Grass.Tests
             Assert.That(_ratio, Is.InRange(0.75, 1.25), "Grass drawn before the opaque copies must be fogged like the cube.");
         }
 
+        // #100: grass drawn after Crest's underwater pass cancelled the effect for the whole frame. Measure asserts that
+        // the cube is still fogged; the grass's own shift is logged.
         [UnityTest]
-        public IEnumerator DrawnAfterOpaqueCopies_UnderwaterFogMissesTheGrass()
+        public IEnumerator DrawnAfterOpaqueCopies_CrestStillFogsTheScene()
         {
             yield return Measure(GrassDrawOrder.AfterOpaqueCopies);
-            Assert.That(_ratio, Is.LessThan(0.75), "Drawn after the copies, Crest's effect misses the grass: the test must see it.");
         }
 
         // One draw order per test, each on a fresh scene. The water rises once; the ratio is how far it moves the
