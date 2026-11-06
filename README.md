@@ -1,5 +1,13 @@
 # Infinite Grass
 
+> **Moved to [Cone Render Features](https://github.com/coen22/com.cone.render-features) (`com.cone.render-features` 1.3.0
+> and later), as its Grass feature. This repository is archived and gets no more changes.** To migrate, remove
+> `com.cone.grass` from `Packages/manifest.json` and add `com.cone.render-features` in the same step. **Never install
+> both**: they hold the same asset GUIDs. Scenes, prefabs, materials and renderer assets keep working; code changes
+> `using Cone.Grass` to `using Cone.RenderFeatures.Grass`, assembly references `Cone.Grass*` to
+> `Cone.RenderFeatures.Grass*`, and shader names `InfiniteGrass/...` to `Cone/Grass/...`. See its
+> [Grass manual](https://github.com/coen22/com.cone.render-features/blob/main/Documentation~/grass.md) and
+> [upgrading notes](https://github.com/coen22/com.cone.render-features/blob/main/Documentation~/grass-upgrading.md).
 GPU procedural grass and meadow flowers for URP terrain in Unity 6.
 
 ## Evidence
